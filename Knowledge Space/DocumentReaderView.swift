@@ -7,6 +7,11 @@ import SwiftUI
 struct DocumentReaderView: View {
     @Environment(AppState.self) private var state
     let doc: LiquidDoc
+    /// The text measure — nil reflows with the pane, a margin either
+    /// side — and whether the page stands at the pane's left (the
+    /// window's reading column) or its center (full screen).
+    var measure: CGFloat? = nil
+    var centersContent: Bool = false
 
     var body: some View {
         ScrollViewReader { proxy in
@@ -15,6 +20,7 @@ struct DocumentReaderView: View {
                     header
                     if let body = doc.body {
                         let appendixIDs = doc.visualMetaParagraphIDs
+                            .union(doc.analysisParagraphIDs)
                         ForEach(body) { paragraph in
                             ParagraphView(paragraph: paragraph,
                                           isAppendix: appendixIDs.contains(paragraph.id),
@@ -26,8 +32,11 @@ struct DocumentReaderView: View {
                     }
                     backlinksSection
                 }
-                .frame(maxWidth: 640, alignment: .leading)
-                .frame(maxWidth: .infinity)
+                // The reading measure: the column's width in the
+                // window, or a comfortable fixed line centered on the
+                // full-screen page.
+                .frame(maxWidth: measure ?? .infinity, alignment: .leading)
+                .frame(maxWidth: .infinity, alignment: centersContent ? .center : .leading)
                 .padding(24)
             }
             .onAppear { scrollToPendingFragment(proxy) }
@@ -48,46 +57,66 @@ struct DocumentReaderView: View {
 
     // MARK: Header
 
-    private var header: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text(doc.title)
-                .font(.system(size: 34, weight: .bold, design: .serif))
-            HStack(spacing: 6) {
-                Text(doc.displayAuthor)
-                    .fontWeight(.medium)
-                Text("·")
-                Text(doc.listedDateText)
-                if let location = doc.location {
+    /// A note's title is only its first words, and its when and where
+    /// live in the list — so a note has no header at all: one empty
+    /// line, then the words.
+    private var isNote: Bool {
+        doc.documentType == LiquidDoc.DocumentType.note.rawValue
+    }
+
+    @ViewBuilder private var header: some View {
+        if isNote {
+            Color.clear.frame(height: 17)
+            warnings
+        } else {
+            VStack(alignment: .leading, spacing: 8) {
+                Text(doc.title)
+                    .font(.system(size: 34, weight: .bold, design: .serif))
+                HStack(spacing: 6) {
+                    Text(doc.displayAuthor)
+                        .fontWeight(.medium)
                     Text("·")
-                    Text(location)
-                }
-            }
-            .font(.system(size: 14))
-            .foregroundStyle(.secondary)
-            if !doc.attention.isEmpty {
-                Text("For the attention of \(doc.attention.joined(separator: " and "))")
-                    .font(.system(size: 13))
-                    .italic()
-                    .foregroundStyle(.secondary)
-            }
-            if state.index.retractedIDs.contains(doc.id) {
-                banner("This document was retracted by its author.",
-                       systemImage: "xmark.octagon", tint: .red)
-            }
-            if state.index.supersededIDs.contains(doc.id) {
-                HStack {
-                    banner("A newer revision of this document exists.",
-                           systemImage: "clock.arrow.circlepath", tint: .orange)
-                    Button("Open Latest") {
-                        state.open(id: state.index.latestRevision(of: doc.id))
+                    Text(doc.listedDateText)
+                    if let location = doc.location {
+                        Text("·")
+                        // Home and Work read as their labels; the note
+                        // itself keeps the full place name.
+                        Text(AppLocations.display(location) ?? location)
                     }
                 }
+                .font(.system(size: 14))
+                .foregroundStyle(.secondary)
+                if !doc.attention.isEmpty {
+                    Text("For the attention of \(doc.attention.joined(separator: " and "))")
+                        .font(.system(size: 13))
+                        .italic()
+                        .foregroundStyle(.secondary)
+                }
+                warnings
+                Divider()
             }
-            if doc.hasUnfamiliarFormatVersion {
-                banner("Written in an unfamiliar format version (\(doc.format)); shown with best effort.",
-                       systemImage: "questionmark.circle", tint: .orange)
+        }
+    }
+
+    /// The banners that must show whatever the header style: retraction,
+    /// revision, and format warnings.
+    @ViewBuilder private var warnings: some View {
+        if state.index.retractedIDs.contains(doc.id) {
+            banner("This document was retracted by its author.",
+                   systemImage: "xmark.octagon", tint: .red)
+        }
+        if state.index.supersededIDs.contains(doc.id) {
+            HStack {
+                banner("A newer revision of this document exists.",
+                       systemImage: "clock.arrow.circlepath", tint: .orange)
+                Button("Open Latest") {
+                    state.open(id: state.index.latestRevision(of: doc.id))
+                }
             }
-            Divider()
+        }
+        if doc.hasUnfamiliarFormatVersion {
+            banner("Written in an unfamiliar format version (\(doc.format)); shown with best effort.",
+                   systemImage: "questionmark.circle", tint: .orange)
         }
     }
 

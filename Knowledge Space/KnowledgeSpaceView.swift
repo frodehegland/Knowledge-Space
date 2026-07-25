@@ -296,6 +296,7 @@ struct KnowledgeSpaceView: View {
     /// so a document's relationships read at a glance. Tap again to
     /// release.
     @State private var selectedDocID: String?
+    @Environment(\.openWindow) private var openWindow
 
     private var docs: [LiquidDoc] { state.index.timeline.map(\.doc) }
 

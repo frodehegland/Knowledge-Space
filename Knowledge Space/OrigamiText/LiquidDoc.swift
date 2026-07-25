@@ -1,7 +1,7 @@
 import Foundation
 import CryptoKit
 
-/// An in-memory Origami Document (`.origamitext`), either a text document
+/// An in-memory Origami Document (`.liquid.json`), either a text document
 /// (`body`) or a sidecar wrapping an external file (`wraps`).
 ///
 /// Document ids are short human-readable strings (see LiquidAddress) that
@@ -26,6 +26,11 @@ nonisolated struct LiquidDoc: Identifiable, Hashable, Sendable {
     /// stands by it. `author` stays the human name — the one to cite and
     /// the one accountable.
     var aiOnBehalf: Bool = false
+    /// Still on the author's desk: kept out of the timeline and the
+    /// views on every device, listed only under Drafts, until the
+    /// author publishes it. Travels in the file so a note captured on
+    /// one device stays a draft on the others.
+    var draft: Bool = false
     /// Whose words these are, when they are not the author's own — the
     /// speaker a statement was lifted from a transcript for. `author`
     /// stays the person who made and exported the document; the named
@@ -207,10 +212,33 @@ nonisolated struct LiquidDoc: Identifiable, Hashable, Sendable {
         let to: String
     }
 
+    /// The self-description written into every saved document (its "about"
+    /// field, first in the file), so a file found on its own explains
+    /// itself in any text editor.
+    nonisolated static let jsonPreamble = "This file contains a single digital letter (or meeting transcript) and its metadata, stored as a Liquid Information JSON file. It is plain text and can be opened in any text editor. It was created with the Liquid Information and Knowledge Space applications for iOS, macOS and visionOS. The data aims to be self-describing, following the Visual-Meta approach (https://visual-meta.info), so it should be usable in other systems with little work.  Questions: frode@hegland.com or https://augmentedtext.info."
+
     static let knownFormat = "origami/0.1"
-    /// The document file extension; also appears in user-facing text, so
-    /// change the spots the compiler can't see when changing this.
-    static let fileExtension = "origamitext"
+    /// The document file extension — plain JSON with "liquid" before it,
+    /// a naming convention shared with Liquid Information rather than a
+    /// registered format. Also appears in user-facing text, so change the
+    /// spots the compiler can't see when changing this.
+    static let fileExtension = "liquid.json"
+
+    /// Whether a URL names a document file. `pathExtension` sees only the
+    /// final "json" of the two-part extension, so membership is a
+    /// filename-suffix check.
+    nonisolated static func isDocumentFile(_ url: URL) -> Bool {
+        url.lastPathComponent.lowercased().hasSuffix("." + fileExtension)
+    }
+
+    /// The extension documents wore before the `.liquid.json` convention.
+    /// The JSON inside is identical; conversion is a rename.
+    static let legacyFileExtension = "origamitext"
+
+    /// Whether a URL names a document under the old extension.
+    nonisolated static func isLegacyDocumentFile(_ url: URL) -> Bool {
+        url.pathExtension.lowercased() == legacyFileExtension
+    }
 
     var isSidecar: Bool { wraps != nil }
 
@@ -357,6 +385,7 @@ extension LiquidDoc {
                          created: created, body: body, links: links, wraps: wraps,
                          attention: attention, date: date,
                          aiOnBehalf: raw.aiOnBehalf ?? false,
+                         draft: raw.draft ?? false,
                          onBehalfOf: onBehalfOf,
                          documentType: documentType,
                          location: location,
@@ -390,6 +419,7 @@ extension LiquidDoc {
         var attention: [String]?
         var date: String?
         var aiOnBehalf: Bool?
+        var draft: Bool?
         var onBehalfOf: String?
         var documentType: String?
         var location: String?

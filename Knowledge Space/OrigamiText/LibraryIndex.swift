@@ -138,7 +138,7 @@ nonisolated enum LibraryScanner {
         var duplicateIDs: Set<String> = []
 
         for case let url as URL in enumerator {
-            guard url.pathExtension.lowercased() == LiquidDoc.fileExtension else { continue }
+            guard LiquidDoc.isDocumentFile(url) else { continue }
             do {
                 let data = try Data(contentsOf: url)
                 let doc = try LiquidDoc.decode(data: data, fileURL: url)

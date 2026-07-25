@@ -90,6 +90,7 @@ nonisolated enum VisualMeta {
                          attention: doc.attention,
                          date: doc.date,
                          aiOnBehalf: doc.aiOnBehalf,
+                         draft: doc.draft,
                          onBehalfOf: doc.onBehalfOf,
                          documentType: doc.documentType,
                          fileURL: doc.fileURL)

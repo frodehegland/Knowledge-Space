@@ -4,7 +4,7 @@ import SwiftUI
 // Serialization and editing-text conversions for authoring.
 extension LiquidDoc {
 
-    /// Serializes to canonical `.origamitext` JSON.
+    /// Serializes to canonical `.liquid.json` JSON.
     nonisolated func jsonData() throws -> Data {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
@@ -12,7 +12,7 @@ extension LiquidDoc {
     }
 
     /// Suggested file name: a short title slug for human eyes, then the
-    /// document id — "meeting-summary--f.hegla.093000k.origamitext". The id
+    /// document id — "meeting-summary--f.hegla.093000k.liquid.json". The id
     /// is the address citations use and never changes with the title; the
     /// slug is naming convenience only. Readers take the id from the file's
     /// contents, so a renamed file still resolves.
@@ -173,10 +173,13 @@ extension LiquidDoc {
         let doc: LiquidDoc
         init(_ doc: LiquidDoc) { self.doc = doc }
 
-        enum CodingKeys: String, CodingKey { case format, id, title, author, created, date, body, links, wraps, attention, aiOnBehalf, onBehalfOf, documentType, location, concepts, layouts, connections, references }
+        enum CodingKeys: String, CodingKey { case about, format, id, title, author, created, date, body, links, wraps, attention, aiOnBehalf, draft, onBehalfOf, documentType, location, concepts, layouts, connections, references }
 
         func encode(to encoder: Encoder) throws {
             var container = encoder.container(keyedBy: CodingKeys.self)
+            // The preamble: sorted keys put "about" first in the file, so
+            // it reads as the file's own introduction.
+            try container.encode(LiquidDoc.jsonPreamble, forKey: .about)
             try container.encode(doc.format, forKey: .format)
             try container.encode(doc.id, forKey: .id)
             try container.encode(doc.title, forKey: .title)
@@ -201,6 +204,9 @@ extension LiquidDoc {
             }
             if doc.aiOnBehalf {
                 try container.encode(true, forKey: .aiOnBehalf)
+            }
+            if doc.draft {
+                try container.encode(true, forKey: .draft)
             }
             if let onBehalfOf = doc.onBehalfOf {
                 try container.encode(onBehalfOf, forKey: .onBehalfOf)
@@ -433,7 +439,7 @@ extension LiquidDoc {
 // MARK: - Bot documents
 
 /// A bot as an Origami document: the shelf lives in the community folder
-/// itself, one `.origamitext` document per bot, self-describing and
+/// itself, one `.liquid.json` document per bot, self-describing and
 /// readable by any Origami app — or person, or AI — that finds it. The
 /// document records who the bot stands in for and its judgements, one
 /// paragraph per judged document, each citing the document judged with a

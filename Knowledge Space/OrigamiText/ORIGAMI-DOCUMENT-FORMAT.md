@@ -1,4 +1,4 @@
-# The Origami Document Format (.origamitext)
+# The Origami Document Format (.liquid.json)
 
 *Specification, version origami/0.1 as implemented by Origami Text, July 2026. This document is self-contained: everything needed to build a reading, writing, or analyzing application is in this file. Feed it to an AI and start building. Format decisions are provisional pending community discussion — the format is owned by its community, not by any one implementation.*
 
@@ -18,7 +18,7 @@ These are not decoration; when in doubt, they decide:
 
 ## 2. The file
 
-An Origami Document is one UTF-8 JSON file with the extension `.origamitext`. A complete example:
+An Origami Document is one UTF-8 JSON file with the extension `.liquid.json`. A complete example:
 
 ```json
 {
@@ -58,9 +58,11 @@ An Origami Document is one UTF-8 JSON file with the extension `.origamitext`. A 
 
 ### Optional fields
 
+- `about` — a fixed human-readable preamble describing what the file is, how it was made, and whom to ask (per principle 2: the file explains itself in a bare text editor). Alphabetically first, so sorted-key writers put it at the top of the file. Writers emit it on every save; readers ignore it on decode.
 - `links` — see §5. Defaults to empty.
 - `attention` — array of person names this document is addressed to, "for the attention of." Plain names, readable by anyone. Apps should visually mark documents addressed to their user (Origami Text bolds them in the library).
 - `aiOnBehalf` — boolean; `true` declares the document was produced by an AI on behalf of the named `author`, who reviewed it and stands by it. `author` stays the human name — the one to cite and the one accountable — and readers should never present AI production silently (Origami Text bylines these "AI on behalf of *Name*"). Omitted when false. Also emitted as `ai-on-behalf-of = {Name}` in the Visual-Meta self-citation (§7).
+- `draft` — boolean; `true` declares the document still on its author's desk: readers keep it out of their timelines, lists, and derived views, presenting it only in a place of drafts (Knowledge Space's Drafts sidebar place), until the author publishes it by removing the flag. The flag travels in the file so a note captured on one device stays a draft on the others. Omitted when false.
 - `onBehalfOf` — a name; the document carries words that are not the author's own but the named person's — a statement lifted from a meeting transcript, for example. `author` stays the person who prepared and exported the document; the named person is the one to credit for the content (Origami Text bylines these "*Author* on behalf of *Name*", and offers the export as "Exported by *Author* on behalf of *Name*"). Omitted when absent. Also emitted as `on-behalf-of = {Name}` in the Visual-Meta self-citation (§7).
 - `documentType` — the kind of document the author declares this to be, chosen at export. A lowercase token with an **open vocabulary**, like `rel` (§5): the recommended values are `letter` (an authored piece in the community's correspondence — the core kind of Origami document; Origami Text assigns it by default to a new document), `note` (the author's own quick note, often captured in the moment — sometimes by voice, outside the authoring app — carrying a `location` where the capture had one; a note is always its author's own, so readers show only when and where, never who), `rfc` (request for comment — a proposal inviting response), `personal`, `project`, `meeting`, `transcript` (a meeting or interview transcript, statements attributed to speakers — letters between people in a meeting), `extract` (a statement lifted out of a transcript into a letter of its own; assigned by the act of lifting, with `onBehalfOf` naming the speaker and a span-scoped `cites` link pointing back at the statement), `article`, `bot` (an AI stand-in bearing a well-known person's name: the document defines the bot and records its judgements of the library's documents, one paragraph per judgement linking to the document judged — AI-produced from public knowledge, never the person's own words), `trail` (a sculptural reading path through the community's documents, after the sculptural hypertext of Bernstein, Millard, and Weal: the body declares a shape on a `Shape:` line — `canyon`, one path walked in strict sequence; `delta`, branching paths; or `plain`, an open field walked in any order — then, under a `Stops` heading, one paragraph per stop whose first bracketed address is the document visited, a delta stop optionally naming the stop it follows with the word `after` before a second address; readers open each stop only as the stops it follows are read, `cites` links carry the stops for the document web, and a reader's walking state is their own, never written into the shared record), `glossary` (a reader's personal glossary published for the community: terms from the community's discourse glossed in the author's own words — readable paragraphs under a `Terms` heading, and the same terms carried in `concepts` so other apps and readers can adopt them term by term; a glossary claims no authority beyond its usefulness), and `manifest` (a dated snapshot of a library's contents, produced on request; the folder of documents, not the manifest, remains the authority), and unknown values must be preserved and displayed verbatim, never dropped — this is how the community grows the vocabulary. Also emitted as `document-type` in the Visual-Meta self-citation (§7).
 - `location` — where the document was made, when the producing device or app recorded it: a **free-form place name string**, human-readable per principle 2 — `"Wimbledon, London"`, `"Café Central, Vienna"` — not coordinates. Producers with GPS should reverse-geocode to the most natural short name (locality level is usually right; add a venue when it matters). Trim whitespace; omit the field rather than emit an empty string. Readers show it beside the date wherever the document is listed, and may group documents by it (Origami Text's Location view). Also emitted as `location = {...}` in the Visual-Meta self-citation (§7).
@@ -77,7 +79,7 @@ An Origami Document is one UTF-8 JSON file with the extension `.origamitext`. A 
 
 ## 3. Addressing
 
-**A document's `id` is a short human-readable string that is also its filename** (`id` + `.origamitext`).
+**A document's `id` is a short human-readable string that is also its filename** (`id` + `.liquid.json`).
 
 Generation, deterministic from author and creation time:
 
@@ -183,9 +185,9 @@ On **publication** (export for sharing), an app appends a Visual-Meta appendix t
 - Appendix insertion must be idempotent — never append a second appendix to a document that has one.
 - **On any disagreement between the JSON fields and the appendix, the JSON fields are authoritative.** The appendix is a human-readable rendering of them, generated at publication for readers of the text alone — printed copies, PDF exports, AI ingestion — not a second source of truth.
 
-## 8. Sidecars: non-.origamitext files as citizens
+## 8. Sidecars: non-.liquid.json files as citizens
 
-An `.origamitext` may wrap another file instead of having a body:
+An `.liquid.json` may wrap another file instead of having a body:
 
 ```json
 "wraps": { "file": "paper.pdf", "sha256": "<hex>", "mediaType": "application/pdf" }
@@ -199,7 +201,7 @@ PDFs from the Visual-Meta ecosystem carry an identity key in their filenames —
 
 Documents travel by being files in a shared folder (any sync: iCloud, Dropbox, git). An app:
 
-- indexes `*.origamitext` recursively (skip hidden files/packages), tolerating failures per §2;
+- indexes `*.liquid.json` recursively (skip hidden files/packages), tolerating failures per §2;
 - maintains `byID`, reverse `backlinks`, revision and retraction maps;
 - on duplicate `id`s keeps the newer file by modification date and flags the duplicate;
 - watches the folder for changes (debounced rescan is fine at community scale — thousands, not millions).
@@ -214,13 +216,13 @@ Documents travel by being files in a shared folder (any sync: iCloud, Dropbox, g
 
 **A reader SHOULD:** backlinks · superseded-hiding · retraction marking · transclusion of cited paragraphs · person addresses · attention bolding.
 
-**A writer MUST:** emit only the documented fields · generate ids per §3 · name the file `<id>.origamitext` · keep history append-only (new versions are new documents with `revises`) · append the Visual-Meta appendix on publication, idempotently.
+**A writer MUST:** emit only the documented fields · generate ids per §3 · name the file `<id>.liquid.json` · keep history append-only (new versions are new documents with `revises`) · append the Visual-Meta appendix on publication, idempotently.
 
 **Nobody may:** rewrite a published document · emit an id that collides knowingly · move essential metadata outside the document.
 
 ## 11. Sample fixtures
 
-`f.hegla.100000a.origamitext` — cited document:
+`f.hegla.100000a.liquid.json` — cited document:
 
 ```json
 {
@@ -236,7 +238,7 @@ Documents travel by being files in a shared folder (any sync: iCloud, Dropbox, g
 }
 ```
 
-`m.ander.110000b.origamitext` — a response, addressed for attention, with a carried record:
+`m.ander.110000b.liquid.json` — a response, addressed for attention, with a carried record:
 
 ```json
 {
@@ -255,7 +257,7 @@ Documents travel by being files in a shared folder (any sync: iCloud, Dropbox, g
 }
 ```
 
-`f.hegla.081512d.origamitext` — a note captured by voice outside the authoring app, with a location. This is the complete shape an external capture application emits: generate the id per §3 from the author's name and the capture instant, name the file `<id>.origamitext`, write it into the shared folder, and it is in the library. No Visual-Meta appendix is required of a capture app — the appendix belongs to publication (§7), and a note arriving in the folder is already home:
+`f.hegla.081512d.liquid.json` — a note captured by voice outside the authoring app, with a location. This is the complete shape an external capture application emits: generate the id per §3 from the author's name and the capture instant, name the file `<id>.liquid.json`, write it into the shared folder, and it is in the library. No Visual-Meta appendix is required of a capture app — the appendix belongs to publication (§7), and a note arriving in the folder is already home:
 
 ```json
 {

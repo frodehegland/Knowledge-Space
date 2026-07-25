@@ -9,7 +9,7 @@ nonisolated struct AddressMatch: Sendable {
 }
 
 /// Document and person addressing. Document ids are short, human-readable,
-/// and double as the file name (id + ".origamitext"): initial, surname (max 5),
+/// and double as the file name (id + ".liquid.json"): initial, surname (max 5),
 /// creation time HHmmss (UTC), and a day-derived character —
 /// "f.hegla.093000k". A person is the prefix of their documents: "f.hegla".
 /// Legacy UUID ids remain valid as opaque strings.

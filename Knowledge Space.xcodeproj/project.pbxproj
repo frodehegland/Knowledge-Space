@@ -6,20 +6,74 @@
 	objectVersion = 90;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		5F62B05C3013675400EEF496 /* kspgal.icon in Resources */ = {isa = PBXBuildFile; fileRef = 5F62B05B3013675400EEF496 /* kspgal.icon */; };
+		5F62B05D3013675400EEF496 /* kspgal.icon in Resources */ = {isa = PBXBuildFile; fileRef = 5F62B05B3013675400EEF496 /* kspgal.icon */; };
+/* End PBXBuildFile section */
+
 /* Begin PBXFileReference section */
 		000000000000000000000120 /* Knowledge Space.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Knowledge Space.app"; sourceTree = BUILT_PRODUCTS_DIR; };
+		5F1064A3300FE10F002C1FE1 /* Knowledge Space iOS.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Knowledge Space iOS.app"; sourceTree = BUILT_PRODUCTS_DIR; };
+		5F62B05B3013675400EEF496 /* kspgal.icon */ = {isa = PBXFileReference; lastKnownFileType = folder.iconcomposer.icon; path = kspgal.icon; sourceTree = "<group>"; };
 /* End PBXFileReference section */
+
+/* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
+		5F1064B4300FE151002C1FE1 /* Exceptions for "Knowledge Space" folder in "Knowledge Space iOS" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				OrigamiText/DocumentRelation.swift,
+				OrigamiText/IdentityCard.swift,
+				OrigamiText/LiquidAddress.swift,
+				OrigamiText/LiquidDate.swift,
+				OrigamiText/LiquidDoc.swift,
+				OrigamiText/LiquidDocWriting.swift,
+				OrigamiText/VisualMeta.swift,
+			);
+			target = 5F1064A2300FE10F002C1FE1 /* Knowledge Space iOS */;
+		};
+		5FAFDCB530149FD100768784 /* Exceptions for "Knowledge Space" folder in "Knowledge Space" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				"Knowledge-Space-Info.plist",
+			);
+			target = 000000000000000100000000 /* Knowledge Space */;
+		};
+		5FC011CD3012B0EB00DF2EBD /* Exceptions for "Knowledge Space iOS" folder in "Knowledge Space iOS" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				"Knowledge-Space-iOS-Info.plist",
+			);
+			target = 5F1064A2300FE10F002C1FE1 /* Knowledge Space iOS */;
+		};
+/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		000000000000000000000010 /* Knowledge Space */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				5FAFDCB530149FD100768784 /* Exceptions for "Knowledge Space" folder in "Knowledge Space" target */,
+				5F1064B4300FE151002C1FE1 /* Exceptions for "Knowledge Space" folder in "Knowledge Space iOS" target */,
+			);
 			path = "Knowledge Space";
+			sourceTree = "<group>";
+		};
+		5F1064A4300FE10F002C1FE1 /* Knowledge Space iOS */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				5FC011CD3012B0EB00DF2EBD /* Exceptions for "Knowledge Space iOS" folder in "Knowledge Space iOS" target */,
+			);
+			path = "Knowledge Space iOS";
 			sourceTree = "<group>";
 		};
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
 		000000000000000130000000 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			files = (
+			);
+		};
+		5F1064A0300FE10F002C1FE1 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			files = (
 			);
@@ -31,6 +85,8 @@
 			isa = PBXGroup;
 			children = (
 				000000000000000000000010 /* Knowledge Space */,
+				5F1064A4300FE10F002C1FE1 /* Knowledge Space iOS */,
+				5F62B05B3013675400EEF496 /* kspgal.icon */,
 				000000000000000000000020 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -39,6 +95,7 @@
 			isa = PBXGroup;
 			children = (
 				000000000000000000000120 /* Knowledge Space.app */,
+				5F1064A3300FE10F002C1FE1 /* Knowledge Space iOS.app */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -64,6 +121,24 @@
 			productReference = 000000000000000000000120 /* Knowledge Space.app */;
 			productType = "com.apple.product-type.application";
 		};
+		5F1064A2300FE10F002C1FE1 /* Knowledge Space iOS */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 5F1064AD300FE10F002C1FE1 /* Build configuration list for PBXNativeTarget "Knowledge Space iOS" */;
+			buildPhases = (
+				5F10649F300FE10F002C1FE1 /* Sources */,
+				5F1064A0300FE10F002C1FE1 /* Frameworks */,
+				5F1064A1300FE10F002C1FE1 /* Resources */,
+			);
+			buildRules = (
+			);
+			fileSystemSynchronizedGroups = (
+				5F1064A4300FE10F002C1FE1 /* Knowledge Space iOS */,
+			);
+			name = "Knowledge Space iOS";
+			productName = "Knowledge Space iOS";
+			productReference = 5F1064A3300FE10F002C1FE1 /* Knowledge Space iOS.app */;
+			productType = "com.apple.product-type.application";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -71,11 +146,14 @@
 			isa = PBXProject;
 			attributes = {
 				BuildIndependentTargetsInParallel = 1;
-				LastSwiftUpdateCheck = 2630;
+				LastSwiftUpdateCheck = 2700;
 				LastUpgradeCheck = 2700;
 				TargetAttributes = {
 					000000000000000100000000 = {
 						CreatedOnToolsVersion = 26.3;
+					};
+					5F1064A2300FE10F002C1FE1 = {
+						CreatedOnToolsVersion = 27.0;
 					};
 				};
 			};
@@ -94,6 +172,7 @@
 			projectRoot = "";
 			targets = (
 				000000000000000100000000 /* Knowledge Space */,
+				5F1064A2300FE10F002C1FE1 /* Knowledge Space iOS */,
 			);
 		};
 /* End PBXProject section */
@@ -102,12 +181,24 @@
 		000000000000000140000000 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			files = (
+				5F62B05D3013675400EEF496 /* kspgal.icon in Resources */,
+			);
+		};
+		5F1064A1300FE10F002C1FE1 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			files = (
+				5F62B05C3013675400EEF496 /* kspgal.icon in Resources */,
 			);
 		};
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
 		000000000000000120000000 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			files = (
+			);
+		};
+		5F10649F300FE10F002C1FE1 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			files = (
 			);
@@ -250,21 +341,42 @@
 		000000000000000111000000 /* Debug configuration for PBXNativeTarget "Knowledge Space" */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
-				ASSETCATALOG_COMPILER_APPICON_NAME = "k-space";
+				ASSETCATALOG_COMPILER_APPICON_NAME = kspgal;
 				ASSETCATALOG_COMPILER_INCLUDE_ALL_APPICON_ASSETS = YES;
+				AUTOMATION_APPLE_EVENTS = NO;
+				"CODE_SIGN_ENTITLEMENTS[sdk=xros*]" = "KnowledgeSpace-visionOS.entitlements";
+				"CODE_SIGN_ENTITLEMENTS[sdk=xrsimulator*]" = "KnowledgeSpace-visionOS.entitlements";
+				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 9Q5N4A727S;
 				ENABLE_APP_SANDBOX = YES;
+				ENABLE_HARDENED_RUNTIME = YES;
+				ENABLE_INCOMING_NETWORK_CONNECTIONS = NO;
+				ENABLE_OUTGOING_NETWORK_CONNECTIONS = YES;
 				ENABLE_PREVIEWS = YES;
-				ENABLE_USER_SELECTED_FILES = readonly;
+				ENABLE_RESOURCE_ACCESS_AUDIO_INPUT = NO;
+				ENABLE_RESOURCE_ACCESS_BLUETOOTH = NO;
+				ENABLE_RESOURCE_ACCESS_CALENDARS = NO;
+				ENABLE_RESOURCE_ACCESS_CAMERA = NO;
+				ENABLE_RESOURCE_ACCESS_CONTACTS = NO;
+				ENABLE_RESOURCE_ACCESS_LOCATION = YES;
+				ENABLE_RESOURCE_ACCESS_PHOTO_LIBRARY = NO;
+				ENABLE_RESOURCE_ACCESS_PRINTING = NO;
+				ENABLE_RESOURCE_ACCESS_USB = NO;
+				ENABLE_USER_SELECTED_FILES = readwrite;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = "Knowledge-Space-Info.plist";
 				INFOPLIST_KEY_CFBundleDisplayName = "Knowledge Space";
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.productivity";
+				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "A note carries the place it was made. Your location is used once, when a note is created, to name that place — it is never stored as coordinates.";
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphoneos*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphonesimulator*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents[sdk=iphoneos*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents[sdk=iphonesimulator*]" = YES;
 				"INFOPLIST_KEY_UILaunchScreen_Generation[sdk=iphoneos*]" = YES;
 				"INFOPLIST_KEY_UILaunchScreen_Generation[sdk=iphonesimulator*]" = YES;
+				INFOPLIST_KEY_UILaunchStoryboardName = "";
 				"INFOPLIST_KEY_UIStatusBarStyle[sdk=iphoneos*]" = UIStatusBarStyleDefault;
 				"INFOPLIST_KEY_UIStatusBarStyle[sdk=iphonesimulator*]" = UIStatusBarStyleDefault;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
@@ -275,9 +387,16 @@
 				PRODUCT_BUNDLE_IDENTIFIER = info.futuretextlab.knowledgespace;
 				PRODUCT_NAME = "Knowledge Space";
 				REGISTER_APP_GROUPS = YES;
+				RUNTIME_EXCEPTION_ALLOW_DYLD_ENVIRONMENT_VARIABLES = NO;
+				RUNTIME_EXCEPTION_ALLOW_JIT = NO;
+				RUNTIME_EXCEPTION_ALLOW_UNSIGNED_EXECUTABLE_MEMORY = NO;
+				RUNTIME_EXCEPTION_DEBUGGING_TOOL = NO;
+				RUNTIME_EXCEPTION_DISABLE_EXECUTABLE_PAGE_PROTECTION = NO;
+				RUNTIME_EXCEPTION_DISABLE_LIBRARY_VALIDATION = NO;
 				SDKROOT = auto;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SUPPORTED_PLATFORMS = "macosx xros xrsimulator";
+				SUPPORTS_MACCATALYST = NO;
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
 				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
 				SWIFT_EMIT_LOC_STRINGS = YES;
@@ -290,21 +409,42 @@
 		000000000000000112000000 /* Release configuration for PBXNativeTarget "Knowledge Space" */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
-				ASSETCATALOG_COMPILER_APPICON_NAME = "k-space";
+				ASSETCATALOG_COMPILER_APPICON_NAME = kspgal;
 				ASSETCATALOG_COMPILER_INCLUDE_ALL_APPICON_ASSETS = YES;
+				AUTOMATION_APPLE_EVENTS = NO;
+				"CODE_SIGN_ENTITLEMENTS[sdk=xros*]" = "KnowledgeSpace-visionOS.entitlements";
+				"CODE_SIGN_ENTITLEMENTS[sdk=xrsimulator*]" = "KnowledgeSpace-visionOS.entitlements";
+				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 9Q5N4A727S;
 				ENABLE_APP_SANDBOX = YES;
+				ENABLE_HARDENED_RUNTIME = YES;
+				ENABLE_INCOMING_NETWORK_CONNECTIONS = NO;
+				ENABLE_OUTGOING_NETWORK_CONNECTIONS = YES;
 				ENABLE_PREVIEWS = YES;
-				ENABLE_USER_SELECTED_FILES = readonly;
+				ENABLE_RESOURCE_ACCESS_AUDIO_INPUT = NO;
+				ENABLE_RESOURCE_ACCESS_BLUETOOTH = NO;
+				ENABLE_RESOURCE_ACCESS_CALENDARS = NO;
+				ENABLE_RESOURCE_ACCESS_CAMERA = NO;
+				ENABLE_RESOURCE_ACCESS_CONTACTS = NO;
+				ENABLE_RESOURCE_ACCESS_LOCATION = NO;
+				ENABLE_RESOURCE_ACCESS_PHOTO_LIBRARY = NO;
+				ENABLE_RESOURCE_ACCESS_PRINTING = NO;
+				ENABLE_RESOURCE_ACCESS_USB = NO;
+				ENABLE_USER_SELECTED_FILES = readwrite;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = "Knowledge-Space-Info.plist";
 				INFOPLIST_KEY_CFBundleDisplayName = "Knowledge Space";
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.productivity";
+				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "A note carries the place it was made. Your location is used once, when a note is created, to name that place — it is never stored as coordinates.";
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphoneos*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphonesimulator*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents[sdk=iphoneos*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents[sdk=iphonesimulator*]" = YES;
 				"INFOPLIST_KEY_UILaunchScreen_Generation[sdk=iphoneos*]" = YES;
 				"INFOPLIST_KEY_UILaunchScreen_Generation[sdk=iphonesimulator*]" = YES;
+				INFOPLIST_KEY_UILaunchStoryboardName = "";
 				"INFOPLIST_KEY_UIStatusBarStyle[sdk=iphoneos*]" = UIStatusBarStyleDefault;
 				"INFOPLIST_KEY_UIStatusBarStyle[sdk=iphonesimulator*]" = UIStatusBarStyleDefault;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
@@ -315,15 +455,107 @@
 				PRODUCT_BUNDLE_IDENTIFIER = info.futuretextlab.knowledgespace;
 				PRODUCT_NAME = "Knowledge Space";
 				REGISTER_APP_GROUPS = YES;
+				RUNTIME_EXCEPTION_ALLOW_DYLD_ENVIRONMENT_VARIABLES = NO;
+				RUNTIME_EXCEPTION_ALLOW_JIT = NO;
+				RUNTIME_EXCEPTION_ALLOW_UNSIGNED_EXECUTABLE_MEMORY = NO;
+				RUNTIME_EXCEPTION_DEBUGGING_TOOL = NO;
+				RUNTIME_EXCEPTION_DISABLE_EXECUTABLE_PAGE_PROTECTION = NO;
+				RUNTIME_EXCEPTION_DISABLE_LIBRARY_VALIDATION = NO;
 				SDKROOT = auto;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SUPPORTED_PLATFORMS = "macosx xros xrsimulator";
+				SUPPORTS_MACCATALYST = NO;
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
 				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = 7;
+			};
+			name = Release;
+		};
+		5F1064AB300FE10F002C1FE1 /* Debug configuration for PBXNativeTarget "Knowledge Space iOS" */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = kspgal;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				ASSETCATALOG_COMPILER_INCLUDE_ALL_APPICON_ASSETS = YES;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 9Q5N4A727S;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = "Knowledge-Space-iOS-Info.plist";
+				INFOPLIST_KEY_CFBundleDisplayName = "Knowledge Space";
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.productivity";
+				INFOPLIST_KEY_NSCalendarsFullAccessUsageDescription = "Saved voice notes can be marked in a dedicated “Origami Text” calendar at the moment they were spoken. The app never reads your existing events.";
+				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "A note carries the place it was made. Your location is used once, when a note is created, to name that place — it is never stored as coordinates.";
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "The microphone carries your voice into a note while you dictate. Nothing is recorded or kept — only the transcribed words.";
+				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "Speech recognition turns your dictation into the text of a note, on this device when the hardware allows.";
+				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
+				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
+				INFOPLIST_KEY_UILaunchStoryboardName = LaunchScreen;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = info.futuretextlab.knowledgespace;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = NO;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		5F1064AC300FE10F002C1FE1 /* Release configuration for PBXNativeTarget "Knowledge Space iOS" */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = kspgal;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				ASSETCATALOG_COMPILER_INCLUDE_ALL_APPICON_ASSETS = YES;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 9Q5N4A727S;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = "Knowledge-Space-iOS-Info.plist";
+				INFOPLIST_KEY_CFBundleDisplayName = "Knowledge Space";
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.productivity";
+				INFOPLIST_KEY_NSCalendarsFullAccessUsageDescription = "Saved voice notes can be marked in a dedicated “Origami Text” calendar at the moment they were spoken. The app never reads your existing events.";
+				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "A note carries the place it was made. Your location is used once, when a note is created, to name that place — it is never stored as coordinates.";
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "The microphone carries your voice into a note while you dictate. Nothing is recorded or kept — only the transcribed words.";
+				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "Speech recognition turns your dictation into the text of a note, on this device when the hardware allows.";
+				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
+				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
+				INFOPLIST_KEY_UILaunchStoryboardName = LaunchScreen;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = info.futuretextlab.knowledgespace;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = NO;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				VALIDATE_PRODUCT = YES;
 			};
 			name = Release;
 		};
@@ -343,6 +575,14 @@
 			buildConfigurations = (
 				000000000000000111000000 /* Debug configuration for PBXNativeTarget "Knowledge Space" */,
 				000000000000000112000000 /* Release configuration for PBXNativeTarget "Knowledge Space" */,
+			);
+			defaultConfigurationName = Release;
+		};
+		5F1064AD300FE10F002C1FE1 /* Build configuration list for PBXNativeTarget "Knowledge Space iOS" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				5F1064AB300FE10F002C1FE1 /* Debug configuration for PBXNativeTarget "Knowledge Space iOS" */,
+				5F1064AC300FE10F002C1FE1 /* Release configuration for PBXNativeTarget "Knowledge Space iOS" */,
 			);
 			defaultConfigurationName = Release;
 		};
