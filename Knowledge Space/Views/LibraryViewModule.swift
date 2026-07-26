@@ -3,16 +3,16 @@ import SwiftUI
 /// One place in the sidebar: the document library, or an installed view
 /// module by id. Views appear as `.view(id)`.
 enum SidebarItem: Hashable {
-    case library      // the Inbox: notes, plus anything unread, by day
+    case library      // the Inbox: what is new and unread
+    case timeline     // every note, by time, latest on top
     case place        // the same notes, grouped by country and town
-    case toDo         // notes marked To Do (filed under the To Do folder)
-    case drafts       // notes still on the desk, out of the Inbox and views
+    case people       // the same notes, grouped by author
     case filedFolder(String)  // one filing folder, straight from the sidebar
     case view(String)
 
     /// Origami Text's name for the reading context; view modules written
     /// there land in the same place here.
-    static var allDocuments: SidebarItem { .library }
+    static var allDocuments: SidebarItem { .timeline }
 }
 
 /// One place in the sidebar: a named, iconed destination.
@@ -24,17 +24,39 @@ struct SidebarPlace: Identifiable {
 }
 
 enum SidebarCatalog {
-    static let library: [SidebarPlace] = [
+    /// The light grey every sidebar icon wears — place rows and action
+    /// rows alike, so the column reads as one set.
+    static let iconTint = Color(white: 0.75)
+
+    /// The head of the column: the Inbox stands alone above the Library
+    /// heading, with New Note (added by the sidebar view) under it.
+    static let top: [SidebarPlace] = [
         SidebarPlace(name: "Inbox", systemImage: "tray", item: .library),
-        SidebarPlace(name: "Place", systemImage: "mappin.and.ellipse", item: .place),
-        SidebarPlace(name: "To Do", systemImage: "checklist", item: .toDo),
-        SidebarPlace(name: "Drafts", systemImage: "pencil.line", item: .drafts),
     ]
 
+    static let library: [SidebarPlace] = [
+        SidebarPlace(name: "Timeline", systemImage: "clock", item: .timeline),
+        SidebarPlace(name: "Places", systemImage: "mappin.and.ellipse", item: .place),
+        // The Map view module, seated in the Library under Places
+        // rather than with the other views.
+        SidebarPlace(name: "Map", systemImage: "map", item: .view("places")),
+        SidebarPlace(name: "People", systemImage: "person.2", item: .people),
+    ]
+
+    /// The note column's fixed offering, in its order — the Action run,
+    /// then the standard files, each button's word beside the folder it
+    /// files under. The sidebar's Filed section mirrors the same list.
+    static let actionFolders = ["To Do", "In Progress", "Done"]
+    static let standardFiles: [(label: String, folder: String)] =
+        [("Thought", "Thoughts"), ("Journal", "Journal"), ("Note", "Notes")]
+
+    /// The installed views — minus any module the Library section
+    /// already seats (the Map lives under Places).
     static var views: [SidebarPlace] {
-        LibraryViewRegistry.modules.map {
-            SidebarPlace(name: $0.name, systemImage: $0.systemImage, item: .view($0.id))
-        }
+        let seated = Set(library.map(\.item))
+        return LibraryViewRegistry.modules
+            .filter { !seated.contains(.view($0.id)) }
+            .map { SidebarPlace(name: $0.name, systemImage: $0.systemImage, item: .view($0.id)) }
     }
 
     /// Filed is a heading, not a click: each folder in use stands as
@@ -42,19 +64,26 @@ enum SidebarCatalog {
     static func filed(_ folders: [String]) -> [SidebarPlace] {
         folders.map {
             SidebarPlace(name: $0,
-                         systemImage: $0 == AppState.archivedFolderName
-                             ? "archivebox" : "folder",
+                         systemImage: filedIcon(for: $0),
                          item: .filedFolder($0))
         }
     }
 
-    static func sections(filedFolders: [String]) -> [(title: String, places: [SidebarPlace])] {
-        var sections = [("Library", library)]
-        if !filedFolders.isEmpty {
-            sections.append(("Filed", filed(filedFolders)))
+    private static func filedIcon(for folder: String) -> String {
+        switch folder {
+        case "To Do": return "checklist"
+        case "In Progress": return "clock"
+        case "Done": return "checkmark.circle"
+        case "Thoughts": return "lightbulb"
+        case "Journal": return "book.closed"
+        case "Notes": return "note.text"
+        case AppState.archivedFolderName: return "archivebox"
+        default: return "folder"
         }
-        sections.append(("Views", views))
-        return sections
+    }
+
+    static func sections(filedFolders: [String]) -> [(title: String, places: [SidebarPlace])] {
+        [("", top), ("Library", library), ("Filed", filed(filedFolders)), ("Views", views)]
     }
 }
 
@@ -68,6 +97,10 @@ enum AppSettings {
     static let aiAgreementsPromptKey = "aiAgreementsPrompt"
     static let aiStrangerChallengePromptKey = "aiStrangerChallengePrompt"
     static let aiStrangerSupportPromptKey = "aiStrangerSupportPrompt"
+    // The portrait pipeline's settings, shared with Digital Letters.
+    static let portraitStyleKey = "portraitStyle"
+    static let portraitPromptKey = "portraitPrompt"
+    static let portraitInstantProcessingKey = "portraitInstantProcessing"
 }
 
 /// Origami Text's transcript test, kept under the same name so modules
@@ -170,38 +203,35 @@ struct DocumentListView: View {
     /// The Inbox keeps to the reader's own notes plus anything unread;
     /// a read document steps aside once opened.
     var inboxOnly = false
-    /// The Drafts list: notes still on the desk, which live here alone.
-    var draftsOnly = false
 
     enum Grouping {
         case time, place
     }
 
-    /// The entries this list speaks for: the Inbox's, the Drafts',
-    /// one folder's, or everything.
+    /// The entries this list speaks for: the Inbox's, one folder's, or
+    /// everything.
     private var scopedEntries: [IndexEntry] {
-        // Drafts leave the library lists, so their list reads straight
-        // from the index.
-        if draftsOnly {
-            return state.index.timeline.reversed().filter { state.isDraft($0.doc) }
-        }
         if let filedUnder {
-            // Archived leaves the library lists, so its folder reads
-            // straight from the filings.
-            if filedUnder.caseInsensitiveCompare(AppState.archivedFolderName) == .orderedSame {
-                return state.filedFolders
-                    .filter { $0.value.caseInsensitiveCompare(filedUnder) == .orderedSame }
-                    .compactMap { state.index.byID[$0.key] }
-                    .sorted { $0.doc.listedDate > $1.doc.listedDate }
-            }
-            return state.filteredEntries.filter {
-                state.folder(for: $0.doc)?.caseInsensitiveCompare(filedUnder) == .orderedSame
-            }
+            // A folder's list reads straight from the filings, so it
+            // shows every note filed there — however the library lists
+            // treat the note otherwise.
+            return state.filedFolders
+                .filter { $0.value.caseInsensitiveCompare(filedUnder) == .orderedSame }
+                .compactMap { state.index.allByID[$0.key] }
+                .sorted { $0.doc.listedDate > $1.doc.listedDate }
         }
         guard inboxOnly else { return state.filteredEntries }
-        return state.filteredEntries.filter {
-            $0.doc.documentType == LiquidDoc.DocumentType.note.rawValue
-                || state.isUnread($0.doc)
+        // The Inbox is only what is new and unread — a filed note has
+        // moved on to its folder, and the standing To Do and Done notes
+        // keep to their own sidebar places.
+        return state.filteredEntries.filter { entry in
+            (entry.doc.documentType == LiquidDoc.DocumentType.note.rawValue
+                || state.isUnread(entry.doc))
+                && state.folder(for: entry.doc) == nil
+                && !Self.pinnedTitles.contains {
+                    entry.doc.title.trimmingCharacters(in: .whitespaces)
+                        .caseInsensitiveCompare($0) == .orderedSame
+                }
         }
     }
 
@@ -267,12 +297,7 @@ struct DocumentListView: View {
             .overlay {
                 if state.index.folderURL != nil, scopedEntries.isEmpty,
                    !state.index.isScanning {
-                    if draftsOnly {
-                        ContentUnavailableView(
-                            "No Drafts",
-                            systemImage: "pencil.line",
-                            description: Text("A new note starts here; the Draft toggle beside a note brings it back."))
-                    } else if let filedUnder {
+                    if let filedUnder {
                         ContentUnavailableView(
                             "Nothing Here",
                             systemImage: "checklist",
@@ -316,8 +341,8 @@ struct DocumentListView: View {
 
     private var pinnedEntries: [IndexEntry] {
         // The standing notes head the whole library, not a folder's
-        // slice or the Drafts.
-        guard filedUnder == nil, !draftsOnly else { return [] }
+        // slice or the Inbox.
+        guard filedUnder == nil, !inboxOnly else { return [] }
         return Self.pinnedTitles.compactMap { title in
             state.filteredEntries.first {
                 $0.doc.title.trimmingCharacters(in: .whitespaces)
@@ -331,7 +356,10 @@ struct DocumentListView: View {
     private var groups: [(label: String, entries: [IndexEntry])] {
         let pinnedIDs = Set(pinnedEntries.map(\.id))
         let entries = scopedEntries.filter { !pinnedIDs.contains($0.id) }
-        return grouping == .place ? placeGroups(entries) : timeGroups(entries)
+        switch grouping {
+        case .place: return placeGroups(entries)
+        case .time: return timeGroups(entries)
+        }
     }
 
     /// Newest first, one section per day, spoken relatively where the
@@ -417,6 +445,199 @@ struct DocumentListView: View {
             return parts.dropLast().joined(separator: ", ")
         }
         return state.places.verifiedCountry(for: location) != nil ? location : nil
+    }
+}
+
+/// The People place: everyone whose identity card lives in the shared
+/// folder — the contact records shared with Digital Letters through
+/// People.json, joined by any identity card the phone wrote. Clicking a
+/// person fills the next column with the notes naming them; the reveal
+/// triangle unfolds their contact information in place. Ctrl-click a
+/// person to edit their record.
+struct PeopleListView: View {
+    @Environment(AppState.self) private var state
+    /// The record being edited, presented as the person form.
+    @State private var editingListing: PersonListing?
+
+    /// The listings, alphabetical from AppState, narrowed by the search
+    /// field on name, alias, or affiliation.
+    private var people: [PersonListing] {
+        guard !state.searchText.isEmpty else { return state.peopleListings }
+        return state.peopleListings.filter { listing in
+            listing.person.displayName.localizedCaseInsensitiveContains(state.searchText)
+                || listing.person.affiliation.localizedCaseInsensitiveContains(state.searchText)
+                || (listing.person.aliases ?? []).contains {
+                    $0.localizedCaseInsensitiveContains(state.searchText)
+                }
+        }
+    }
+
+    /// Selecting a person also puts down any open document, so their
+    /// mentions take the reading column.
+    private var selection: Binding<String?> {
+        Binding(
+            get: { state.selectedPersonID },
+            set: { id in
+                state.selectedPersonID = id
+                if id != nil { state.selectedDocID = nil }
+            }
+        )
+    }
+
+    var body: some View {
+        List(selection: selection) {
+            ForEach(people) { listing in
+                // The reveal triangle unfolds the person's contact
+                // details in place; clicking the person fills the next
+                // column with the notes that name them.
+                DisclosureGroup {
+                    contactDetails(listing.person)
+                } label: {
+                    personRow(listing)
+                }
+                .tag(listing.id)
+                .listRowSeparator(.hidden)
+                #if os(macOS)
+                .contextMenu {
+                    Button("Edit Person…") {
+                        editingListing = listing
+                    }
+                }
+                #endif
+            }
+        }
+        .overlay {
+            if people.isEmpty, state.index.folderURL != nil,
+               !state.index.isScanning {
+                ContentUnavailableView(
+                    "No People",
+                    systemImage: "person.2",
+                    description: Text("People appear here from the shared folder's contact records — Digital Letters' People.json and the phone's identity cards. Ctrl-click People in the sidebar to add someone."))
+            }
+        }
+        #if os(macOS)
+        .sheet(item: $editingListing) { listing in
+            PersonFormView(person: listing.person, heading: "Edit Person") { updated in
+                state.people.upsert(updated)
+                state.publishPortraits()
+                state.index.rescan()
+            }
+        }
+        #endif
+    }
+
+    /// The record's lines, unfolded under the name.
+    @ViewBuilder private func contactDetails(_ person: Person) -> some View {
+        let details: [(String, String)] = [
+            ("ORCID", person.orcid),
+            ("Affiliation", person.affiliation),
+            ("Email", person.emails.joined(separator: ", ")),
+            ("Aliases", (person.aliases ?? []).joined(separator: ", ")),
+            ("Profile", person.publicProfile ?? ""),
+        ].filter { !$0.1.isEmpty }
+        if details.isEmpty {
+            Text("The record carries only the name.")
+                .font(.caption)
+                .foregroundStyle(.tertiary)
+        } else {
+            ForEach(details, id: \.0) { label, value in
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(label)
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                    Text(value)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+    }
+
+    private func personRow(_ listing: PersonListing) -> some View {
+        let mentionCount = state.index.mentions[listing.id]?.count ?? 0
+        return HStack(spacing: 10) {
+            PersonAvatarView(name: listing.person.displayName, size: 32)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(listing.person.displayName)
+                if !listing.person.affiliation.isEmpty {
+                    Text(listing.person.affiliation)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            if mentionCount > 0 {
+                Spacer(minLength: 6)
+                Text("\(mentionCount)")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(.quaternary, in: Capsule())
+            }
+        }
+        .padding(.vertical, 2)
+    }
+}
+
+/// One row of the People place: a contact record from the directory, or
+/// an identity card the directory does not answer for. The id keys the
+/// index's mention map.
+struct PersonListing: Identifiable {
+    let id: String
+    let person: Person
+    /// Set when the row stands on an identity card document alone.
+    let cardDocID: String?
+}
+
+/// A person's page in the reading column: the notes that name them,
+/// newest first, under their face and name. Clicking a note opens it
+/// in this column's place; the contact details stay with the People
+/// list, under the reveal triangle.
+struct PersonMentionsView: View {
+    @Environment(AppState.self) private var state
+    let listing: PersonListing
+
+    private var mentions: [IndexEntry] {
+        (state.index.mentions[listing.id] ?? []).compactMap { state.index.byID[$0] }
+    }
+
+    var body: some View {
+        List {
+            HStack(spacing: 12) {
+                PersonAvatarView(name: listing.person.displayName, size: 44)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(listing.person.displayName)
+                        .font(.title3.weight(.semibold))
+                    if !listing.person.affiliation.isEmpty {
+                        Text(listing.person.affiliation)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
+            .padding(.vertical, 6)
+            .listRowSeparator(.hidden)
+            Section("Mentioned In") {
+                ForEach(mentions) { entry in
+                    Button {
+                        state.open(entry.doc)
+                    } label: {
+                        DocumentRow(entry: entry)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .listRowSeparator(.hidden)
+                }
+            }
+        }
+        .overlay {
+            if mentions.isEmpty {
+                ContentUnavailableView(
+                    "No Mentions",
+                    systemImage: "person.2",
+                    description: Text("No note names \(listing.person.displayName) yet — by their name or an alias from their record."))
+            }
+        }
     }
 }
 

@@ -23,7 +23,6 @@ struct NoteOptionsColumn: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
-                draftToggle
                 actionSection
                 fileSection
                 analysisSection
@@ -44,29 +43,11 @@ struct NoteOptionsColumn: View {
         .greyColumnAppearance()
     }
 
-    // MARK: Draft
-
-    /// Draft as a toggle, active while the note is still on the desk —
-    /// out of the Inbox and the views, listed under Drafts alone.
-    /// Clicking publishes the note; clicking again pulls it back.
-    private var draftToggle: some View {
-        Toggle("Draft", isOn: Binding(
-            get: { state.isDraft(doc) },
-            set: { state.setDraft($0, for: doc) }
-        ))
-        .toggleStyle(.button)
-        .buttonBorderShape(.capsule)
-        .help("A draft stays out of the timeline and the views, under Drafts alone — click to flip it")
-    }
-
     // MARK: Action
-
-    /// The note's standing, a fixed run of three.
-    private static let actionFolders = ["To Do", "In Progress", "Done"]
 
     private var actionSection: some View {
         section("Action") {
-            ForEach(Self.actionFolders, id: \.self) { folder in
+            ForEach(SidebarCatalog.actionFolders, id: \.self) { folder in
                 filingButton(folder)
             }
         }
@@ -76,6 +57,9 @@ struct NoteOptionsColumn: View {
 
     private var fileSection: some View {
         section("File") {
+            ForEach(SidebarCatalog.standardFiles, id: \.folder) { file in
+                filingButton(file.folder, label: file.label)
+            }
             ForEach(fileFolders, id: \.self) { folder in
                 filingButton(folder)
             }
@@ -83,6 +67,7 @@ struct NoteOptionsColumn: View {
             HStack {
                 Button("Archive") {
                     state.fileDocument(doc, under: AppState.archivedFolderName)
+                    state.setDraft(false, for: doc)
                 }
                 .buttonStyle(.plain)
                 .font(.caption)
@@ -105,18 +90,22 @@ struct NoteOptionsColumn: View {
         }
     }
 
-    /// The user's own folders: everything but the Action three and
-    /// Archived, which have their own places in the column.
+    /// The user's own folders: everything but the Action three, the
+    /// standard files, and Archived, which have their own places in
+    /// the column.
     private var fileFolders: [String] {
         state.filingFolders.filter { folder in
             folder.caseInsensitiveCompare(AppState.archivedFolderName) != .orderedSame
-                && !Self.actionFolders.contains {
+                && !SidebarCatalog.actionFolders.contains {
                     $0.caseInsensitiveCompare(folder) == .orderedSame
+                }
+                && !SidebarCatalog.standardFiles.contains {
+                    $0.folder.caseInsensitiveCompare(folder) == .orderedSame
                 }
         }
     }
 
-    private func filingButton(_ folder: String) -> some View {
+    private func filingButton(_ folder: String, label: String? = nil) -> some View {
         Button {
             if state.folder(for: doc) == folder {
                 state.unfile(doc)
@@ -125,10 +114,13 @@ struct NoteOptionsColumn: View {
                 // when the folder already exists.
                 state.addFilingFolder(folder)
                 state.fileDocument(doc, under: folder)
+                // Filing is saving: the note leaves the drafts for the
+                // timeline and the views.
+                state.setDraft(false, for: doc)
             }
         } label: {
             HStack {
-                Text(folder)
+                Text(label ?? folder)
                 if state.folder(for: doc) == folder {
                     Spacer(minLength: 4)
                     Image(systemName: "checkmark")

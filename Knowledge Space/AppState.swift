@@ -12,6 +12,14 @@ final class AppState {
     let index = LibraryIndex()
     /// Every place the notes have carried, searched once and remembered.
     let places = PlaceDirectory()
+    /// The community's contact records — the same People.json Digital
+    /// Letters and the phone read and write in the shared folder.
+    let people = PersonDirectory()
+    #if os(macOS)
+    /// The portrait pipeline carried over from Digital Letters: photos
+    /// kept untouched, cartoons drawn by Image Playground.
+    let portraits = PersonPortraitStore()
+    #endif
     /// The place this machine last resolved — attached to a new note at
     /// creation, per the format: a place name, never coordinates. Stays
     /// nil until macOS grants location, and the note travels without.
@@ -34,6 +42,9 @@ final class AppState {
 
     /// The sidebar place being shown: the document library, or a view module.
     var sidebarSelection: SidebarItem? = .library
+    /// The person picked in the People list — their mentions fill the
+    /// reading column while no document is open.
+    var selectedPersonID: String?
     /// Filters the document list and the insight views' rows.
     var searchText = ""
     /// A transient status message, shown briefly at the window's bottom.
@@ -60,6 +71,9 @@ final class AppState {
             filingFolders.insert("To Do", at: 0)
             UserDefaults.standard.set(filingFolders, forKey: "filingFolders")
         }
+        // Archived is a trash can: the index keeps its documents out of
+        // every list and view until they are unfiled.
+        index.setArchivedIDs(archivedDocumentIDs)
     }
 
     // MARK: - Parallel reading, view curation, and notes
@@ -97,7 +111,9 @@ final class AppState {
     }
 
     var selectedDoc: LiquidDoc? {
-        selectedDocID.flatMap { index.byID[$0]?.doc }
+        // The full map, so a note picked from the Archived list still
+        // opens in the reader to be retrieved.
+        selectedDocID.flatMap { index.allByID[$0]?.doc }
     }
 
     /// The span of days the Timeline shows, chosen from its calendar —
@@ -113,14 +129,13 @@ final class AppState {
 
     /// Entries as listed: newest first, superseded hidden unless shown,
     /// muted people's documents left out entirely, documents filed
-    /// under Archived living in the Filed list alone, drafts living
-    /// under Drafts alone, and only the Timeline calendar's chosen span
-    /// when one is set. Identity cards are contact records, not
-    /// correspondence — they live in Settings ▸ Author, never in the
-    /// document lists.
+    /// under Archived living in the Filed list alone, and only the
+    /// Timeline calendar's chosen span when one is set. Identity cards
+    /// are contact records, not correspondence — they live in Settings
+    /// ▸ Author, never in the document lists.
     var listedEntries: [IndexEntry] {
         index.timeline.reversed().filter { entry in
-            guard !isMuted(entry.doc.author), !isArchived(entry.doc), !isDraft(entry.doc),
+            guard !isMuted(entry.doc.author), !isArchived(entry.doc),
                   entry.doc.documentType != IdentityCard.documentType else { return false }
             if let timelineRange, !timelineRange.contains(entry.doc.listedDate) { return false }
             return showsSuperseded || !index.supersededIDs.contains(entry.id)
@@ -212,8 +227,7 @@ final class AppState {
     }
 
     /// The filing folders that hold something, in their offered order,
-    /// then any folder that exists only in the filings — the sidebar's
-    /// Filed section, one place per folder.
+    /// then any folder that exists only in the filings.
     var filedFoldersInUse: [String] {
         let used = Set(filedFolders.values)
         var folders = filingFolders.filter(used.contains)
@@ -221,8 +235,38 @@ final class AppState {
         return folders
     }
 
+    /// The sidebar's Filed section: the same folders the note column
+    /// offers, in the same order — the Action run, the standard files,
+    /// the user's own — then any folder only the filings remember, with
+    /// Archived last.
+    var sidebarFiledFolders: [String] {
+        var folders = SidebarCatalog.actionFolders
+            + SidebarCatalog.standardFiles.map(\.folder)
+        func append(_ candidates: [String]) {
+            for candidate in candidates
+            where candidate.caseInsensitiveCompare(Self.archivedFolderName) != .orderedSame
+                && !folders.contains(where: {
+                    $0.caseInsensitiveCompare(candidate) == .orderedSame
+                }) {
+                folders.append(candidate)
+            }
+        }
+        append(filingFolders)
+        append(filedFoldersInUse)
+        folders.append(Self.archivedFolderName)
+        return folders
+    }
+
     func isArchived(_ doc: LiquidDoc) -> Bool {
         filedFolders[doc.id] == Self.archivedFolderName
+    }
+
+    /// The ids filed under Archived — what the index hides from the
+    /// lists and views.
+    private var archivedDocumentIDs: Set<String> {
+        Set(filedFolders.filter {
+            $0.value.caseInsensitiveCompare(Self.archivedFolderName) == .orderedSame
+        }.keys)
     }
 
     func fileDocument(_ doc: LiquidDoc, under folder: String) {
@@ -268,6 +312,7 @@ final class AppState {
 
     private func persistFiling() {
         UserDefaults.standard.set(filedFolders, forKey: "filedFolders")
+        index.setArchivedIDs(archivedDocumentIDs)
     }
 
     #if os(macOS)
@@ -315,7 +360,7 @@ final class AppState {
                 let doc = try LiquidDoc.decode(data: data, fileURL: file)
                 // Something here already answers to this address — the
                 // document is home; leave both copies untouched.
-                if index.byID[doc.id] != nil { skipped += 1; continue }
+                if index.allByID[doc.id] != nil { skipped += 1; continue }
                 let stem = file.deletingPathExtension().lastPathComponent
                 let destination = folderURL.appendingPathComponent(stem)
                     .appendingPathExtension(LiquidDoc.fileExtension)
@@ -348,11 +393,11 @@ final class AppState {
         }
         let created = Date.now
         let id = LiquidAddress.makeID(author: authorName, created: created) { candidate in
-            self.index.byID[candidate] != nil
+            self.index.allByID[candidate] != nil
         }
-        // A new note starts as a draft — on the desk, out of the Inbox
-        // and the views until its Draft toggle is switched off. The
-        // flag travels in the file, so other devices agree.
+        // A new note starts as a draft — unfiled, so it lists in the
+        // Inbox awaiting its Action or File. The flag travels in the
+        // file, so other devices agree; filing clears it.
         let doc = LiquidDoc(format: LiquidDoc.knownFormat,
                             id: id,
                             title: "Untitled",
@@ -375,7 +420,7 @@ final class AppState {
             return
         }
         index.rescan()
-        sidebarSelection = .drafts
+        sidebarSelection = .library
         selectedDocID = id
     }
 
@@ -391,7 +436,7 @@ final class AppState {
               !index.isScanning else { return }
         let standing = [("To Do", "Add tasks here."),
                         ("Done", "Move finished tasks here.")]
-        let existing = Set(index.byID.values.map {
+        let existing = Set(index.allByID.values.map {
             $0.doc.title.trimmingCharacters(in: .whitespaces).lowercased()
         })
         let missing = standing.filter { !existing.contains($0.0.lowercased()) }
@@ -401,7 +446,7 @@ final class AppState {
             // Distinct creation instants keep the derived ids distinct.
             let created = Date.now.addingTimeInterval(TimeInterval(offset))
             let id = LiquidAddress.makeID(author: authorName, created: created) { candidate in
-                self.index.byID[candidate] != nil
+                self.index.allByID[candidate] != nil
             }
             let doc = LiquidDoc(format: LiquidDoc.knownFormat,
                                 id: id,
@@ -443,8 +488,82 @@ final class AppState {
         _ = url.startAccessingSecurityScopedResource()
         saveBookmark(url)
         index.setFolder(url)
+        shareContacts(into: url)
         folderNeedsRepick = false
     }
+
+    // MARK: - People (the contact directory shared with Digital Letters)
+
+    /// Puts the contact directory into the community folder, where the
+    /// phone, the headset, and Digital Letters find it. The user's own
+    /// record is added first if the directory does not hold one yet.
+    private func shareContacts(into folder: URL) {
+        if people.person(named: authorName) == nil,
+           !authorName.trimmingCharacters(in: .whitespaces).isEmpty {
+            var me = Person(displayName: authorName)
+            let identity = authorIdentity
+            me.orcid = identity.orcid
+            me.affiliation = identity.affiliation
+            people.upsert(me)
+        }
+        people.attach(folder: folder)
+        if people.communityWriteFailed {
+            showNote("Contact information could not be written to the shared folder — choose the folder again to renew write access.")
+        }
+        #if os(macOS)
+        publishPortraits()
+        #endif
+    }
+
+    /// The distinct names credited as authors in the library — offered
+    /// by the person form's "This is also:" for names without records.
+    var libraryAuthorNames: [String] {
+        var seen = Set<String>()
+        var names: [String] = []
+        for entry in index.timeline {
+            let name = entry.doc.author.trimmingCharacters(in: .whitespaces)
+            guard !name.isEmpty, seen.insert(name.lowercased()).inserted else { continue }
+            names.append(name)
+        }
+        return names.sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
+    }
+
+    #if os(macOS)
+    /// Writes every person's image into the community folder
+    /// (Portraits/<localID>.png) and records the file on their JSON
+    /// record in People.json — so every machine shows the face with the
+    /// name. Idempotent: images already current are left alone.
+    func publishPortraits() {
+        guard let folder = index.folderURL else { return }
+        for person in people.people {
+            guard let relative = portraits.publish(personID: person.localID, into: folder),
+                  person.portraitFile != relative else { continue }
+            var updated = person
+            updated.portraitFile = relative
+            people.upsert(updated)
+        }
+    }
+
+    /// Applies an approved merge of two contact records: the originals
+    /// leave the directory, the approved record stands, and a portrait
+    /// an absorbed record had follows when the surviving one has none.
+    func approveMergedPerson(_ merged: Person, replacing originals: [Person]) {
+        if portraits.original(for: merged.localID) == nil,
+           let donor = originals.first(where: {
+               $0.localID != merged.localID && portraits.original(for: $0.localID) != nil
+           }),
+           let photo = portraits.original(for: donor.localID) {
+            portraits.adoptPhoto(photo, for: merged.localID)
+        }
+        for original in originals {
+            people.remove(original)
+        }
+        people.upsert(merged)
+        publishPortraits()
+        showNote("Merged into “\(merged.displayName)” — every name on the record answers to it now")
+        index.rescan()
+    }
+    #endif
 
     /// Opens an `origamitext://open/<id>#<fragment>` link. Per the format,
     /// every link except `revises` follows through to the latest revision.
@@ -456,7 +575,7 @@ final class AppState {
 
     func open(id: String, fragment: String? = nil) {
         let target = index.latestRevision(of: id)
-        guard index.byID[target] != nil else { return }
+        guard index.allByID[target] != nil else { return }
         parallelDoc = nil   // navigation leaves parallel reading
         selectedDocID = target
         // Paragraph ids are only trustworthy in the document they were
@@ -493,6 +612,7 @@ final class AppState {
         _ = url.startAccessingSecurityScopedResource()
         if isStale { saveBookmark(url) }
         index.setFolder(url)
+        shareContacts(into: url)
         folderNeedsRepick = !FileManager.default.isWritableFile(atPath: url.path)
     }
 }

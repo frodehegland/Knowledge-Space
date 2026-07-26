@@ -109,6 +109,60 @@ enum KnowledgeMapDocument {
         return Contents(flowDocument: flowDocument, glossary: glossary, title: doc.title)
     }
 
+    // MARK: - Folder map
+
+    /// Builds the map of a community folder as knowledge: every document a
+    /// node whose **title is the term and whole body text the definition**
+    /// (Knowledge Space's reading of a document — Author keeps its own),
+    /// tagged by `documentType`, with `links` between the folder's
+    /// documents as the connections. A document's `references` (BibTeX)
+    /// simply ride along unrendered for now. Arrangements of the folder
+    /// are the reader's own, never written into the documents; unplaced
+    /// nodes start on the seeded grid.
+    static func folderContents(documents: [LiquidDoc]) -> Contents {
+        let glossary = Glossary()
+        var nodes: Set<FlowNode> = []
+        var seenIDs: Set<String> = []
+
+        for doc in documents {
+            guard seenIDs.insert(doc.id).inserted else { continue }
+            let definition = (doc.body ?? [])
+                .map { $0.text.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty }
+                .joined(separator: "\n\n")
+            glossary.add(GlossaryEntry(
+                identifier: doc.id,
+                phrase: doc.title,
+                entry: definition,
+                urls: [],
+                citationIdentifiers: [],
+                tagIdentifier: doc.documentType ?? ""
+            ))
+            nodes.insert(FlowNode(identifier: doc.id,
+                                  title: doc.title,
+                                  definition: definition.isEmpty ? nil : definition,
+                                  type: .text))
+        }
+
+        var connections: Set<FlowConnection> = []
+        for doc in documents {
+            for link in doc.links where seenIDs.contains(link.to) && link.to != doc.id {
+                connections.insert(FlowConnection(identifier: "\(doc.id)->\(link.to)",
+                                                  endingNodeIdentifier: link.to,
+                                                  startNodeIdentifier: doc.id))
+            }
+        }
+
+        var layout = CanvasViewLayout()
+        seedMissingPositions(&layout, nodes: nodes)
+
+        let flowDocument = FlowDocument(nodes: nodes,
+                                        connections: FlowDocument.sanitizedConnections(connections),
+                                        layout: layout,
+                                        customLayouts: [])
+        return Contents(flowDocument: flowDocument, glossary: glossary, title: nil)
+    }
+
     // MARK: - Save
 
     /// Writes the map back into the document on disk, touching only

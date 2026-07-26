@@ -18,6 +18,10 @@ struct IdentityCard {
     var familyName = ""
     var orcid = ""
     var affiliation = ""
+    /// Other names the person answers to — a pen name, a nickname, a
+    /// maiden name — carried on the card as a readable "Aliases:" line,
+    /// comma-separated. Mentions in notes match against these too.
+    var aliases: [String] = []
     /// The card's photograph: the name of an image file in the same
     /// shared folder, referenced by a readable "Photo:" line. The name
     /// is derived from the card's id — already unique and stable — so
@@ -47,6 +51,7 @@ struct IdentityCard {
         add("Family Name", familyName)
         add("ORCID", orcid)
         add("Affiliation", affiliation)
+        add("Aliases", aliases.joined(separator: ", "))
         add("Photo", photoFileName)
         return lines.joined(separator: "\n")
     }
@@ -84,6 +89,10 @@ struct IdentityCard {
             case "family name": familyName = value
             case "orcid": orcid = value
             case "affiliation": affiliation = value
+            case "alias", "aliases", "also known as":
+                aliases = value.split(separator: ",")
+                    .map { $0.trimmingCharacters(in: .whitespaces) }
+                    .filter { !$0.isEmpty }
             case "photo": photoFileName = value
             default: break
             }

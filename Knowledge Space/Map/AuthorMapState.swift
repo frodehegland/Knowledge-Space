@@ -11,6 +11,13 @@
 import SwiftUI
 import Observation
 
+/// One document in the open community folder, listed by its own title.
+struct FolderDocument: Identifiable {
+    let url: URL
+    let title: String
+    var id: String { url.path }
+}
+
 /// One entry in the agent conversation shown in the panel.
 struct AgentChatEntry: Identifiable {
     enum Role {
@@ -36,56 +43,150 @@ final class AuthorMapState {
     private(set) var hasUnsavedChanges = false
     var lastError: String?
 
+    /// The format the open document arrived in; saves go back the same
+    /// way, never converting as a side effect.
+    private(set) var documentFormat: MapDocumentFormat?
+
     /// The open document's own title, read from its JSON on open.
     private(set) var documentTitle = "Map"
 
-    // MARK: - View transform (map points <-> volume points)
+    // MARK: - View transform (map points <-> space points)
 
-    /// Map coordinates are Author canvas points (y down, origin roughly at
-    /// the canvas center). The volume shows them scaled to fit; z passes
-    /// through the same scale, so depth reads in proportion.
-    private(set) var mapScale: Double = 1.0
+    /// The original Author mapping: 1000 canvas points to the meter, the
+    /// map hanging at eye height in front of the viewer, z in meters.
+    /// Nothing is scaled to fit and nothing clips — nodes go anywhere.
+    /// `pointsPerMeter` is supplied by the view from its physical metrics.
+    var pointsPerMeter: Double = 1360
+    private static let metersPerCanvasPoint = 0.001
+
+    /// The canvas point placed at the space anchor, set once per load so
+    /// the map starts in front of the viewer.
     private(set) var mapCenter = SIMD2<Double>(0, 0)
 
-    func viewPosition(of node: FlowNode, in size: CGSize) -> SIMD3<Double> {
+    /// Points per canvas point.
+    private var canvasScale: Double { Self.metersPerCanvasPoint * pointsPerMeter }
+
+    func viewPosition(of node: FlowNode) -> SIMD3<Double> {
         let position = engine.position(of: node.identifier)
         return SIMD3(
-            (Double(position.x) - mapCenter.x) * mapScale + size.width / 2,
-            (Double(position.y) - mapCenter.y) * mapScale + size.height / 2,
-            Double(position.z) * mapScale
+            (Double(position.x) - mapCenter.x) * canvasScale,
+            (Double(position.y) - mapCenter.y) * canvasScale,
+            Double(position.z) * pointsPerMeter
         )
     }
 
     func mapDelta(fromViewDelta delta: SIMD3<Double>) -> SIMD3<Double> {
-        guard mapScale > 0 else { return .zero }
-        return delta / mapScale
+        guard canvasScale > 0 else { return .zero }
+        return SIMD3(delta.x / canvasScale,
+                     delta.y / canvasScale,
+                     delta.z / pointsPerMeter)
     }
 
-    /// Fits the visible nodes into the given view size with padding.
-    func fit(in size: CGSize) {
+    /// Centers the map on its visible nodes; the scale never changes.
+    func recenter() {
         let positions = engine.visibleNodes.map { engine.position(of: $0.identifier) }
         guard !positions.isEmpty else {
-            mapScale = 1
             mapCenter = .zero
             return
         }
-
         let xs = positions.map { Double($0.x) }
         let ys = positions.map { Double($0.y) }
-        let minX = xs.min()!, maxX = xs.max()!
-        let minY = ys.min()!, maxY = ys.max()!
-
-        mapCenter = SIMD2((minX + maxX) / 2, (minY + maxY) / 2)
-
-        let padding = 260.0
-        let spanX = max(maxX - minX + padding, 1)
-        let spanY = max(maxY - minY + padding, 1)
-        mapScale = min(size.width / spanX, size.height / spanY, 1.25)
+        mapCenter = SIMD2((xs.min()! + xs.max()!) / 2, (ys.min()! + ys.max()!) / 2)
     }
+
+    // MARK: - Expansion (the reader's transient view state, never saved)
+
+    /// Cards whose definition is unfolded — the original Map's
+    /// double-tap expansion, kept apart from selection.
+    private(set) var expandedNodes: Set<FlowNodeIdentifier> = []
+
+    func toggleExpanded(_ id: FlowNodeIdentifier) {
+        if expandedNodes.contains(id) {
+            expandedNodes.remove(id)
+        } else {
+            expandedNodes.insert(id)
+        }
+    }
+
+    func setExpanded<IDs: Collection>(_ ids: IDs, _ expanded: Bool) where IDs.Element == FlowNodeIdentifier {
+        if expanded {
+            expandedNodes.formUnion(ids)
+        } else {
+            expandedNodes.subtract(ids)
+        }
+    }
+
+    /// The original's Close All: every card folds back to its term.
+    func collapseAll() {
+        expandedNodes = []
+    }
+
+    // MARK: - Focus (the original's show-only-the-selection mode)
+
+    private(set) var isFocused = false
+
+    func toggleFocus() {
+        if isFocused {
+            isFocused = false
+        } else if !engine.selection.isEmpty {
+            isFocused = true
+        }
+    }
+
+    /// The nodes the space shows: the engine's visible set, narrowed to
+    /// the selection and its direct neighbours while focused — the
+    /// original's focus().
+    var spaceNodes: [FlowNode] {
+        let nodes = engine.visibleNodes
+        guard isFocused, !engine.selection.isEmpty else { return nodes }
+        var kept = engine.selection
+        for connection in engine.document.connections {
+            if engine.selection.contains(connection.startNodeIdentifier) {
+                kept.insert(connection.endingNodeIdentifier)
+            } else if engine.selection.contains(connection.endingNodeIdentifier) {
+                kept.insert(connection.startNodeIdentifier)
+            }
+        }
+        return nodes.filter { kept.contains($0.identifier) }
+    }
+
+    /// Whether the immersive map space is currently open; kept by the
+    /// space view so window scenes don't try to open it twice.
+    var isMapSpaceOpen = false
+
+    /// The toolbar and settings windows report themselves open here, so
+    /// the wrist bangles can toggle them from inside the space.
+    var isControlsWindowOpen = false
+    var isSettingsWindowOpen = false
+
+    /// Set when the toolbar is dismissed deliberately (the left bangle).
+    /// Any other close reopens it — the map is never left controlless.
+    var controlsToggledOff = false
 
     // MARK: - Document lifecycle
 
     private static let bookmarkKey = "knowledgeMapDocumentBookmark"
+    private static let folderBookmarkKey = "knowledgeMapFolderBookmark"
+
+    /// The community folder the picker granted, and the documents in it.
+    private(set) var folderURL: URL?
+    private(set) var folderDocuments: [FolderDocument] = []
+
+    /// Whether the engine currently shows the folder itself as the map —
+    /// every document a node, links between documents the threads.
+    private(set) var showingFolderMap = false
+
+    /// Bumped each time a different map loads, so the view can refit.
+    private(set) var loadCount = 0
+
+    /// The folder's decoded documents from the last scan, kept so the
+    /// folder map can rebuild without re-reading every file.
+    private var scannedDocs: [LiquidDoc] = []
+
+    /// The folder holding a live security scope. The scope stays open for
+    /// the whole session so the documents inside remain readable and
+    /// saveable; it is released only when another folder replaces it.
+    private var accessedFolder: URL?
 
     init() {
         engine.onChange = { [weak self] _ in
@@ -94,19 +195,142 @@ final class AuthorMapState {
         }
     }
 
+    /// Routes a picked URL: folders become the community folder, files
+    /// open as documents. A `.liquid` package is a directory on disk
+    /// but a document at heart, so it goes the document way.
     func open(url: URL) {
+        if url.hasDirectoryPath && url.pathExtension.lowercased() != "liquid" {
+            openFolder(url: url)
+        } else {
+            openDocument(url: url)
+        }
+    }
+
+    func openFolder(url: URL) {
+        if let previous = accessedFolder {
+            previous.stopAccessingSecurityScopedResource()
+            accessedFolder = nil
+        }
+        if url.startAccessingSecurityScopedResource() {
+            accessedFolder = url
+        }
+        folderURL = url
+        lastError = nil
+        if let bookmark = try? url.bookmarkData() {
+            UserDefaults.standard.set(bookmark, forKey: Self.folderBookmarkKey)
+        }
+        rescanFolder()
+    }
+
+    /// Lists the folder's documents the way the library scan does:
+    /// recursively, skipping hidden files, asking iCloud to download
+    /// placeholders it finds along the way. When no single document is
+    /// open, the folder itself becomes the map.
+    func rescanFolder() {
+        guard let folder = folderURL else { return }
+        LibraryScanner.requestICloudDownloads(in: folder)
+
+        var docs: [LiquidDoc] = []
+        var documents: [FolderDocument] = []
+        if let enumerator = FileManager.default.enumerator(
+            at: folder,
+            includingPropertiesForKeys: [.isRegularFileKey],
+            options: [.skipsHiddenFiles, .skipsPackageDescendants]
+        ) {
+            for case let url as URL in enumerator where LiquidDoc.isDocumentFile(url) {
+                guard let data = try? Data(contentsOf: url),
+                      let doc = try? LiquidDoc.decode(data: data, fileURL: url) else {
+                    documents.append(FolderDocument(url: url, title: url.lastPathComponent))
+                    continue
+                }
+                docs.append(doc)
+                documents.append(FolderDocument(url: url, title: doc.title))
+            }
+        }
+        scannedDocs = docs
+        folderDocuments = documents.sorted {
+            $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending
+        }
+
+        if documentURL == nil || showingFolderMap {
+            showFolderMap()
+        }
+    }
+
+    /// Loads the folder map into the engine: documents as nodes, links as
+    /// threads, positions from the reader's saved arrangement.
+    func showFolderMap() {
+        guard let folder = folderURL, !scannedDocs.isEmpty else { return }
+        if documentURL != nil, hasUnsavedChanges {
+            save()
+        }
+
+        let contents = KnowledgeMapDocument.folderContents(documents: scannedDocs)
+        applySavedFolderLayout(to: contents.flowDocument, folder: folder)
+        engine.load(document: contents.flowDocument, glossary: contents.glossary)
+        documentURL = nil
+        documentFormat = nil
+        documentTitle = folder.lastPathComponent
+        showingFolderMap = true
+        hasUnsavedChanges = false
+        lastError = nil
+        expandedNodes = []
+        isFocused = false
+        recenter()
+        loadCount += 1
+        agentSession?.clearHistory()
+    }
+
+    // MARK: - Folder arrangement (the reader's own, kept locally)
+
+    private func folderLayoutKey(_ folder: URL) -> String {
+        "knowledgeMapFolderLayout:" + folder.path
+    }
+
+    private func applySavedFolderLayout(to document: FlowDocument, folder: URL) {
+        guard let saved = UserDefaults.standard.dictionary(forKey: folderLayoutKey(folder))
+            as? [String: [Double]] else { return }
+        let ids = Set(document.nodes.map(\.identifier))
+        for (id, xyz) in saved where ids.contains(id) && xyz.count == 3 {
+            document.layout.set(position: NodePosition(x: xyz[0], y: xyz[1], z: xyz[2]), for: id)
+        }
+    }
+
+    private func saveFolderLayout() {
+        guard let folder = folderURL else { return }
+        var positions: [String: [Double]] = [:]
+        for node in engine.document.nodes {
+            let p = engine.position(of: node.identifier)
+            positions[node.identifier] = [Double(p.x), Double(p.y), Double(p.z)]
+        }
+        UserDefaults.standard.set(positions, forKey: folderLayoutKey(folder))
+        hasUnsavedChanges = false
+    }
+
+    func openDocument(url: URL) {
         do {
+            // Switching away from an edited map keeps its changes.
+            if hasUnsavedChanges {
+                save()
+            }
+
             let accessing = url.startAccessingSecurityScopedResource()
             defer {
                 if accessing { url.stopAccessingSecurityScopedResource() }
             }
 
-            let contents = try KnowledgeMapDocument.load(from: url)
+            let (contents, format) = try MapDocumentIO.load(from: url)
             engine.load(document: contents.flowDocument, glossary: contents.glossary)
             documentURL = url
+            documentFormat = format
             documentTitle = contents.title ?? url.lastPathComponent
+            showingFolderMap = false
             hasUnsavedChanges = false
             lastError = nil
+            expandedNodes = []
+            isFocused = false
+            recenter()
+            loadCount += 1
             agentSession?.clearHistory()
 
             if let bookmark = try? url.bookmarkData() {
@@ -117,25 +341,44 @@ final class AuthorMapState {
         }
     }
 
-    /// Reopens the document from the last session's bookmark.
+    /// Whether the last session was already brought back, so the Library
+    /// window reappearing later doesn't reload the map underneath.
+    private var hasRestoredSession = false
+
+    /// Reopens the last session's folder and document from their bookmarks.
     func reopenLastDocument() {
+        guard !hasRestoredSession else { return }
+        hasRestoredSession = true
+        if let bookmark = UserDefaults.standard.data(forKey: Self.folderBookmarkKey) {
+            var stale = false
+            if let url = try? URL(resolvingBookmarkData: bookmark, bookmarkDataIsStale: &stale) {
+                openFolder(url: url)
+            }
+        }
         guard let bookmark = UserDefaults.standard.data(forKey: Self.bookmarkKey) else { return }
         var stale = false
         if let url = try? URL(resolvingBookmarkData: bookmark, bookmarkDataIsStale: &stale) {
-            open(url: url)
+            openDocument(url: url)
         }
     }
 
     func save() {
+        // The folder map's arrangement is the reader's own — it lives
+        // locally, never written into the shared documents.
+        if showingFolderMap {
+            saveFolderLayout()
+            return
+        }
         guard let url = documentURL else { return }
         do {
             let accessing = url.startAccessingSecurityScopedResource()
             defer {
                 if accessing { url.stopAccessingSecurityScopedResource() }
             }
-            try KnowledgeMapDocument.save(
+            try MapDocumentIO.save(
                 KnowledgeMapDocument.Contents(flowDocument: engine.document, glossary: engine.glossary),
-                to: url
+                to: url,
+                format: documentFormat ?? .knowledgeSpaceJSON
             )
             hasUnsavedChanges = false
             lastError = nil
@@ -149,8 +392,13 @@ final class AuthorMapState {
             save()
         }
         documentURL = nil
+        documentFormat = nil
         documentTitle = "Map"
+        showingFolderMap = false
         engine.load(document: FlowDocument(), glossary: nil)
+        if folderURL != nil {
+            showFolderMap()
+        }
     }
 
     // MARK: - Direct manipulation
@@ -166,11 +414,17 @@ final class AuthorMapState {
         revision += 1
     }
 
-    func endDrag(node id: FlowNodeIdentifier, from start: NodePosition) {
-        let final = engine.position(of: id)
-        engine.document.layout.set(position: start, for: id)
+    /// Commits a finished drag as one undoable move: positions rewind to
+    /// their gesture-start anchors, then the move lands through the engine.
+    func endDrag(nodes starts: [FlowNodeIdentifier: NodePosition]) {
+        guard !starts.isEmpty else { return }
+        var finals: [FlowNodeIdentifier: NodePosition] = [:]
+        for (id, start) in starts {
+            finals[id] = engine.position(of: id)
+            engine.document.layout.set(position: start, for: id)
+        }
         do {
-            try engine.execute(.move(positions: [id: final]))
+            try engine.execute(.move(positions: finals))
         } catch {
             lastError = "\(error)"
         }
@@ -182,6 +436,10 @@ final class AuthorMapState {
                 try engine.execute(.removeFromSelection(ids: [id]))
             } else {
                 try engine.execute(.addToSelection(ids: [id]))
+            }
+            // The original leaves focus with the last deselection.
+            if engine.selection.isEmpty {
+                isFocused = false
             }
         } catch {
             lastError = "\(error)"

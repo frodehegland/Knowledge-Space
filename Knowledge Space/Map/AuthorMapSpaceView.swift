@@ -2,290 +2,373 @@
 //  AuthorMapSpaceView.swift
 //  Knowledge Space
 //
-//  The Author Map as a volume: every node a card, connections as threads
-//  through all three dimensions. Positions come from the document's own
-//  layout (Author's x/y, extended into z here) — not a per-view store —
-//  so the arrangement is the document's, shared with the Mac, and the AI
-//  agent moves the same nodes the hand does. Cards move on x/y/z and
-//  never rotate.
+//  The Map as the original Author visionOS Map had it: an immersive
+//  space where concept cards hang free in the room — nothing frames or
+//  crops them — joined by threads and worked directly by hand. A tap
+//  selects, a double tap unfolds the definition, a drag moves the
+//  selection together. The control bar lives in its own window
+//  (MapControlsView), moving independently of the map.
 //
-//  Rendering follows the house techniques from SpatialCardPlane (3D drag
-//  via translation3D, capsule threads rotated through the volume).
+//  Cards are RealityKit attachment entities, not views on a canvas, so
+//  there is no bound on how wide, tall, or deep a card can go.
 //
 
 #if os(visionOS)
 import SwiftUI
-import UniformTypeIdentifiers
+import RealityKit
 
 struct AuthorMapSpaceView: View {
-    @State private var state = AuthorMapState()
+    @Environment(AuthorMapState.self) private var state
+    @Environment(\.openWindow) private var openWindow
+    @Environment(\.dismissWindow) private var dismissWindow
+
+    /// Drag anchors for every card the current gesture is moving.
     @State private var dragStarts: [String: NodePosition] = [:]
-    @State private var showingImporter = false
-    @State private var showingAgentPanel = true
+
+    /// The original Map's manners, under the original names: only
+    /// selected cards answer the hand, and the selection moves as one.
+    @AppStorage("onlySelectedNodesCanMove") private var onlySelectedNodesCanMove = true
+    @AppStorage("allSelectedNodesMoveTogether") private var allSelectedNodesMoveTogether = true
+
+    /// Billboarding turns every card toward the viewer. Off, cards hang
+    /// fixed and each carries a reversed twin, so from behind the text
+    /// still reads the right way around.
+    @AppStorage("nodeBillboarding") private var nodeBillboarding = true
+
+    /// One meter in points where the map hangs, so drag translations in
+    /// view points convert back to map coordinates — the original's
+    /// 1000 canvas points to the meter.
+    @PhysicalMetric(from: .meters) private var meter = 1.0
+
+    /// The map anchor's place in the room — the original's [0, 1.4, −1.4]:
+    /// eye height, an arm-and-a-half ahead of where the space opened.
+    private static let anchor = SIMD3<Float>(0, 1.4, -1.4)
+
+    private static let rootName = "MapRoot"
 
     var body: some View {
-        GeometryReader { geometry in
-            ZStack {
-                threads(in: geometry.size)
-                nodeCards(in: geometry.size)
+        RealityView { content, attachments in
+            let root = Entity()
+            root.name = Self.rootName
+            root.position = Self.anchor
+            content.add(root)
+            layout(root: root, attachments: attachments)
+            placeBangles(content: content, attachments: attachments)
+        } update: { content, attachments in
+            if let root = content.entities.first(where: { $0.name == Self.rootName }) {
+                layout(root: root, attachments: attachments)
             }
-            .onChange(of: state.documentURL) {
-                state.fit(in: geometry.size)
-            }
-            .onAppear {
-                state.reopenLastDocument()
-                state.fit(in: geometry.size)
-            }
-        }
-        .overlay {
-            if state.documentURL == nil {
-                ContentUnavailableView {
-                    Label("Author Map", systemImage: "circle.hexagongrid")
-                } description: {
-                    Text("Open an Author document (.liquid) to see its Map in space.")
-                } actions: {
-                    Button("Open Document…") { showingImporter = true }
+            placeBangles(content: content, attachments: attachments)
+        } attachments: {
+            ForEach(visibleNodes, id: \.identifier) { node in
+                Attachment(id: node.identifier) {
+                    AuthorMapNodeCard(node: node,
+                                      tag: state.engine.effectiveTag(of: node),
+                                      isSelected: state.engine.selection.contains(node.identifier),
+                                      isExpanded: state.expandedNodes.contains(node.identifier))
+                        .hoverEffect()
+                        .gesture(drag(for: node.identifier))
+                        .gesture(ExclusiveGesture(
+                            TapGesture(count: 2).onEnded {
+                                state.toggleExpanded(node.identifier)
+                            },
+                            TapGesture(count: 1).onEnded {
+                                state.toggleSelection(of: node.identifier)
+                            }
+                        ))
                 }
             }
-        }
-        .ornament(attachmentAnchor: .scene(.bottom)) { controls }
-        .ornament(attachmentAnchor: .scene(.trailing)) {
-            if showingAgentPanel && state.documentURL != nil {
-                AuthorMapAgentPanel(state: state)
+            // With billboarding off, each card's reversed twin — the
+            // same card, view-only, facing the other way.
+            if !nodeBillboarding {
+                ForEach(visibleNodes, id: \.identifier) { node in
+                    Attachment(id: node.identifier + ":back") {
+                        AuthorMapNodeCard(node: node,
+                                          tag: state.engine.effectiveTag(of: node),
+                                          isSelected: state.engine.selection.contains(node.identifier),
+                                          isExpanded: state.expandedNodes.contains(node.identifier))
+                    }
+                }
+            }
+            Attachment(id: Self.leftBangleID) {
+                MapBangle(systemImage: "slider.horizontal.3", action: toggleControls)
+            }
+            Attachment(id: Self.rightBangleID) {
+                MapBangle(systemImage: "gearshape", action: toggleSettings)
             }
         }
-        .fileImporter(isPresented: $showingImporter,
-                      allowedContentTypes: openableTypes,
-                      allowsMultipleSelection: false) { result in
-            if case .success(let urls) = result, let url = urls.first {
-                state.open(url: url)
+        .onAppear {
+            state.pointsPerMeter = meter
+            state.isMapSpaceOpen = true
+        }
+        .onDisappear {
+            state.isMapSpaceOpen = false
+            if state.hasUnsavedChanges {
+                state.save()
             }
         }
-    }
-
-    private var openableTypes: [UTType] {
-        var types: [UTType] = [.package, .folder]
-        if let liquid = UTType(filenameExtension: "liquid", conformingTo: .package) {
-            types.insert(liquid, at: 0)
+        .onChange(of: meter) {
+            state.pointsPerMeter = meter
         }
-        return types
     }
 
     // MARK: - Nodes
 
     private var visibleNodes: [FlowNode] {
         _ = state.revision
-        return state.engine.visibleNodes
+        return state.spaceNodes
             .sorted { $0.identifier < $1.identifier }
     }
 
-    private func nodeCards(in size: CGSize) -> some View {
-        ForEach(visibleNodes, id: \.identifier) { node in
-            let p = state.viewPosition(of: node, in: size)
-            AuthorMapNodeCard(node: node,
-                              tag: state.engine.effectiveTag(of: node),
-                              isSelected: state.engine.selection.contains(node.identifier))
-                .hoverEffect()
-                .position(x: p.x, y: p.y)
-                .offset(z: p.z)
-                .gesture(drag(for: node.identifier))
-                .onTapGesture { state.toggleSelection(of: node.identifier) }
+    /// A node's place in the room, in meters around the map anchor.
+    /// RealityKit's y runs up where the map's runs down, so y flips.
+    private func roomPosition(of node: FlowNode) -> SIMD3<Float> {
+        let p = state.viewPosition(of: node)
+        let ppm = max(state.pointsPerMeter, 1)
+        return SIMD3(Float(p.x / ppm), Float(-p.y / ppm), Float(p.z / ppm))
+    }
+
+    // MARK: - Entities
+
+    /// Lays the whole map out under the root: every visible card's
+    /// attachment entity at its place in the room, one thread entity per
+    /// visible connection, and everything that left the map swept away.
+    private func layout(root: Entity, attachments: RealityViewAttachments) {
+        _ = state.revision
+        let nodes = visibleNodes
+        let visible = Dictionary(uniqueKeysWithValues: nodes.map { ($0.identifier, $0) })
+        // Kept by identity, not name: toggling billboarding hands back
+        // fresh attachment entities under the old names, and a name
+        // sweep would keep the stale twin alongside the new one.
+        var kept: Set<ObjectIdentifier> = []
+
+        for node in nodes {
+            guard let card = attachments.entity(for: node.identifier) else { continue }
+            card.name = "card:" + node.identifier
+            kept.insert(ObjectIdentifier(card))
+            if card.parent !== root {
+                root.addChild(card)
+            }
+            // Billboarding turns the card toward the viewer from
+            // wherever they stand; without it the card hangs fixed and
+            // its reversed twin carries the text for viewers behind.
+            if nodeBillboarding {
+                card.components.set(BillboardComponent())
+            } else {
+                card.components.remove(BillboardComponent.self)
+            }
+            card.position = roomPosition(of: node)
+
+            if !nodeBillboarding,
+               let back = attachments.entity(for: node.identifier + ":back") {
+                back.name = "cardback:" + node.identifier
+                kept.insert(ObjectIdentifier(back))
+                if back.parent !== root {
+                    root.addChild(back)
+                }
+                // A hair behind the front face, turned to look the
+                // other way.
+                back.position = roomPosition(of: node) + SIMD3(0, 0, -0.002)
+                back.orientation = simd_quatf(angle: .pi, axis: SIMD3(0, 1, 0))
+            }
+        }
+
+        // Threads only show around the selection; an unselected map
+        // hangs quiet, without the whole web of lines behind it.
+        let selection = state.engine.selection
+        for connection in state.engine.document.connections {
+            guard let from = visible[connection.startNodeIdentifier],
+                  let to = visible[connection.endingNodeIdentifier],
+                  selection.contains(from.identifier) || selection.contains(to.identifier)
+            else { continue }
+            // The thread runs card edge to card edge, never through a
+            // note: each end pulls back to where it leaves its card.
+            guard let (start, end) = trimmedSegment(
+                from: roomPosition(of: from), to: roomPosition(of: to),
+                startCard: attachments.entity(for: from.identifier),
+                endingCard: attachments.entity(for: to.identifier),
+                root: root)
+            else { continue }
+            if let thread = placeThread(named: "thread:" + connection.identifier,
+                                        in: root, from: start, to: end) {
+                kept.insert(ObjectIdentifier(thread))
+            }
+        }
+
+        for child in Array(root.children) where !kept.contains(ObjectIdentifier(child)) {
+            child.removeFromParent()
         }
     }
 
-    /// The same pinch moves a card on the plane and pulls or pushes it in
-    /// z. Live movement bypasses undo; release commits one undoable move.
-    private func drag(for id: String) -> some Gesture {
-        DragGesture(minimumDistance: 2)
-            .onChanged { value in
-                let start = dragStarts[id] ?? state.engine.position(of: id)
-                if dragStarts[id] == nil { dragStarts[id] = start }
-                state.drag(node: id,
-                           from: start,
-                           viewDelta: SIMD3(value.translation3D.x,
-                                            value.translation3D.y,
-                                            value.translation3D.z))
-            }
-            .onEnded { _ in
-                if let start = dragStarts[id] {
-                    state.endDrag(node: id, from: start)
-                }
-                dragStarts[id] = nil
-            }
+    // MARK: - Bangles
+
+    private static let leftBangleID = "bangle.left"
+    private static let rightBangleID = "bangle.right"
+
+    /// One bangle on the back of each wrist, worn like a watch face:
+    /// left toggles the toolbar, right toggles the settings panel.
+    private func placeBangles(content: RealityViewContent, attachments: RealityViewAttachments) {
+        let bangles: [(String, AnchoringComponent.Target.Chirality)] = [
+            (Self.leftBangleID, .left),
+            (Self.rightBangleID, .right)
+        ]
+        for (id, chirality) in bangles {
+            guard content.entities.first(where: { $0.name == "anchor:" + id }) == nil,
+                  let bangle = attachments.entity(for: id) else { continue }
+            let anchor = AnchorEntity(.hand(chirality, location: .wrist))
+            anchor.name = "anchor:" + id
+            // The wrist anchor's y points out of the back of the hand;
+            // the attachment faces +z, so lay it onto the wrist.
+            bangle.orientation = simd_quatf(angle: -.pi / 2, axis: SIMD3(1, 0, 0))
+            bangle.position = SIMD3(0, 0.02, 0)
+            anchor.addChild(bangle)
+            content.add(anchor)
+        }
+    }
+
+    private func toggleControls() {
+        if state.isControlsWindowOpen {
+            // The one sanctioned way to put the toolbar away; without
+            // this flag it reopens itself.
+            state.controlsToggledOff = true
+            dismissWindow(id: "MapControls")
+        } else {
+            openWindow(id: "MapControls")
+        }
+    }
+
+    private func toggleSettings() {
+        if state.isSettingsWindowOpen {
+            dismissWindow(id: "MapSettings")
+        } else {
+            openWindow(id: "MapSettings")
+        }
     }
 
     // MARK: - Threads
 
-    private struct Thread: Identifiable {
-        let id: String
-        let from: SIMD3<Double>
-        let to: SIMD3<Double>
-        let lit: Bool
+    /// A unit thread: a cylinder one meter long and one across, standing
+    /// along y, scaled and turned per connection.
+    private static let threadMesh = MeshResource.generateCylinder(height: 1, radius: 0.5)
+
+    /// Pulls each end of a segment back to the edge of its card's
+    /// rendered bounds, so no thread shows inside a note — only between
+    /// them. Cards close enough to overlap get no thread at all.
+    private func trimmedSegment(from a: SIMD3<Float>, to b: SIMD3<Float>,
+                                startCard: Entity?, endingCard: Entity?,
+                                root: Entity) -> (SIMD3<Float>, SIMD3<Float>)? {
+        let d = b - a
+        let length = simd_length(d)
+        guard length > 0.001 else { return nil }
+        let dir = d / length
+        let tA = exitDistance(of: startCard, along: dir, root: root)
+        let tB = exitDistance(of: endingCard, along: dir, root: root)
+        guard tA + tB < length - 0.01 else { return nil }
+        return (a + dir * tA, b - dir * tB)
     }
 
-    private func threads(in size: CGSize) -> some View {
-        _ = state.revision
-        let engine = state.engine
-        let visible = Dictionary(uniqueKeysWithValues: visibleNodes.map { ($0.identifier, $0) })
-        let selection = engine.selection
-
-        let items: [Thread] = engine.document.connections.compactMap { connection in
-            guard let from = visible[connection.startNodeIdentifier],
-                  let to = visible[connection.endingNodeIdentifier] else { return nil }
-            let lit = selection.contains(from.identifier) || selection.contains(to.identifier)
-            return Thread(id: connection.identifier,
-                          from: state.viewPosition(of: from, in: size),
-                          to: state.viewPosition(of: to, in: size),
-                          lit: lit)
+    /// How far a ray from a card's center runs before it leaves the
+    /// card's bounding box.
+    private func exitDistance(of card: Entity?, along dir: SIMD3<Float>, root: Entity) -> Float {
+        guard let card else { return 0 }
+        let half = card.visualBounds(relativeTo: root).extents / 2
+        var t = Float.greatestFiniteMagnitude
+        for i in 0..<3 where abs(dir[i]) > 0.0001 {
+            t = min(t, half[i] / abs(dir[i]))
         }
-
-        return ForEach(items) { thread in
-            threadCapsule(from: thread.from, to: thread.to,
-                          opacity: thread.lit ? 0.9 : 0.25,
-                          width: thread.lit ? 2 : 1.2)
-        }
+        return t.isFinite ? max(t, 0) : 0
     }
 
-    /// One thread: a capsule of the segment's true 3D length, laid along
-    /// the x-axis, rotated so its x-axis carries a → b, placed at the
-    /// midpoint (the SpatialCardPlane construction).
-    @ViewBuilder
-    private func threadCapsule(from pa: SIMD3<Double>, to pb: SIMD3<Double>,
-                               opacity: Double, width: Double) -> some View {
-        let d = pb - pa
-        let length = (d.x * d.x + d.y * d.y + d.z * d.z).squareRoot()
-        if length > 1 {
-            let u = d / length
-            let angle = acos(max(-1, min(1, u.x)))
-            let raw = SIMD3<Double>(0, -u.z, u.y)
-            let axisLength = (raw.y * raw.y + raw.z * raw.z).squareRoot()
-            let axis = axisLength > 1e-6 ? raw / axisLength : SIMD3<Double>(0, 1, 0)
-            Capsule()
-                .fill(Color.white.opacity(opacity))
-                .frame(width: length, height: max(width, 1))
-                .rotation3DEffect(.radians(angle), axis: (x: axis.x, y: axis.y, z: axis.z))
-                .position(x: (pa.x + pb.x) / 2, y: (pa.y + pb.y) / 2)
-                .offset(z: (pa.z + pb.z) / 2)
-                .allowsHitTesting(false)
+    /// Puts one thread where it belongs: at the segment's midpoint,
+    /// scaled to its length and weight, rotated so its axis carries
+    /// a → b.
+    private func placeThread(named name: String, in root: Entity,
+                             from a: SIMD3<Float>, to b: SIMD3<Float>) -> Entity? {
+        let d = b - a
+        let length = simd_length(d)
+        guard length > 0.001 else { return nil }
+
+        let thread: ModelEntity
+        if let existing = root.findEntity(named: name) as? ModelEntity {
+            thread = existing
+        } else {
+            thread = ModelEntity(mesh: Self.threadMesh,
+                                 materials: [UnlitMaterial(color: .white)])
+            thread.name = name
+            root.addChild(thread)
         }
+
+        thread.position = (a + b) / 2
+        thread.orientation = Self.rotation(fromYAxisTo: d / length)
+        let width: Float = 0.002
+        thread.scale = SIMD3(width, length, width)
+        thread.components.set(OpacityComponent(opacity: 0.5))
+        return thread
     }
 
-    // MARK: - Controls
+    /// Turns the unit cylinder's y-axis onto the segment's direction;
+    /// straight down is the one direction simd_quatf(from:to:) can't make.
+    private static func rotation(fromYAxisTo axis: SIMD3<Float>) -> simd_quatf {
+        let y = SIMD3<Float>(0, 1, 0)
+        if simd_dot(y, axis) < -0.9999 {
+            return simd_quatf(angle: .pi, axis: SIMD3(1, 0, 0))
+        }
+        return simd_quatf(from: y, to: axis)
+    }
 
-    private var controls: some View {
-        HStack(spacing: 12) {
-            if state.documentURL != nil {
-                Text(state.documentTitle)
-                    .foregroundStyle(.secondary)
+    // MARK: - Direct manipulation
 
-                selectMenu
-                showMenu
-                arrangeMenu
-
-                Button {
-                    state.run(.setSelection(ids: []))
-                    if state.engine.canUndo {
-                        try? state.engine.undo()
+    /// The original's move: the same pinch carries a card across the
+    /// plane and pulls or pushes it in depth. Only selected cards move
+    /// (when the setting says so), and the whole selection moves as one.
+    /// Live movement bypasses undo; release commits one undoable move.
+    private func drag(for id: String) -> some Gesture {
+        DragGesture(minimumDistance: 2)
+            .onChanged { value in
+                let isSelected = state.engine.selection.contains(id)
+                if onlySelectedNodesCanMove && !isSelected {
+                    return
+                }
+                if dragStarts.isEmpty {
+                    var moving: Set<String> = [id]
+                    if allSelectedNodesMoveTogether && isSelected {
+                        moving.formUnion(state.engine.selection)
                     }
-                } label: {
-                    Label("Undo", systemImage: "arrow.uturn.backward")
+                    for movingID in moving {
+                        dragStarts[movingID] = state.engine.position(of: movingID)
+                    }
                 }
-                .disabled(!state.engine.canUndo)
-                .labelStyle(.iconOnly)
-
-                Button {
-                    state.save()
-                } label: {
-                    Label("Save", systemImage: state.hasUnsavedChanges ? "circle.fill" : "checkmark.circle")
-                }
-
-                Button {
-                    showingAgentPanel.toggle()
-                } label: {
-                    Label("Assistant", systemImage: "sparkles")
+                let delta = SIMD3(value.translation3D.x,
+                                  value.translation3D.y,
+                                  value.translation3D.z)
+                for (movingID, start) in dragStarts {
+                    state.drag(node: movingID, from: start, viewDelta: delta)
                 }
             }
-
-            Button {
-                showingImporter = true
-            } label: {
-                Label("Open…", systemImage: "folder")
+            .onEnded { _ in
+                state.endDrag(nodes: dragStarts)
+                dragStarts = [:]
             }
-        }
-        .padding(10)
-        .glassBackgroundEffect()
     }
+}
 
-    private var selectMenu: some View {
-        Menu {
-            Button("All") { state.run(.selectAll) }
-            Button("None") { state.run(.deselectAll) }
-            Divider()
-            ForEach(Self.commonTags, id: \.self) { tag in
-                Button(tag.capitalized) {
-                    state.run(.selectByCriteria(criteria: MapCriteria(tagIdentifiers: [tag]), extending: false))
-                }
-            }
-            Divider()
-            Button("Similar") { state.run(.selectSimilar) }
-            Button("Connected") { state.run(.selectConnected) }
-        } label: {
-            Label("Select", systemImage: "circle.dashed")
+// MARK: - Bangle
+
+/// A bangle: a small round control worn on the wrist.
+struct MapBangle: View {
+    let systemImage: String
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: systemImage)
+                .font(.system(size: 17))
+                .frame(width: 44, height: 44)
         }
+        .buttonStyle(.plain)
+        .glassBackgroundEffect(in: .circle)
+        .hoverEffect()
     }
-
-    private var showMenu: some View {
-        Menu {
-            Button("Concepts and Citations") { state.run(.setVisibilityMode(.showConceptsAndCitations)) }
-            Button("Only Concepts") { state.run(.setVisibilityMode(.showOnlyConcepts)) }
-            Button("Only Citations") { state.run(.setVisibilityMode(.showOnlyCitations)) }
-            Button("Only Notes") { state.run(.setVisibilityMode(.showOnlyNotes)) }
-            Button("Everything") { state.run(.setVisibilityMode(.showAll)) }
-            Divider()
-            Button("Hide Selected") {
-                state.run(.toggleHiddenForSelection)
-            }
-        } label: {
-            Label("Show", systemImage: "eye")
-        }
-    }
-
-    private var arrangeMenu: some View {
-        Menu {
-            Menu("Align") {
-                Button("Left Edges") { state.run(.align(axis: .x, alignment: .minEdge)) }
-                Button("Horizontal Centers") { state.run(.align(axis: .x, alignment: .center)) }
-                Button("Right Edges") { state.run(.align(axis: .x, alignment: .maxEdge)) }
-                Divider()
-                Button("Top Edges") { state.run(.align(axis: .y, alignment: .minEdge)) }
-                Button("Vertical Centers") { state.run(.align(axis: .y, alignment: .center)) }
-                Button("Bottom Edges") { state.run(.align(axis: .y, alignment: .maxEdge)) }
-                Divider()
-                Button("Same Depth") { state.run(.align(axis: .z, alignment: .center)) }
-            }
-            Menu("Distribute") {
-                Button("Horizontally") { state.run(.distribute(axis: .x, sort: .standard, style: .evenly)) }
-                Button("Vertically") { state.run(.distribute(axis: .y, sort: .standard, style: .evenly)) }
-                Button("In Depth") { state.run(.distribute(axis: .z, sort: .standard, style: .evenly)) }
-                Divider()
-                Button("Alphabetically") { state.run(.distribute(axis: .x, sort: .alphabetic, style: .spacing)) }
-                Button("By Time") { state.run(.distribute(axis: .x, sort: .time, style: .spacing)) }
-            }
-            Button("Flatten to Plane") {
-                let ids = state.engine.document.nodes.map { $0.identifier }
-                var positions: [FlowNodeIdentifier: NodePosition] = [:]
-                for id in ids {
-                    let p = state.engine.position(of: id)
-                    positions[id] = NodePosition(x: p.x, y: p.y, z: 0)
-                }
-                state.run(.move(positions: positions))
-            }
-        } label: {
-            Label("Arrange", systemImage: "square.grid.3x3")
-        }
-    }
-
-    static let commonTags = ["concept", "person", "location", "institution", "event", "issue", "done", "marked", "reference", "note", "section"]
 }
 
 // MARK: - Node card
@@ -294,6 +377,27 @@ struct AuthorMapNodeCard: View {
     let node: FlowNode
     let tag: String
     let isSelected: Bool
+    let isExpanded: Bool
+
+    // Appearance settings (the Settings window's Appearance tab).
+    @AppStorage("nodeBorderVisible") private var nodeBorderVisible = true
+    @AppStorage("nodeMaxCharsClosed") private var nodeMaxCharsClosed = 30
+    @AppStorage("nodeMaxCharsOpen") private var nodeMaxCharsOpen = 45
+    @AppStorage("nodeOpaqueWhenOpen") private var nodeOpaqueWhenOpen = true
+    @AppStorage("nodeOpaqueWhenSelected") private var nodeOpaqueWhenSelected = true
+
+    /// Solid ground when open or selected, as the settings allow.
+    private var isOpaque: Bool {
+        (isExpanded && nodeOpaqueWhenOpen) || (isSelected && nodeOpaqueWhenSelected)
+    }
+
+    /// The settings speak in characters; an average character of the
+    /// 15 pt serif title runs about half an em, so 7.5 points each.
+    private var maxCardWidth: CGFloat {
+        let chars = isExpanded && node.definition?.isEmpty == false
+            ? nodeMaxCharsOpen : nodeMaxCharsClosed
+        return CGFloat(max(chars, 8)) * 7.5
+    }
 
     var body: some View {
         VStack(spacing: 4) {
@@ -301,23 +405,46 @@ struct AuthorMapNodeCard: View {
                 .font(.system(size: 15, weight: node.type == .citation ? .regular : .semibold, design: .serif))
                 .strikethrough(node.isStruckthrough)
                 .lineLimit(3)
-            if tag != "concept" {
+            // The tag names the card's kind — except "concept" and
+            // "note", which the card's look already carries.
+            if tag != "concept" && tag != "note" {
                 Text(tag)
                     .font(.system(size: 10, weight: .medium))
                     .foregroundStyle(tagColor)
                     .textCase(.uppercase)
             }
+            // The definition unfolds on the original's double tap — the
+            // card is the knowledge, not just a label for it.
+            if isExpanded, let definition = node.definition, !definition.isEmpty {
+                Text(definition)
+                    .font(.system(size: 12, design: .serif))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(12)
+                    .multilineTextAlignment(.leading)
+                    .padding(.top, 4)
+            }
         }
         .multilineTextAlignment(.center)
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
-        .frame(minWidth: 90, maxWidth: 220)
-        .glassBackgroundEffect(in: RoundedRectangle(cornerRadius: 14))
+        .frame(minWidth: 90, maxWidth: maxCardWidth)
+        // A material clipped to the same shape as the border, so the
+        // background's corners curve with it (glass in the open space
+        // ignored the rounding). Open cards go opaque so the definition
+        // reads against solid ground; closed ones let the room through.
+        .background {
+            RoundedRectangle(cornerRadius: 14)
+                .fill(isOpaque ? AnyShapeStyle(Color(white: 0.16)) : AnyShapeStyle(.regularMaterial))
+        }
+        // The border can be switched off in Appearance settings; the
+        // selection stroke stays regardless, or selection would go mute.
         .overlay(
             RoundedRectangle(cornerRadius: 14)
-                .strokeBorder(isSelected ? Color.accentColor : tagColor.opacity(0.35),
+                .strokeBorder(isSelected ? Color.accentColor : tagColor.opacity(nodeBorderVisible ? 0.35 : 0),
                               lineWidth: isSelected ? 2.5 : 1)
         )
+        .contentShape(RoundedRectangle(cornerRadius: 14))
+        .contentShape(.hoverEffect, RoundedRectangle(cornerRadius: 14))
         .opacity(node.isHidden ? 0.4 : 1)
     }
 

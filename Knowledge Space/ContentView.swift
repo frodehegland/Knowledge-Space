@@ -206,10 +206,10 @@ struct ContentView: View {
     /// calendar's reveal triangle.
     @ViewBuilder private var contentHeader: some View {
         switch state.sidebarSelection {
-        case .library: timelineHeader
-        case .place: listHeader("Place")
-        case .toDo: listHeader("To Do")
-        case .drafts: listHeader("Drafts")
+        case .library: listHeader("Inbox")
+        case .timeline: timelineHeader
+        case .place: listHeader("Places")
+        case .people: listHeader("People")
         default: EmptyView()
         }
     }
@@ -225,12 +225,12 @@ struct ContentView: View {
         .padding(.vertical, 8)
     }
 
-    /// The heading over the notes column: Inbox as a plain header,
+    /// The heading over the notes column: Timeline as a plain header,
     /// with a separate reveal triangle that opens the calendar. The
     /// chosen span reads beside it while one is set.
     private var timelineHeader: some View {
         HStack(spacing: 6) {
-            Text("Inbox")
+            Text("Timeline")
                 .font(.headline)
             Button {
                 showingTimelineCalendar = true
@@ -370,7 +370,7 @@ struct ContentView: View {
     /// unfolding the contents column.
     private var peekPlacesList: some View {
         List {
-            ForEach(SidebarCatalog.sections(filedFolders: state.filedFoldersInUse),
+            ForEach(SidebarCatalog.sections(filedFolders: state.sidebarFiledFolders),
                     id: \.title) { section in
                 Section(section.title) {
                     ForEach(state.shownPlaces(of: section.places)) { place in
@@ -514,12 +514,13 @@ struct ContentView: View {
             module.makeContent()
         } else if case .filedFolder(let folder)? = state.sidebarSelection {
             DocumentListView(filedUnder: folder)
+        } else if state.sidebarSelection == .timeline {
+            // Every note, by time, the latest on top.
+            DocumentListView()
         } else if state.sidebarSelection == .place {
             DocumentListView(grouping: .place)
-        } else if state.sidebarSelection == .toDo {
-            DocumentListView(filedUnder: "To Do")
-        } else if state.sidebarSelection == .drafts {
-            DocumentListView(draftsOnly: true)
+        } else if state.sidebarSelection == .people {
+            PeopleListView()
         } else {
             // The Inbox: the reader's notes plus anything unread.
             DocumentListView(inboxOnly: true)
@@ -547,6 +548,12 @@ struct ContentView: View {
                 Divider()
                 NoteOptionsColumn(doc: doc)
             }
+        } else if state.sidebarSelection == .people,
+                  let listing = state.selectedPersonListing {
+            // A clicked person answers with the notes naming them; their
+            // contact details live in the People list's disclosure.
+            PersonMentionsView(listing: listing)
+                .id(listing.id)
         } else if state.index.folderURL == nil {
             ContentUnavailableView {
                 Label("No Library Folder", systemImage: "folder.badge.questionmark")

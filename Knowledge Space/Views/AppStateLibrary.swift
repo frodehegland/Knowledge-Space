@@ -103,6 +103,35 @@ extension AppState {
             .sorted { $0.author.localizedCaseInsensitiveCompare($1.author) == .orderedAscending }
     }
 
+    /// The People place's rows: every contact record in the directory
+    /// (People.json, shared with Digital Letters), then every identity
+    /// card the directory does not answer for — so a person is one row
+    /// however their record arrived. The row id matches the mention
+    /// map's key: the record's id, or the card document's.
+    var peopleListings: [PersonListing] {
+        var listings = people.people
+            .filter { !$0.displayName.isEmpty }
+            .map { PersonListing(id: $0.id, person: $0, cardDocID: nil) }
+        for cardDoc in cards where people.person(named: cardDoc.author) == nil {
+            let card = IdentityCard(doc: cardDoc)
+            var person = Person(displayName: cardDoc.author)
+            person.affiliation = card.affiliation
+            person.orcid = card.orcid
+            person.aliases = card.aliases.isEmpty ? nil : card.aliases
+            listings.append(PersonListing(id: cardDoc.id, person: person,
+                                          cardDocID: cardDoc.id))
+        }
+        return listings.sorted {
+            $0.person.displayName
+                .localizedCaseInsensitiveCompare($1.person.displayName) == .orderedAscending
+        }
+    }
+
+    var selectedPersonListing: PersonListing? {
+        guard let selectedPersonID else { return nil }
+        return peopleListings.first { $0.id == selectedPersonID }
+    }
+
     /// The user's own card in the folder, when one carries their name.
     var ownCard: LiquidDoc? {
         let name = authorName.trimmingCharacters(in: .whitespaces)

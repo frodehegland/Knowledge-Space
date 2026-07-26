@@ -24,8 +24,18 @@ nonisolated struct UnreadableFile: Identifiable, Hashable, Sendable {
 @MainActor @Observable
 final class LibraryIndex {
     private(set) var folderURL: URL?
+    /// The library as the lists and views see it — documents filed
+    /// under Archived are left out, the folder being a trash can.
     private(set) var byID: [String: IndexEntry] = [:]
+    /// Everything scanned, Archived included — the Archived list's way
+    /// in, and the reader's, so a note can be retrieved.
+    private(set) var allByID: [String: IndexEntry] = [:]
     private(set) var backlinks: [String: [BacklinkRef]] = [:]
+    /// Card id → the notes whose words name that card's person, newest
+    /// first — recomputed with every scan, so it is fresh at launch and
+    /// follows edits and arriving cards. Archived stays out of both
+    /// sides.
+    private(set) var mentions: [String: [String]] = [:]
     /// Keyed by the superseded (older) document; the value is the newer
     /// document whose `revises` link points at it.
     private(set) var revisionOf: [String: String] = [:]
@@ -36,12 +46,51 @@ final class LibraryIndex {
     private(set) var retractedIDs: Set<String> = []
     private(set) var isScanning = false
 
+    /// Documents filed under Archived, told to the index by AppState —
+    /// the filing lives in preferences, not in the files.
+    private var archivedIDs: Set<String> = []
+    private var fullBacklinks: [String: [BacklinkRef]] = [:]
+    private var fullTimeline: [IndexEntry] = []
+    private var fullMentions: [String: [String]] = [:]
+
     // FSEvents watching is macOS-only; visionOS rescans on demand and on
     // scene activation instead.
     #if os(macOS)
     private var watcher: FolderWatcher?
     #endif
     private var scanGeneration = 0
+
+    /// Archived is a trash can: its documents leave byID, backlinks,
+    /// and the timeline, so no list or view sees them until unfiled.
+    func setArchivedIDs(_ ids: Set<String>) {
+        guard ids != archivedIDs else { return }
+        archivedIDs = ids
+        applyArchiveFilter()
+    }
+
+    private func applyArchiveFilter() {
+        guard !archivedIDs.isEmpty else {
+            byID = allByID
+            backlinks = fullBacklinks
+            timeline = fullTimeline
+            mentions = fullMentions
+            return
+        }
+        byID = allByID.filter { !archivedIDs.contains($0.key) }
+        timeline = fullTimeline.filter { !archivedIDs.contains($0.id) }
+        var filtered: [String: [BacklinkRef]] = [:]
+        for (target, refs) in fullBacklinks where !archivedIDs.contains(target) {
+            let kept = refs.filter { !archivedIDs.contains($0.fromID) }
+            if !kept.isEmpty { filtered[target] = kept }
+        }
+        backlinks = filtered
+        var filteredMentions: [String: [String]] = [:]
+        for (cardID, noteIDs) in fullMentions where !archivedIDs.contains(cardID) {
+            let kept = noteIDs.filter { !archivedIDs.contains($0) }
+            if !kept.isEmpty { filteredMentions[cardID] = kept }
+        }
+        mentions = filteredMentions
+    }
 
     func setFolder(_ url: URL) {
         folderURL = url
@@ -64,13 +113,15 @@ final class LibraryIndex {
             let result = LibraryScanner.scan(folder: folderURL)
             await MainActor.run {
                 guard generation == self.scanGeneration else { return }
-                self.byID = result.byID
-                self.backlinks = result.backlinks
+                self.allByID = result.byID
+                self.fullBacklinks = result.backlinks
+                self.fullTimeline = result.timeline
+                self.fullMentions = result.mentions
                 self.revisionOf = result.revisionOf
-                self.timeline = result.timeline
                 self.unreadableFiles = result.unreadable
                 self.supersededIDs = Set(result.revisionOf.keys)
                 self.retractedIDs = result.retractedIDs
+                self.applyArchiveFilter()
                 self.isScanning = false
             }
         }
@@ -98,6 +149,10 @@ nonisolated enum LibraryScanner {
         var retractedIDs: Set<String> = []
         var timeline: [IndexEntry] = []
         var unreadable: [UnreadableFile] = []
+        /// Card id → the documents whose words name that card's person,
+        /// newest first. Matched against the card's display name, its
+        /// credited author, and every alias it carries.
+        var mentions: [String: [String]] = [:]
     }
 
     /// The folder often lives in iCloud Drive: a file another device
@@ -176,6 +231,70 @@ nonisolated enum LibraryScanner {
         }
 
         result.timeline = result.byID.values.sorted { $0.doc.listedDate < $1.doc.listedDate }
+        result.mentions = mentions(in: result.timeline, folder: folder)
         return result
+    }
+
+    /// Every person, found by name in the documents' words — contact
+    /// records from the folder's People.json (Digital Letters' directory)
+    /// keyed by record id, and identity cards keyed by their document id.
+    /// Each matches on the display name, credited author or credit name,
+    /// other names, and aliases, whole words only — "Ted" never matches
+    /// "quoted".
+    private static func mentions(in timeline: [IndexEntry],
+                                 folder: URL) -> [String: [String]] {
+        var nameSets: [(cardID: String, names: [String])] = []
+        func nameSet(id: String, names: [String]) {
+            var kept: [String] = []
+            for name in names {
+                let trimmed = name.trimmingCharacters(in: .whitespaces).lowercased()
+                if trimmed.count >= 2, !kept.contains(trimmed) {
+                    kept.append(trimmed)
+                }
+            }
+            if !kept.isEmpty { nameSets.append((id, kept)) }
+        }
+        if let data = try? Data(contentsOf: folder
+                .appendingPathComponent(PersonDirectory.communityFileName)),
+           let people = try? JSONDecoder().decode([Person].self, from: data) {
+            for person in people {
+                nameSet(id: person.id,
+                        names: [person.displayName, person.creditName]
+                            + person.otherNames + (person.aliases ?? []))
+            }
+        }
+        for entry in timeline where entry.doc.documentType == IdentityCard.documentType {
+            let card = IdentityCard(doc: entry.doc)
+            nameSet(id: entry.id,
+                    names: [card.displayName, entry.doc.author] + card.aliases)
+        }
+        guard !nameSets.isEmpty else { return [:] }
+
+        var mentions: [String: [String]] = [:]
+        for entry in timeline.reversed()
+        where entry.doc.documentType != IdentityCard.documentType {
+            let text = entry.doc.bodyEditingText.lowercased()
+            guard !text.isEmpty else { continue }
+            for set in nameSets
+            where set.names.contains(where: { containsWholeName($0, in: text) }) {
+                mentions[set.cardID, default: []].append(entry.id)
+            }
+        }
+        return mentions
+    }
+
+    /// True when the lowercased name appears in the lowercased text as
+    /// whole words — no letter running into it on either side.
+    private static func containsWholeName(_ name: String, in text: String) -> Bool {
+        var search = text.startIndex..<text.endIndex
+        while let range = text.range(of: name, range: search) {
+            let clearBefore = range.lowerBound == text.startIndex
+                || !text[text.index(before: range.lowerBound)].isLetter
+            let clearAfter = range.upperBound == text.endIndex
+                || !text[range.upperBound].isLetter
+            if clearBefore && clearAfter { return true }
+            search = range.upperBound..<text.endIndex
+        }
+        return false
     }
 }

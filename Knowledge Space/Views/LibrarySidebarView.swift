@@ -9,6 +9,10 @@ struct LibrarySidebarView: View {
     @Environment(\.openSettings) private var openSettings
     #endif
     @State private var editingViews = false
+    #if os(macOS)
+    /// The person form, opened from ctrl-click on People.
+    @State private var addingPerson = false
+    #endif
 
     var body: some View {
         @Bindable var state = state
@@ -17,14 +21,43 @@ struct LibrarySidebarView: View {
         // scrolling rows stop above the divider.
         VStack(spacing: 0) {
             List(selection: $state.sidebarSelection) {
-                ForEach(SidebarCatalog.sections(filedFolders: state.filedFoldersInUse),
+                ForEach(SidebarCatalog.sections(filedFolders: state.sidebarFiledFolders),
                         id: \.title) { section in
-                    Section(section.title) {
+                    // The head of the column — Inbox and New Note —
+                    // stands above the Library heading, unnamed.
+                    Section {
                         ForEach(state.shownPlaces(of: section.places)) { place in
                             Label(place.name, systemImage: place.systemImage)
                                 // Light grey icons, not the accent blue.
-                                .listItemTint(Color(white: 0.75))
+                                .listItemTint(SidebarCatalog.iconTint)
                                 .tag(place.item)
+                                #if os(macOS)
+                                // Ctrl-click on People adds someone to the
+                                // shared contact directory.
+                                .contextMenu {
+                                    if place.item == .people {
+                                        Button("New Person…") {
+                                            addingPerson = true
+                                        }
+                                    }
+                                }
+                                #endif
+                        }
+                        if section.title.isEmpty {
+                            Button {
+                                state.newNote()
+                            } label: {
+                                Label {
+                                    Text("New Note")
+                                        .foregroundStyle(.secondary)
+                                } icon: {
+                                    Image(systemName: "square.and.pencil")
+                                        .foregroundStyle(SidebarCatalog.iconTint)
+                                }
+                            }
+                            .buttonStyle(.plain)
+                            .disabled(state.index.folderURL == nil)
+                            .help("A new note, straight into writing (⌘N)")
                         }
                         if section.title == "Views" {
                             Button {
@@ -34,6 +67,10 @@ struct LibrarySidebarView: View {
                                     .foregroundStyle(.secondary)
                             }
                             .buttonStyle(.plain)
+                        }
+                    } header: {
+                        if !section.title.isEmpty {
+                            Text(section.title)
                         }
                     }
                 }
@@ -74,6 +111,15 @@ struct LibrarySidebarView: View {
         .sheet(isPresented: $editingViews) {
             EditViewsSheet()
         }
+        #if os(macOS)
+        .sheet(isPresented: $addingPerson) {
+            PersonFormView(person: Person(), heading: "New Person") { person in
+                state.people.upsert(person)
+                state.publishPortraits()
+                state.index.rescan()
+            }
+        }
+        #endif
         .navigationTitle("Knowledge Space")
         // The same column width as Liquid Information's sidebar.
         .navigationSplitViewColumnWidth(min: 215, ideal: 230)

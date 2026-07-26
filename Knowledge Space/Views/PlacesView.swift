@@ -179,7 +179,7 @@ struct PlacesView: View {
 extension PlacesView {
     @MainActor static let module = LibraryViewModule(
         id: "places",
-        name: "Places",
+        name: "Map",
         systemImage: "map",
         makeContent: { AnyView(DocumentListView()) },
         makeDetail: { _ in AnyView(PlacesView()) },
