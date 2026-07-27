@@ -10,8 +10,6 @@ struct LibrarySidebarView: View {
     #endif
     @State private var editingViews = false
     #if os(macOS)
-    /// The person form, revealed from the People row.
-    @State private var addingPerson = false
     /// The place the pointer is resting on — People answers with its
     /// reveal triangle.
     @State private var hoveredPlace: SidebarItem?
@@ -24,7 +22,8 @@ struct LibrarySidebarView: View {
         // scrolling rows stop above the divider.
         VStack(spacing: 0) {
             List(selection: $state.sidebarSelection) {
-                ForEach(SidebarCatalog.sections(filedFolders: state.sidebarFiledFolders),
+                ForEach(SidebarCatalog.sections(filedFolders: state.sidebarFiledFolders,
+                                                articlesLabel: state.articlesShelfLabel),
                         id: \.title) { section in
                     // The head of the column — Inbox and New Note —
                     // stands above the Library heading, unnamed.
@@ -40,7 +39,7 @@ struct LibrarySidebarView: View {
                                 if place.item == .people, hoveredPlace == .people {
                                     Menu {
                                         Button("New Person…") {
-                                            addingPerson = true
+                                            state.addingPerson = true
                                         }
                                     } label: {
                                         Image(systemName: "chevron.down")
@@ -91,20 +90,9 @@ struct LibrarySidebarView: View {
                             .buttonStyle(.plain)
                             .disabled(state.index.folderURL == nil)
                             .help("A new note, straight into writing (⌘N)")
-                            Button {
-                                state.newLetter()
-                            } label: {
-                                Label {
-                                    Text("New Letter")
-                                        .foregroundStyle(AppGreys.buttonText)
-                                } icon: {
-                                    Image(systemName: "envelope")
-                                        .foregroundStyle(SidebarCatalog.iconTint)
-                                }
-                            }
-                            .buttonStyle(.plain)
-                            .disabled(state.index.folderURL == nil)
-                            .help("A new letter — a note marked Letter, drafted under Draft Letters")
+                            // New Letter is resting for now; the act
+                            // returns when Digital Letters' sending
+                            // arrives. newLetter() stands ready.
                         }
                         if section.title == "Views" {
                             Button {
@@ -166,15 +154,6 @@ struct LibrarySidebarView: View {
         .sheet(isPresented: $editingViews) {
             EditViewsSheet()
         }
-        #if os(macOS)
-        .sheet(isPresented: $addingPerson) {
-            PersonFormView(person: Person(), heading: "New Person") { person in
-                state.people.upsert(person)
-                state.publishPortraits()
-                state.index.rescan()
-            }
-        }
-        #endif
         .navigationTitle("Knowledge Space")
         // A slim spine, but never so slim the app's own name truncates:
         // the minimum holds "Knowledge Space" whole at its headline size.

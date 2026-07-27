@@ -57,7 +57,10 @@ struct ContentView: View {
             } else if LibraryViewRegistry.module(for: state.sidebarSelection)?.hidesDocumentList == true {
                 // Whole-library views keep the sidebar — the way to every
                 // other place — and give the canvas the list column's room.
-                NavigationSplitView(columnVisibility: $columnVisibility) {
+                // Two-column split views declare .doubleColumn: told
+                // .all, macOS reserves a phantom middle column as a
+                // blank strip until the next click.
+                NavigationSplitView(columnVisibility: .constant(.doubleColumn)) {
                     LibrarySidebarView()
                         #if os(macOS)
                         .toolbar(removing: .sidebarToggle)
@@ -65,26 +68,39 @@ struct ContentView: View {
                 } detail: {
                     detailPane
                 }
-            } else if state.notesOpenInList {
-                // "In the list": two columns only — the sidebar and the
-                // list, which is the page. No third pane at all.
-                NavigationSplitView(columnVisibility: $columnVisibility) {
+                // Its own identity: switching between split-view
+                // shapes must rebuild, not leave a ghost column.
+                .id("split-module")
+            } else if showsSourceShelf || state.notesOpenInList {
+                // One two-column split view for the Library shelves and
+                // the "In the list" notes: only the detail's content
+                // swaps, so moving between them never rebuilds the
+                // columns. Visibility is pinned to .doubleColumn — the
+                // two-column truth; .all makes macOS reserve a phantom
+                // middle column as a blank strip.
+                NavigationSplitView(columnVisibility: .constant(.doubleColumn)) {
                     LibrarySidebarView()
                         #if os(macOS)
                         .toolbar(removing: .sidebarToggle)
                         #endif
                 } detail: {
-                    contentPane
-                        .scrollContentBackground(.hidden)
-                        .background(AppGreys.page)
-                        .environment(\.colorScheme, .light)
-                        #if os(macOS)
-                        .safeAreaInset(edge: .bottom, spacing: 0) { findBar }
-                        .safeAreaInset(edge: .top, spacing: 0) {
-                            contentHeader
-                        }
-                        #endif
+                    if case .sourceShelf(let shelf) = state.sidebarSelection {
+                        SourcesView(shelf: shelf)
+                            .environment(\.colorScheme, .light)
+                    } else {
+                        contentPane
+                            .scrollContentBackground(.hidden)
+                            .background(AppGreys.page)
+                            .environment(\.colorScheme, .light)
+                            #if os(macOS)
+                            .safeAreaInset(edge: .bottom, spacing: 0) { findBar }
+                            .safeAreaInset(edge: .top, spacing: 0) {
+                                contentHeader
+                            }
+                            #endif
+                    }
                 }
+                .id("split-two")
                 #if !os(macOS)
                 .searchable(text: $state.searchText, prompt: "Title, author, or text")
                 #endif
@@ -117,6 +133,7 @@ struct ContentView: View {
                 } detail: {
                     detailPane
                 }
+                .id("split-three")
                 #if !os(macOS)
                 .searchable(text: $state.searchText, prompt: "Title, author, or text")
                 #endif
@@ -144,9 +161,13 @@ struct ContentView: View {
             if phase == .active { state.index.rescan() }
         }
         // Once the library has been read, old folder-style actions
-        // migrate into the notes themselves.
+        // migrate into the notes themselves — and the Reader Library
+        // gets its one quiet scan for Visual-Meta PDFs.
         .onChange(of: state.index.isScanning) { _, scanning in
-            if !scanning { state.libraryUpkeep() }
+            if !scanning {
+                state.libraryUpkeep()
+                state.readerLibraryUpkeep()
+            }
         }
         .task { state.libraryUpkeep() }
         // A folder bookmarked while the app could only read needs one
@@ -158,6 +179,15 @@ struct ContentView: View {
             }
         }
         #if os(macOS)
+        // The New Person form, summoned from File ▸ New Person or the
+        // sidebar's People row — one sheet for both doors.
+        .sheet(isPresented: $state.addingPerson) {
+            PersonFormView(person: Person(), heading: "New Person") { person in
+                state.people.upsert(person)
+                state.publishPortraits()
+                state.index.rescan()
+            }
+        }
         // ESC brings the document into full screen, and takes it out.
         .background {
             Button("") { toggleFullScreen() }
@@ -235,6 +265,12 @@ struct ContentView: View {
             }
         }
         #endif
+    }
+
+    /// Whether the sidebar stands on a Library shelf.
+    private var showsSourceShelf: Bool {
+        if case .sourceShelf = state.sidebarSelection { return true }
+        return false
     }
 
     #if os(macOS)
@@ -341,6 +377,22 @@ struct ContentView: View {
         if let module = LibraryViewRegistry.module(for: state.sidebarSelection),
            let detail = module.makeDetail?(state) {
             detail
+        } else if state.notesOpenInList {
+            // "In the list", the list is the page — full screen shows
+            // the whole list, its open note in place, on the familiar
+            // centered measure. The right edge peeks the controls in,
+            // so the rows drop their own Show Column.
+            contentPane
+                .environment(\.inFullScreen, true)
+                .scrollContentBackground(.hidden)
+                #if os(macOS)
+                .safeAreaInset(edge: .bottom, spacing: 0) { findBar }
+                .safeAreaInset(edge: .top, spacing: 0) { contentHeader }
+                #endif
+                .frame(maxWidth: 800)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(AppGreys.page)
+                .environment(\.colorScheme, .light)
         } else if let doc = state.selectedDoc {
             if Self.isWritable(doc) {
                 NoteWritingView(doc: doc, measure: 800, centersContent: true)
@@ -365,6 +417,9 @@ struct ContentView: View {
     /// whole-library view counts as open.
     private var peekIsPinned: Bool {
         state.selectedDoc == nil
+            // "In the list", the full screen shows the whole list —
+            // closing a note is no dead end, so nothing pins the peek.
+            && !state.notesOpenInList
             && LibraryViewRegistry.module(for: state.sidebarSelection)?.hidesDocumentList != true
     }
 
@@ -378,9 +433,14 @@ struct ContentView: View {
                     peekPlacesList
                         .scrollContentBackground(.hidden)
                         .frame(width: 220)
-                    if (showsPeekList || peekIsPinned) && peekSelectionHasList {
+                    // "In the list", the main view is the list itself,
+                    // so the peek never unfolds a second one — the
+                    // places column alone is the whole panel.
+                    if (showsPeekList || peekIsPinned) && peekSelectionHasList,
+                       !state.notesOpenInList {
                         Divider()
                         contentPane
+                            .environment(\.inFullScreen, true)
                             .scrollContentBackground(.hidden)
                             .frame(width: 260)
                     }
@@ -415,13 +475,21 @@ struct ContentView: View {
     /// unfolding the contents column.
     private var peekPlacesList: some View {
         List {
-            ForEach(SidebarCatalog.sections(filedFolders: state.sidebarFiledFolders),
+            ForEach(SidebarCatalog.sections(filedFolders: state.sidebarFiledFolders,
+                                            articlesLabel: state.articlesShelfLabel),
                     id: \.title) { section in
                 Section(section.title) {
                     ForEach(state.shownPlaces(of: section.places)) { place in
                         Button {
                             state.sidebarSelection = place.item
-                            revealPeekListIfAvailable()
+                            // "In the list", the chosen place's list
+                            // answers in the main view — the peek's job
+                            // is done; elsewhere it unfolds its column.
+                            if state.notesOpenInList {
+                                dismissPeek()
+                            } else {
+                                revealPeekListIfAvailable()
+                            }
                         } label: {
                             Label(place.name, systemImage: place.systemImage)
                                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -577,11 +645,14 @@ struct ContentView: View {
     }
 
     /// Notes and letters write in place; every other kind reads.
-    /// The kinds that are their own writing page — notes and letters.
-    /// The document list asks too, for the in-list layout.
+    /// The kinds that are their own writing page — notes and letters,
+    /// and the notes in the reference shelf's clothing: quotes and
+    /// annotations. The document list asks too, for the in-list layout.
     static func isWritable(_ doc: LiquidDoc) -> Bool {
         doc.documentType == LiquidDoc.DocumentType.note.rawValue
             || doc.documentType == LiquidDoc.DocumentType.letter.rawValue
+            || doc.documentType == LiquidDoc.DocumentType.quote.rawValue
+            || doc.documentType == LiquidDoc.DocumentType.annotation.rawValue
     }
 
     /// A note — or a letter, a note in every way — is its own writing
@@ -769,7 +840,12 @@ private struct TimelineCalendarSheet: View {
 /// transparent pixels can fall out of hit-testing — and the edge strip
 /// must never miss. A real NSTrackingArea is geometric: it fires no
 /// matter what is drawn.
-private struct HoverSensor: NSViewRepresentable {
+/// A geometry-based hover sensor, placed as a background: unlike
+/// .onHover it is not confused by child controls' own tracking areas
+/// (buttons, .help tooltips), so panels that must stay while the
+/// pointer works their controls rely on it — the peeks, and the open
+/// note's controls panel.
+struct HoverSensor: NSViewRepresentable {
     let onChange: (Bool) -> Void
 
     func makeNSView(context: Context) -> TrackingView {
@@ -812,13 +888,44 @@ struct DocumentRow: View {
 
     private var isRetracted: Bool { state.index.retractedIDs.contains(entry.id) }
 
+    /// The row's words when the list is the page ("In the list"): the
+    /// body itself, its first twenty words — rules and the metadata
+    /// blocks skipped — with an ellipsis where more follows. An empty
+    /// note falls back to its title.
+    private var bodyOpening: String {
+        let hidden = entry.doc.visualMetaParagraphIDs
+            .union(entry.doc.analysisParagraphIDs)
+        let words = (entry.doc.body ?? [])
+            .filter { !hidden.contains($0.id) }
+            .map(\.displayText)
+            .filter { text in
+                !text.isEmpty && !text.allSatisfy { "-—– ".contains($0) }
+            }
+            .joined(separator: " ")
+            .split(whereSeparator: \.isWhitespace)
+        guard !words.isEmpty else { return entry.doc.title }
+        let opening = words.prefix(20).joined(separator: " ")
+        return words.count > 20 ? opening + "…" : opening
+    }
+
     var body: some View {
-        HStack(spacing: 6) {
-            Text(entry.doc.title)
-                .font(.headline)
-                // Bold until read; opening the note ends the bolding.
-                .fontWeight(state.isUnread(entry.doc) ? .bold : .regular)
-                .lineLimit(2)
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
+            // With the list as the page, a row is the note's own first
+            // words — no separate title line — in the body's type (New
+            // York, the system serif), the window's black.
+            if state.notesOpenInList {
+                Text(bodyOpening)
+                    // Bold until read; opening the note ends the bolding.
+                    .fontWeight(state.isUnread(entry.doc) ? .bold : .regular)
+                    .font(.system(size: state.listTextSize, design: .serif))
+                    .lineLimit(3)
+            } else {
+                Text(entry.doc.title)
+                    .font(.headline)
+                    // Bold until read; opening the note ends the bolding.
+                    .fontWeight(state.isUnread(entry.doc) ? .bold : .regular)
+                    .lineLimit(2)
+            }
             if entry.doc.isSidecar {
                 Image(systemName: "paperclip")
                     .foregroundStyle(.secondary)
@@ -843,6 +950,12 @@ struct DocumentRow: View {
         .opacity(isRetracted ? 0.5 : 1)
         .padding(.vertical, 2)
     }
+}
+
+extension EnvironmentValues {
+    /// True inside the full-screen presentation, where the edge peeks
+    /// replace in-row chrome like the open note's Show Column button.
+    @Entry var inFullScreen = false
 }
 
 #Preview {

@@ -390,6 +390,9 @@ struct VoiceCaptureView: View {
     @State private var isSaving = false
     @State private var errorMessage: String?
     @AppStorage("voiceNoteToCalendar") private var addToCalendar = true
+    /// Checked, the spoken note is born a To Do — the standing travels
+    /// in the file, so it lists under To Do on every device.
+    @State private var isToDo = false
 
     private var isRecording: Bool { recorder.state == .recording }
 
@@ -421,6 +424,9 @@ struct VoiceCaptureView: View {
                 }
 
                 Toggle("Add to Calendar", isOn: $addToCalendar)
+                    .padding(.horizontal)
+
+                Toggle("To Do", isOn: $isToDo)
                     .padding(.horizontal)
 
                 recordButton
@@ -516,7 +522,8 @@ struct VoiceCaptureView: View {
         let parsed = TranscriptParser.note(from: recorder.transcript)
         guard let doc = model.createNote(title: parsed.title,
                                          bodyText: parsed.bodyText,
-                                         created: captureDate ?? .now) else {
+                                         created: captureDate ?? .now,
+                                         asToDo: isToDo) else {
             // The reason is in model.lastError, shown by the home view.
             dismiss()
             return

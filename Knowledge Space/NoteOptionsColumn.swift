@@ -327,18 +327,8 @@ struct NoteOptionsColumn: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
             .buttonStyle(GreyColumnButtonStyle())
-            .disabled(hiddenMetadataParagraphs.isEmpty)
-            .help(hiddenMetadataParagraphs.isEmpty
-                  ? "This note carries no Visual-Meta appendix or analyses yet"
-                  : "Show the metadata riding with the note — its Visual-Meta appendix and analyses — under the words. The blocks travel with the file either way.")
+            .help("The note's Visual-Meta under its words — the appendix the file carries, or the block its own fields derive.")
         }
-    }
-
-    /// The metadata paragraphs the note editor keeps out of the writing:
-    /// the Visual-Meta appendix and the written analyses.
-    private var hiddenMetadataParagraphs: [LiquidDoc.Paragraph] {
-        let hidden = doc.visualMetaParagraphIDs.union(doc.analysisParagraphIDs)
-        return (doc.body ?? []).filter { hidden.contains($0.id) }
     }
 
     /// Quiet text, the location row's style — clicking runs the

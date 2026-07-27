@@ -154,6 +154,12 @@ final class AuthorMapState {
     /// space view so window scenes don't try to open it twice.
     var isMapSpaceOpen = false
 
+    /// The Sphere Weave's centered element, shared between its
+    /// immersive space and its control bar; and whether the weave
+    /// space is open — only one immersive space can be.
+    var weaveCenter: WeaveCenter = .keyword("hypertext")
+    var isWeaveSpaceOpen = false
+
     /// The toolbar and settings windows report themselves open here, so
     /// the wrist bangles can toggle them from inside the space.
     var isControlsWindowOpen = false
@@ -182,6 +188,21 @@ final class AuthorMapState {
     /// The folder's decoded documents from the last scan, kept so the
     /// folder map can rebuild without re-reading every file.
     private var scannedDocs: [LiquidDoc] = []
+
+    /// The same scan, readable by the other visionOS scenes — the
+    /// Sphere Weave builds its shells from these documents.
+    var weaveDocuments: [LiquidDoc] { scannedDocs }
+
+    /// Documents that exist in the folder only as iCloud placeholders,
+    /// counted at the last scan. On a headset that has never held the
+    /// community folder, the first scan finds nothing *but* these.
+    private(set) var pendingDownloadCount = 0
+
+    /// The scan re-running itself while placeholders remain: there is
+    /// no folder watcher here (the Mac's lives in AppState), so iCloud
+    /// arrivals would otherwise sit unseen until a manual Check Again.
+    private var downloadRescanTask: Task<Void, Never>?
+    private var downloadRescanAttempts = 0
 
     /// The folder holding a live security scope. The scope stays open for
     /// the whole session so the documents inside remain readable and
@@ -216,22 +237,49 @@ final class AuthorMapState {
         }
         folderURL = url
         lastError = nil
+        downloadRescanAttempts = 0
         if let bookmark = try? url.bookmarkData() {
             UserDefaults.standard.set(bookmark, forKey: Self.folderBookmarkKey)
         }
         rescanFolder()
     }
 
+    /// Whether a folder scan is in flight; the Library window shows a
+    /// progress note instead of "no documents" while one is.
+    private(set) var folderScanRunning = false
+
     /// Lists the folder's documents the way the library scan does:
     /// recursively, skipping hidden files, asking iCloud to download
-    /// placeholders it finds along the way. When no single document is
-    /// open, the folder itself becomes the map.
+    /// placeholders it finds along the way. All the file work — the
+    /// iCloud enumeration, the download requests, every read — runs
+    /// off the main actor: over iCloud it can stall for seconds, and
+    /// it must never freeze the window at the moment the folder is
+    /// picked. When no single document is open, the folder itself
+    /// becomes the map.
     func rescanFolder() {
-        guard let folder = folderURL else { return }
-        LibraryScanner.requestICloudDownloads(in: folder)
+        guard let folder = folderURL, !folderScanRunning else { return }
+        folderScanRunning = true
+        Task {
+            let found = await Task.detached(priority: .userInitiated) {
+                Self.readFolder(folder)
+            }.value
+            folderScanRunning = false
+            // A folder picked mid-scan supersedes these results.
+            guard folder == folderURL else { return }
+            apply(found)
+        }
+    }
 
+    /// One scan's findings, carried back to the main actor whole.
+    private struct FolderScan {
         var docs: [LiquidDoc] = []
         var documents: [FolderDocument] = []
+        var pendingDownloads = 0
+    }
+
+    nonisolated private static func readFolder(_ folder: URL) -> FolderScan {
+        LibraryScanner.requestICloudDownloads(in: folder)
+        var found = FolderScan()
         if let enumerator = FileManager.default.enumerator(
             at: folder,
             includingPropertiesForKeys: [.isRegularFileKey],
@@ -240,21 +288,80 @@ final class AuthorMapState {
             for case let url as URL in enumerator where LiquidDoc.isDocumentFile(url) {
                 guard let data = try? Data(contentsOf: url),
                       let doc = try? LiquidDoc.decode(data: data, fileURL: url) else {
-                    documents.append(FolderDocument(url: url, title: url.lastPathComponent))
+                    found.documents.append(FolderDocument(url: url, title: url.lastPathComponent))
                     continue
                 }
-                docs.append(doc)
-                documents.append(FolderDocument(url: url, title: doc.title))
+                found.docs.append(doc)
+                found.documents.append(FolderDocument(url: url, title: doc.title))
             }
         }
-        scannedDocs = docs
-        folderDocuments = documents.sorted {
+        found.pendingDownloads = LibraryScanner.pendingDocumentDownloads(in: folder)
+        return found
+    }
+
+    private func apply(_ found: FolderScan) {
+        scannedDocs = found.docs
+        folderDocuments = found.documents.sorted {
             $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending
         }
 
-        if documentURL == nil || showingFolderMap {
-            showFolderMap()
+        // Files still on their way from iCloud: keep looking until they
+        // land, so the map opens by itself instead of asking the reader
+        // to guess when to Check Again.
+        pendingDownloadCount = found.pendingDownloads
+        if pendingDownloadCount > 0 {
+            scheduleDownloadRescan()
+        } else {
+            downloadRescanTask?.cancel()
+            downloadRescanTask = nil
+            downloadRescanAttempts = 0
         }
+
+        // Show (or refresh) the folder map — but during the download
+        // rescans, only when new documents actually arrived, so the
+        // map is not reloaded and recentered every tick.
+        if documentURL == nil || showingFolderMap {
+            if !showingFolderMap || scannedDocs.count != shownFolderDocCount {
+                showFolderMap()
+            }
+        }
+    }
+
+    /// The document count the folder map last loaded with; a download
+    /// rescan that found nothing new skips the reload.
+    private var shownFolderDocCount = 0
+
+    /// Re-runs the scan in a moment, while iCloud placeholders remain.
+    /// Capped so a stalled download cannot tick forever — five minutes
+    /// of trying; Check Again (or re-picking the folder) starts over.
+    private func scheduleDownloadRescan() {
+        guard downloadRescanTask == nil, downloadRescanAttempts < 150 else { return }
+        downloadRescanAttempts += 1
+        downloadRescanTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(2))
+            guard let self, !Task.isCancelled else { return }
+            self.downloadRescanTask = nil
+            self.rescanFolder()
+        }
+    }
+
+    /// How many documents the folder map will carry. Every card in the
+    /// immersive space is two live SwiftUI surfaces in the compositor
+    /// (backboardd); an uncapped folder of many hundreds inflated it
+    /// until the system killed it and the whole interface restarted.
+    private static let mapDocumentCap = 150
+
+    /// What the folder map is made of: the writing — notes, letters,
+    /// documents — not the library shelves (sources, quotes,
+    /// annotations the Reader import mints by the hundred), newest
+    /// first when the folder holds more than the map can carry.
+    private var mapDocuments: [LiquidDoc] {
+        var writing = scannedDocs.filter { !$0.isLibraryKind }
+        // A folder of nothing but shelves still deserves a map.
+        if writing.isEmpty { writing = scannedDocs }
+        guard writing.count > Self.mapDocumentCap else { return writing }
+        return Array(writing.sorted { $0.listedDate > $1.listedDate }
+            .prefix(Self.mapDocumentCap))
     }
 
     /// Loads the folder map into the engine: documents as nodes, links as
@@ -265,9 +372,10 @@ final class AuthorMapState {
             save()
         }
 
-        let contents = KnowledgeMapDocument.folderContents(documents: scannedDocs)
+        let contents = KnowledgeMapDocument.folderContents(documents: mapDocuments)
         applySavedFolderLayout(to: contents.flowDocument, folder: folder)
         engine.load(document: contents.flowDocument, glossary: contents.glossary)
+        shownFolderDocCount = scannedDocs.count
         documentURL = nil
         documentFormat = nil
         documentTitle = folder.lastPathComponent

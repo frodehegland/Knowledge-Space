@@ -2,6 +2,11 @@ import SwiftUI
 
 /// One place in the sidebar: the document library, or an installed view
 /// module by id. Views appear as `.view(id)`.
+/// The Library section's shelves — the reference manager's doors.
+enum SourceShelf: String, Hashable {
+    case all, books, articles, authors, quotes
+}
+
 enum SidebarItem: Hashable {
     case library      // the Inbox: what is new and unread
     case timeline     // every note, by time, latest on top
@@ -9,6 +14,7 @@ enum SidebarItem: Hashable {
     case people       // the same notes, grouped by author
     case draftLetters // letters still being written
     case action(LiquidDoc.Action)  // notes by standing: To Do, Done…
+    case sourceShelf(SourceShelf)  // the Library: sources, authors, quotes
     case filedFolder(String)  // one filing folder, straight from the sidebar
     case view(String)
 
@@ -30,21 +36,32 @@ enum SidebarCatalog {
     /// alike, so the column reads as one set.
     static var iconTint: Color { AppGreys.buttonText }
 
-    /// The head of the column: the Inbox stands alone above the Library
-    /// heading, with New Note (added by the sidebar view) under it.
+    /// The head of the column, unnamed: the Inbox and every way of
+    /// seeing the correspondence, with New Note (added by the sidebar
+    /// view) closing the list.
     static let top: [SidebarPlace] = [
         SidebarPlace(name: "Inbox", systemImage: "tray", item: .library),
-    ]
-
-    static let library: [SidebarPlace] = [
         SidebarPlace(name: "Timeline", systemImage: "clock", item: .timeline),
         SidebarPlace(name: "Places", systemImage: "mappin.and.ellipse", item: .place),
-        // The Map view module, seated in the Library under Places
-        // rather than with the other views.
+        // The Map view module, seated here under Places rather than
+        // with the other views.
         SidebarPlace(name: "Map", systemImage: "map", item: .view("places")),
         SidebarPlace(name: "People", systemImage: "person.2", item: .people),
         SidebarPlace(name: "Draft Letters", systemImage: "envelope.open", item: .draftLetters),
     ]
+
+    /// The Library: the reference shelf — sources whole and by kind,
+    /// the cited authors, and the quotes standing on the works. The
+    /// articles row wears the reader's own word for it.
+    static func shelves(articlesLabel: String) -> [SidebarPlace] {
+        [
+            SidebarPlace(name: "Sources", systemImage: "books.vertical", item: .sourceShelf(.all)),
+            SidebarPlace(name: "Books", systemImage: "book.closed", item: .sourceShelf(.books)),
+            SidebarPlace(name: articlesLabel, systemImage: "doc.plaintext", item: .sourceShelf(.articles)),
+            SidebarPlace(name: "Authors", systemImage: "person.text.rectangle", item: .sourceShelf(.authors)),
+            SidebarPlace(name: "Quotes", systemImage: "quote.opening", item: .sourceShelf(.quotes)),
+        ]
+    }
 
     /// The note column's standard files, each button's word beside the
     /// folder it files under. The sidebar's Filed section mirrors this.
@@ -67,10 +84,10 @@ enum SidebarCatalog {
         }
     }
 
-    /// The installed views — minus any module the Library section
+    /// The installed views — minus any module the head of the column
     /// already seats (the Map lives under Places).
     static var views: [SidebarPlace] {
-        let seated = Set(library.map(\.item))
+        let seated = Set(top.map(\.item))
         return LibraryViewRegistry.modules
             .filter { !seated.contains(.view($0.id)) }
             .map { SidebarPlace(name: $0.name, systemImage: $0.systemImage, item: .view($0.id)) }
@@ -97,8 +114,10 @@ enum SidebarCatalog {
         }
     }
 
-    static func sections(filedFolders: [String]) -> [(title: String, places: [SidebarPlace])] {
-        [("", top), ("Library", library), ("Action", actions),
+    static func sections(filedFolders: [String],
+                         articlesLabel: String = "Articles") -> [(title: String, places: [SidebarPlace])] {
+        [("", top), ("Actions", actions),
+         ("Library", shelves(articlesLabel: articlesLabel)),
          ("Filed", filed(filedFolders)), ("Views", views)]
     }
 }
@@ -165,12 +184,21 @@ struct LibraryViewModule: Identifiable {
     /// this so the document list column steps aside while they are active:
     /// the view already speaks for every document.
     var hidesDocumentList = false
+    /// What "Show in <View>" hands this view: `.text` for views about
+    /// text snippets (the selected words travel), `.note` for views
+    /// about notes as nodes (the whole note travels). The view picks
+    /// the payload up with `model.takeShowInPayload(for:)`.
+    var showInAppetite: ShowInAppetite = .note
+
+    enum ShowInAppetite { case text, note }
 }
 
 /// The installed views, in sidebar order.
 @MainActor
 enum LibraryViewRegistry {
     static let modules: [LibraryViewModule] = [
+        AskLibraryView.module,
+        SphereWeaveView.module,
         DocumentWebView.module,
         WeaveView.module,
         AuthorsCircleView.module,
@@ -225,8 +253,14 @@ struct DocumentListView: View {
     var action: LiquidDoc.Action? = nil
 
     /// Whether the inline note's controls are unfolded — each newly
-    /// opened note starts with them tucked behind the reveal triangle.
+    /// opened note starts with them tucked away.
     @State private var controlsRevealed = false
+    /// The grace period between the pointer leaving the Show Column
+    /// icon (or the column) and the column folding away.
+    @State private var controlsHideTask: Task<Void, Never>?
+    /// Full screen peeks the controls in from the right edge, so the
+    /// open row keeps its Show Column button out of the way there.
+    @Environment(\.inFullScreen) private var inFullScreen
 
     enum Grouping {
         case time, place
@@ -259,6 +293,11 @@ struct DocumentListView: View {
         // Draft Letters, and the old standing To Do and Done notes keep
         // out of the way.
         return state.filteredEntries.filter { entry in
+            // The open note keeps its seat: setting an Action or filing
+            // it would move it out of the Inbox, but not from under the
+            // reader — it leaves when they click away.
+            if entry.id == state.selectedDocID { return true }
+            guard !entry.doc.isLibraryKind else { return false }
             let type = entry.doc.documentType
             let isLetter = type == LiquidDoc.DocumentType.letter.rawValue
             return (type == LiquidDoc.DocumentType.note.rawValue || isLetter
@@ -296,7 +335,7 @@ struct DocumentListView: View {
                     }
                 }
                 ForEach(groups, id: \.label) { group in
-                    Section(group.label) {
+                    Section {
                         ForEach(group.entries) { entry in
                             Group {
                                 // "In the list" (Settings ▸ Appearance):
@@ -309,32 +348,43 @@ struct DocumentListView: View {
                                     // where the open document begins
                                     // and the list resumes.
                                     VStack(spacing: 0) {
-                                        Divider()
-                                        if ContentView.isWritable(entry.doc) {
-                                            NoteWritingView(doc: entry.doc, inline: true)
-                                                .id(entry.doc.id)
-                                                .padding(.vertical, 6)
-                                            // The note's commands wait
-                                            // under the words, behind a
-                                            // reveal triangle — the same
-                                            // bar the "controls under"
-                                            // layout uses; the reversed
-                                            // triangle folds it away.
-                                            if controlsRevealed {
-                                                Divider()
-                                                NoteOptionsColumn(doc: entry.doc,
-                                                                  underNote: true)
+                                        openNoteRule
+                                        // An open-state triangle stands
+                                        // left of the first line — only
+                                        // open documents wear one; the
+                                        // click folds the note away. At
+                                        // the top right, Show Column
+                                        // brings the note's controls in
+                                        // as a column beside the words.
+                                        HStack(alignment: .top, spacing: 4) {
+                                            closeToggle
+                                            if ContentView.isWritable(entry.doc) {
+                                                NoteWritingView(doc: entry.doc, inline: true)
+                                                    .id(entry.doc.id)
+                                                    .padding(.vertical, 6)
+                                                if !inFullScreen {
+                                                    columnToggle
+                                                }
+                                            } else {
+                                                DocumentReaderView(doc: entry.doc, inline: true)
+                                                    .id(entry.doc.id)
+                                                    .padding(.vertical, 6)
                                             }
-                                            controlsToggle
-                                        } else {
-                                            DocumentReaderView(doc: entry.doc, inline: true)
-                                                .id(entry.doc.id)
-                                                .padding(.vertical, 6)
                                         }
-                                        Divider()
+                                        openNoteRule
                                     }
                                 } else {
                                     DocumentRow(entry: entry, detail: detail(for: entry.doc))
+                                        // While a note's words are being
+                                        // typed, the rest of the list
+                                        // recedes.
+                                        .opacity(state.editingInList ? 0.3 : 1)
+                                        // Closed rows share the open
+                                        // note's left margin, so the
+                                        // reveal triangle sits in the
+                                        // list's own indent instead of
+                                        // pushing the open note aside.
+                                        .padding(.leading, state.notesOpenInList ? 18 : 0)
                                 }
                             }
                             .tag(entry.id)
@@ -357,6 +407,13 @@ struct DocumentListView: View {
                                 #endif
                             }
                         }
+                    } header: {
+                        // The day and place headings sit a shade
+                        // lighter than the notes' own words — and
+                        // recede with the rows while one is written in.
+                        Text(group.label)
+                            .foregroundStyle(.tertiary)
+                            .opacity(state.editingInList ? 0.3 : 1)
                     }
                 }
                 if state.index.isScanning {
@@ -412,6 +469,36 @@ struct DocumentListView: View {
         }
         // A different note opens with its controls tucked away again.
         .onChange(of: state.selectedDocID) { controlsRevealed = false }
+        // The fade around the written-in note comes and goes gently.
+        .animation(.easeOut(duration: 0.25), value: state.editingInList)
+        // The open note's controls, summoned by its Show Column icon:
+        // a full-height panel floating over the list's right edge, so
+        // every control has its room and the note keeps its shape.
+        .overlay(alignment: .topTrailing) {
+            if controlsRevealed, !inFullScreen,
+               let doc = state.selectedDoc, ContentView.isWritable(doc) {
+                NoteOptionsColumn(doc: doc)
+                    .frame(maxHeight: .infinity)
+                    .clipShape(UnevenRoundedRectangle(
+                        topLeadingRadius: 10, bottomLeadingRadius: 10,
+                        bottomTrailingRadius: 0, topTrailingRadius: 0))
+                    .shadow(radius: 6, x: -2, y: 0)
+                    // The pointer inside the panel keeps it; leaving
+                    // lets it go. A geometry sensor, not .onHover: the
+                    // controls' own tracking (buttons, tooltips) must
+                    // not read as leaving.
+                    #if os(macOS)
+                    .background(HoverSensor { inside in
+                        if inside {
+                            cancelControlsHide()
+                        } else {
+                            scheduleControlsHide()
+                        }
+                    })
+                    #endif
+                    .transition(.move(edge: .trailing).combined(with: .opacity))
+            }
+        }
     }
 
     /// Whether this entry is the document open in the list itself.
@@ -419,21 +506,75 @@ struct DocumentListView: View {
         state.notesOpenInList && entry.id == state.selectedDocID
     }
 
-    /// The reveal triangle under an inline note: click for the note's
-    /// controls; reversed, click to fold them away again.
-    private var controlsToggle: some View {
+    /// The rules above and below an open document: finer and lighter
+    /// than the window's standard divider, framing without weight.
+    private var openNoteRule: some View {
+        Rectangle()
+            .fill(Color.black.opacity(0.08))
+            .frame(height: 0.5)
+    }
+
+    /// The open document's disclosure, left of its first line: the
+    /// down-pointing triangle says "open"; clicking folds the document
+    /// back into its row. Closed rows wear no triangle — clicking the
+    /// row is the way in.
+    private var closeToggle: some View {
         Button {
-            withAnimation(.snappy) { controlsRevealed.toggle() }
+            withAnimation(.snappy) { state.selectedDocID = nil }
         } label: {
-            Image(systemName: controlsRevealed ? "chevron.up" : "chevron.down")
+            Image(systemName: "chevron.down")
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(.secondary)
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 3)
+                .padding(.vertical, 10)
+                .padding(.horizontal, 2)
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .help(controlsRevealed ? "Hide the note's controls" : "Show the note's controls")
+        .help("Close — the note folds back into the list")
+    }
+
+    /// Show Column, at the open note's top right: resting the pointer
+    /// on it brings the note's controls in as a column beside the
+    /// words; the column stays while the pointer is with it and folds
+    /// away once it leaves. A click answers the same way.
+    private var columnToggle: some View {
+        Button {
+            controlsHideTask?.cancel()
+            withAnimation(.snappy) { controlsRevealed.toggle() }
+        } label: {
+            Image(systemName: "sidebar.right")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(controlsRevealed ? .primary : .secondary)
+                .padding(.vertical, 10)
+                .padding(.horizontal, 4)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { inside in
+            if inside {
+                cancelControlsHide()
+                withAnimation(.snappy) { controlsRevealed = true }
+            } else {
+                scheduleControlsHide()
+            }
+        }
+        .help("The note's controls column — it comes to the pointer and leaves with it")
+    }
+
+    /// An unhurried grace: the pointer can travel from the icon across
+    /// the note into the panel — or drift out and think better of it —
+    /// without the panel vanishing under it.
+    private func scheduleControlsHide() {
+        controlsHideTask?.cancel()
+        controlsHideTask = Task {
+            try? await Task.sleep(for: .milliseconds(1500))
+            guard !Task.isCancelled else { return }
+            withAnimation(.snappy) { controlsRevealed = false }
+        }
+    }
+
+    private func cancelControlsHide() {
+        controlsHideTask?.cancel()
     }
 
     private func placeVerificationRow(_ record: PlaceDirectory.Record) -> some View {

@@ -23,6 +23,7 @@ struct MapLibraryView: View {
     @Environment(\.openWindow) private var openWindow
     @Environment(\.dismissWindow) private var dismissWindow
     @Environment(\.openImmersiveSpace) private var openImmersiveSpace
+    @Environment(\.dismissImmersiveSpace) private var dismissImmersiveSpace
 
     @State private var showingImporter = false
 
@@ -41,6 +42,17 @@ struct MapLibraryView: View {
                     }
                 } actions: {
                     Button("Open Folder or Document…") { showingImporter = true }
+                    #if targetEnvironment(simulator)
+                    // The demo weave, reachable without a folder.
+                    Button("Sphere Weave (Demo)") {
+                        Task { @MainActor in
+                            if !state.isWeaveSpaceOpen {
+                                _ = await openImmersiveSpace(id: "SphereWeaveSpace")
+                            }
+                            openWindow(id: "SphereWeaveControls")
+                        }
+                    }
+                    #endif
                 }
             }
         }
@@ -48,12 +60,28 @@ struct MapLibraryView: View {
         .fileImporter(isPresented: $showingImporter,
                       allowedContentTypes: openableTypes,
                       allowsMultipleSelection: false) { result in
-            if case .success(let urls) = result, let url = urls.first {
-                state.open(url: url)
+            switch result {
+            case .success(let urls):
+                if let url = urls.first { state.open(url: url) }
+            case .failure(let error):
+                // Never fail into silence: the picker's reason lands
+                // where the window already shows errors.
+                state.lastError = "Could not open the selection: \(error.localizedDescription)"
             }
         }
         .onAppear {
             state.reopenLastDocument()
+            #if targetEnvironment(simulator)
+            // Walk straight into the demo weave: the simulator has no
+            // community folder, and this is where the weave is tuned.
+            if state.folderURL == nil {
+                Task { @MainActor in
+                    if !state.isWeaveSpaceOpen {
+                        _ = await openImmersiveSpace(id: "SphereWeaveSpace")
+                    }
+                }
+            }
+            #endif
         }
         .onChange(of: state.loadCount) {
             enterMap()
@@ -86,14 +114,56 @@ struct MapLibraryView: View {
             }
 
             if state.folderDocuments.isEmpty {
-                Text("No documents (.liquid.json) here yet. If the folder is in iCloud, its contents may still be downloading.")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                    .multilineTextAlignment(.center)
+                if state.folderScanRunning {
+                    ProgressView()
+                    Text("Reading the folder…")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                } else if state.pendingDownloadCount > 0 {
+                    // First visit on this device: the folder is all
+                    // iCloud placeholders. The scan keeps itself going
+                    // and the map opens when the documents land.
+                    ProgressView()
+                    Text("Downloading \(state.pendingDownloadCount) document\(state.pendingDownloadCount == 1 ? "" : "s") from iCloud — the map opens when they arrive.")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                } else {
+                    Text("No documents (.liquid.json) here yet. If the folder is in iCloud, its contents may still be downloading.")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                }
                 Button("Check Again") { state.rescanFolder() }
             } else {
                 Button("Show Folder Map") { state.showFolderMap() }
                     .buttonStyle(.borderedProminent)
+
+                if state.pendingDownloadCount > 0 {
+                    Text("\(state.pendingDownloadCount) more still downloading from iCloud…")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                // The library in the round, filling the room. The
+                // folder map steps aside (saved first) — one immersive
+                // space at a time — and the browser steps aside too,
+                // the way it does for the map.
+                Button {
+                    Task { @MainActor in
+                        if state.isMapSpaceOpen {
+                            if state.hasUnsavedChanges { state.save() }
+                            await dismissImmersiveSpace()
+                        }
+                        if !state.isWeaveSpaceOpen {
+                            _ = await openImmersiveSpace(id: "SphereWeaveSpace")
+                        }
+                        openWindow(id: "SphereWeaveControls")
+                        dismissWindow(id: "Library")
+                    }
+                } label: {
+                    Label("Sphere Weave", systemImage: "globe")
+                }
 
                 ScrollView {
                     VStack(spacing: 6) {
@@ -137,6 +207,8 @@ struct MapLibraryView: View {
 struct MapControlsView: View {
     @Environment(AuthorMapState.self) private var state
     @Environment(\.openWindow) private var openWindow
+    @Environment(\.dismissWindow) private var dismissWindow
+    @Environment(\.openImmersiveSpace) private var openImmersiveSpace
     @Environment(\.dismissImmersiveSpace) private var dismissImmersiveSpace
 
     @State private var showingAgentPanel = false
@@ -243,6 +315,22 @@ struct MapControlsView: View {
             if !state.folderDocuments.isEmpty {
                 documentsMenu
             }
+
+            Button {
+                Task { @MainActor in
+                    if state.isMapSpaceOpen {
+                        if state.hasUnsavedChanges { state.save() }
+                        await dismissImmersiveSpace()
+                    }
+                    if !state.isWeaveSpaceOpen {
+                        _ = await openImmersiveSpace(id: "SphereWeaveSpace")
+                    }
+                    openWindow(id: "SphereWeaveControls")
+                }
+            } label: {
+                Label("Sphere Weave", systemImage: "globe")
+            }
+            .labelStyle(.iconOnly)
 
             Button {
                 Task { @MainActor in

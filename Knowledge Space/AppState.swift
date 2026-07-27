@@ -59,10 +59,10 @@ final class AppState {
             }
         }
     }
-    /// Whether the note page shows the metadata riding with the note —
-    /// the Visual-Meta appendix and the written analyses — rendered
-    /// under the words. Display only: the blocks travel with the file
-    /// whether or not they are shown. Resets when the reading moves on.
+    /// Whether the note page shows its Visual-Meta under the words —
+    /// the appendix the file carries, or the block derived from its
+    /// fields. Hidden by default; the Metadata button at every
+    /// document's foot reveals it, per reading.
     var showsVisualMeta = false
     /// Flow, the reading aid carried over from Digital Letters: while
     /// on, dense prose is broken open for reading — sentences on their
@@ -84,10 +84,30 @@ final class AppState {
     /// third pane exists. A module's canvas, the People place, and
     /// parallel reading still bring their own pane.
     var notesOpenInList: Bool {
-        noteLayout == .inList
+        if case .sourceShelf = sidebarSelection { return false }
+        return noteLayout == .inList
             && parallelDoc == nil
             && sidebarSelection != .people
             && LibraryViewRegistry.module(for: sidebarSelection) == nil
+    }
+
+    /// The point size of the notes list's rows in the "In the list"
+    /// arrangement — the title-and-first-words line. Chosen in
+    /// Settings ▸ Appearance; 14 by default.
+    var listTextSize: Double = {
+        let stored = UserDefaults.standard.double(forKey: "listTextSize")
+        return stored == 0 ? 14 : stored
+    }() {
+        didSet { UserDefaults.standard.set(listTextSize, forKey: "listTextSize") }
+    }
+
+    /// What the Library's articles shelf calls itself — "Articles" or
+    /// "Papers", the reader's own word, chosen in Settings ▸ Appearance.
+    var articlesShelfLabel: String =
+        UserDefaults.standard.string(forKey: "articlesShelfLabel") ?? "Articles" {
+        didSet {
+            UserDefaults.standard.set(articlesShelfLabel, forKey: "articlesShelfLabel")
+        }
     }
 
     /// Where a clicked note opens — see `NoteLayout`. This machine's
@@ -116,6 +136,38 @@ final class AppState {
     var selectedPersonID: String?
     /// Filters the document list and the insight views' rows.
     var searchText = ""
+    /// What "Show in <View>" handed over: the selected words for a
+    /// view about text snippets, or the note for a view about notes
+    /// as nodes. The named view takes it once and it is gone.
+    struct ShowInPayload {
+        let viewID: String
+        let text: String?
+        let docID: String
+    }
+    private(set) var showInPayload: ShowInPayload?
+
+    /// Show in <view>: navigates there carrying the selection or the
+    /// note, per the view's declared appetite.
+    func showIn(viewID: String, selectedText: String?, docID: String) {
+        let module = LibraryViewRegistry.module(id: viewID)
+        let text = module?.showInAppetite == .text ? selectedText : nil
+        showInPayload = ShowInPayload(viewID: viewID, text: text, docID: docID)
+        sidebarSelection = .view(viewID)
+    }
+
+    /// A view's one-time pickup of what Show in brought it.
+    func takeShowInPayload(for viewID: String) -> ShowInPayload? {
+        guard let payload = showInPayload, payload.viewID == viewID else { return nil }
+        showInPayload = nil
+        return payload
+    }
+
+    /// The New Person form, summoned from File ▸ New Person or the
+    /// sidebar's People row; the window presents it while this is true.
+    var addingPerson = false
+    /// True while the words of a note open in the list are being
+    /// typed — the list fades everything around the writing.
+    var editingInList = false
     /// A transient status message, shown briefly at the window's bottom.
     private(set) var transientNote: String?
     private var noteToken = UUID()
@@ -130,6 +182,7 @@ final class AppState {
 
     init() {
         restoreFolder()
+        restoreReaderLibrary()
         placeFinder.onPlace = { [weak self] place in
             self?.currentPlace = place
         }
@@ -198,8 +251,14 @@ final class AppState {
     /// ▸ Author, never in the document lists.
     var listedEntries: [IndexEntry] {
         index.timeline.reversed().filter { entry in
+            // The open document keeps a seat wherever the reader is —
+            // a quote opened from its source's page must show somewhere.
+            if entry.id == selectedDocID { return true }
             guard !isMuted(entry.doc.author), !isArchived(entry.doc),
-                  entry.doc.documentType != IdentityCard.documentType else { return false }
+                  entry.doc.documentType != IdentityCard.documentType,
+                  // Sources, quotes, and annotations are the reference
+                  // shelf's — the Library section shows them.
+                  !entry.doc.isLibraryKind else { return false }
             if let timelineRange, !timelineRange.contains(entry.doc.listedDate) { return false }
             return showsSuperseded || !index.supersededIDs.contains(entry.id)
         }
@@ -694,6 +753,44 @@ final class AppState {
     func isMuted(_ author: String) -> Bool {
         let trimmed = author.trimmingCharacters(in: .whitespaces)
         return mutedAuthors.contains { $0.caseInsensitiveCompare(trimmed) == .orderedSame }
+    }
+
+    /// The folder where Reader keeps its PDFs, once granted — remembered
+    /// as a security-scoped bookmark like the community folder, scanned
+    /// for Visual-Meta PDFs at launch and on request (ReaderLibrary.swift).
+    var readerLibraryURL: URL?
+    /// One quiet Reader Library scan per run, once the index is read.
+    var readerScanDone = false
+    /// A scan already walking the Reader Library; a second waits its turn.
+    var readerScanRunning = false
+    /// Analyze New already studying the shelf; the button rests meanwhile.
+    var sourceAnalysisRunning = false
+    /// Analyze New's progress, worn by the button itself.
+    struct AnalysisProgress {
+        var done: Int
+        var total: Int
+    }
+    var sourceAnalysisProgress: AnalysisProgress?
+    /// Re-scan's progress, worn by its button.
+    var readerRescanProgress: AnalysisProgress?
+    /// A cited name on its way to the Authors shelf, which selects it
+    /// on arrival and clears this.
+    var pendingCitedAuthor: String?
+
+    /// A term chosen on a source's page, opened in a view: the term
+    /// becomes the window's search — filter-driven views open already
+    /// narrowed to it — and travels as the Show-in payload for views
+    /// that take one directly.
+    func showTerm(_ term: String, inView viewID: String, from docID: String) {
+        searchText = term
+        showInPayload = ShowInPayload(viewID: viewID, text: term, docID: docID)
+        sidebarSelection = .view(viewID)
+    }
+
+    /// A cited name, opened in the Library's Authors shelf.
+    func showCitedAuthor(_ name: String) {
+        pendingCitedAuthor = name
+        sidebarSelection = .sourceShelf(.authors)
     }
 
     /// True when the restored folder can be read but not written — a

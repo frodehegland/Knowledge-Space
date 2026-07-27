@@ -192,6 +192,28 @@ nonisolated enum LibraryScanner {
         }
     }
 
+    /// How many documents exist here only as ".<name>.icloud"
+    /// placeholders — files another device wrote that iCloud has not
+    /// delivered yet. The content scan cannot see them (they are
+    /// hidden), so a caller that finds no documents can still tell
+    /// "empty folder" from "folder still downloading".
+    static func pendingDocumentDownloads(in folder: URL) -> Int {
+        guard let enumerator = FileManager.default.enumerator(
+            at: folder, includingPropertiesForKeys: nil,
+            options: [.skipsPackageDescendants]) else { return 0 }
+        var count = 0
+        for case let url as URL in enumerator
+        where url.pathExtension.lowercased() == "icloud" {
+            var name = url.lastPathComponent
+            if name.hasPrefix(".") { name.removeFirst() }
+            name = String(name.dropLast(".icloud".count))
+            if name.lowercased().hasSuffix("." + LiquidDoc.fileExtension) {
+                count += 1
+            }
+        }
+        return count
+    }
+
     static func scan(folder: URL) -> Result {
         var result = Result()
         requestICloudDownloads(in: folder)

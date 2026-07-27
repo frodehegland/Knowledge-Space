@@ -58,6 +58,25 @@ struct KnowledgeSpaceApp: App {
             AuthorMapSpaceView()
                 .environment(mapState)
         }
+
+        // The Sphere Weave: the library in the round, for the room —
+        // an immersive space with the reader near its center, opened
+        // from the Library window or the control bar. It takes the
+        // room from the Map; only one space can hold it at a time.
+        ImmersiveSpace(id: "SphereWeaveSpace") {
+            SphereWeaveSpaceView()
+                .environment(mapState)
+        }
+
+        // The weave's control bar: keyword, centered element, way out.
+        Window("Sphere Weave", id: "SphereWeaveControls") {
+            SphereWeaveControlsView()
+                .environment(mapState)
+        }
+        .windowResizability(.contentSize)
+        .defaultWindowPlacement { _, _ in
+            WindowPlacement(.utilityPanel)
+        }
         #else
         // A single, titled window: macOS lists "Knowledge Space" in the
         // Window menu by itself, so a closed window can always be
@@ -85,6 +104,9 @@ struct KnowledgeSpaceApp: App {
                 }
                 .keyboardShortcut("n", modifiers: .command)
                 .disabled(state.index.folderURL == nil)
+                Button("New Person…") {
+                    state.addingPerson = true
+                }
             }
             // Old-name documents (.origamitext) come home by conversion —
             // the same JSON, renamed to .liquid.json in the library folder.

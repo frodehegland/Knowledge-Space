@@ -183,6 +183,8 @@ struct TrailsView: View {
     @State private var selectedTrailID = TrailsView.libraryTrailID
     @State private var readIDs: Set<String> = []
     @State private var isCreating = false
+    /// The note Show in Trails handed over — the new trail's first stop.
+    @State private var seedStopID: String?
 
     static let libraryTrailID = "library"
 
@@ -317,11 +319,22 @@ struct TrailsView: View {
         .onChange(of: selectedTrailID) {
             readIDs = TrailProgress.read(trailID: selectedTrailID)
         }
+        // Show in Trails: the note arrives as a new trail's first stop.
+        .onAppear { consumeShowIn() }
+        .onChange(of: model.showInPayload?.viewID) { consumeShowIn() }
         .sheet(isPresented: $isCreating) {
-            NewTrailSheet { id in
+            NewTrailSheet(seedDocID: seedStopID) { id in
                 selectedTrailID = id
             }
         }
+    }
+
+    /// Trails is about notes as nodes: Show in Trails hands a note
+    /// over, and the trail-laying sheet opens with it as first stop.
+    private func consumeShowIn() {
+        guard let payload = model.takeShowInPayload(for: "trails") else { return }
+        seedStopID = payload.docID
+        isCreating = true
     }
 
     /// The trails on offer, and the making of new ones.
@@ -608,6 +621,8 @@ struct TrailsView: View {
 private struct NewTrailSheet: View {
     @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
+    /// A document to seed the stops with — Show in Trails' note.
+    var seedDocID: String? = nil
     /// Called with the new trail's address once it is written.
     let onCreate: (String) -> Void
 
@@ -678,6 +693,13 @@ private struct NewTrailSheet: View {
         }
         .padding(16)
         .frame(width: 720, height: 520)
+        .onAppear {
+            // The note Show in Trails brought stands as the first stop.
+            if let seedDocID, stops.isEmpty,
+               let entry = model.index.byID[seedDocID] {
+                stops = [ChosenStop(docID: seedDocID, title: entry.doc.title)]
+            }
+        }
     }
 
     private var libraryColumn: some View {

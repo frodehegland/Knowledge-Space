@@ -15,10 +15,11 @@ private let log = Logger(subsystem: "com.origami.notes", category: "notes")
 /// written, but logs it. If a change to the shape is deliberate, update
 /// the format document and this contract together.
 private nonisolated enum CaptureContract {
-    /// Every top-level key a freshly captured note may carry.
+    /// Every top-level key a freshly captured note may carry — `action`
+    /// when the note is checked To Do at capture.
     static let allowedKeys: Set<String> = [
         "about", "format", "id", "title", "author", "created",
-        "body", "links", "draft", "documentType", "location",
+        "body", "links", "draft", "action", "documentType", "location",
     ]
     /// The keys the standard requires of every text document.
     static let requiredKeys: Set<String> = [
@@ -257,9 +258,11 @@ final class NotesModel {
     /// A new note, written into the folder at once — file first, edits
     /// follow. The place travels in at creation, per the format. Voice
     /// capture passes the spoken title, body, and moment; the bare call
-    /// makes the empty note the editor opens on.
+    /// makes the empty note the editor opens on. A note checked To Do
+    /// carries the standing in the file — every device lists it there —
+    /// and, having a standing, is no draft.
     func createNote(title: String = "Untitled", bodyText: String = "",
-                    created: Date = .now) -> LiquidDoc? {
+                    created: Date = .now, asToDo: Bool = false) -> LiquidDoc? {
         guard let folderURL else {
             lastError = "No community folder is open. Choose the folder first."
             return nil
@@ -289,7 +292,8 @@ final class NotesModel {
                             body: body,
                             links: LiquidDoc.detectedLinks(in: body),
                             wraps: nil,
-                            draft: true,
+                            draft: !asToDo,
+                            action: asToDo ? LiquidDoc.Action.toDo.rawValue : nil,
                             documentType: LiquidDoc.DocumentType.note.rawValue,
                             location: currentPlace,
                             fileURL: folderURL.appendingPathComponent(id)
@@ -656,27 +660,33 @@ struct NewNoteView: View {
     @Environment(\.dismiss) private var dismiss
 
     @State private var text = ""
+    /// Checked, the note is born a To Do — the standing travels in the
+    /// file, so it lists under To Do on every device.
+    @State private var isToDo = false
     @FocusState private var writing: Bool
 
     var body: some View {
         NavigationStack {
-            TextEditor(text: $text)
-                .font(.body)
-                .scrollContentBackground(.hidden)
-                .padding(8)
-                .background(Color(.secondarySystemBackground))
-                .clipShape(RoundedRectangle(cornerRadius: 12))
-                .padding()
-                .focused($writing)
-                .toolbar {
-                    ToolbarItem(placement: .cancellationAction) {
-                        Button("Cancel") { dismiss() }
-                    }
-                    ToolbarItem(placement: .confirmationAction) {
-                        Button("Done") { save() }
-                            .disabled(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                    }
+            VStack(spacing: 12) {
+                TextEditor(text: $text)
+                    .font(.body)
+                    .scrollContentBackground(.hidden)
+                    .padding(8)
+                    .background(Color(.secondarySystemBackground))
+                    .clipShape(RoundedRectangle(cornerRadius: 12))
+                    .focused($writing)
+                Toggle("To Do", isOn: $isToDo)
+            }
+            .padding()
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
                 }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { save() }
+                        .disabled(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+            }
         }
         .task { writing = true }
     }
@@ -690,7 +700,8 @@ struct NewNoteView: View {
         let parsed = TranscriptParser.note(from: trimmed)
         // The reason for a failure is in model.lastError, shown by the
         // home view.
-        _ = model.createNote(title: parsed.title, bodyText: parsed.bodyText)
+        _ = model.createNote(title: parsed.title, bodyText: parsed.bodyText,
+                             asToDo: isToDo)
         dismiss()
     }
 }

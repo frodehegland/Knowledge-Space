@@ -4,6 +4,7 @@ import AppKit
 import UniformTypeIdentifiers
 import ImagePlayground
 import Contacts
+import PhotosUI
 
 // The contact form carried over from Digital Letters, so both apps edit
 // the same records the same way.
@@ -24,6 +25,9 @@ struct PersonFormView: View {
     @State private var searchError: String?
     @State private var hasSearched = false
     @State private var showsPhotoImporter = false
+    /// The picture picked in the system Photos library picker; its
+    /// search field finds the person by name in Photos' own people.
+    @State private var photosPickerItem: PhotosPickerItem?
     @State private var showsPlaygroundSheet = false
     @State private var showsPhotoSearch = false
     /// Why the photograph search did not open: name and ORCID both empty.
@@ -332,6 +336,18 @@ struct PersonFormView: View {
         } message: {
             Text("The record and its portrait are removed from People. Their notes and documents stay in the library.")
         }
+        // The picture picked from Photos arrives as data; from there it
+        // walks the same path as any chosen photo.
+        .onChange(of: photosPickerItem) {
+            guard let item = photosPickerItem else { return }
+            photosPickerItem = nil
+            Task {
+                if let data = try? await item.loadTransferable(type: Data.self),
+                   let photo = NSImage(data: data) {
+                    adopt(photo)
+                }
+            }
+        }
         .fileImporter(isPresented: $showsPhotoImporter, allowedContentTypes: [.image]) { result in
             guard case .success(let url) = result else { return }
             let accessing = url.startAccessingSecurityScopedResource()
@@ -434,6 +450,15 @@ struct PersonFormView: View {
                 VStack(alignment: .leading, spacing: 8) {
                     HStack {
                         Button("Choose…") { showsPhotoImporter = true }
+                        if !person.isArtificial {
+                            // The system Photos picker: its search field
+                            // answers to the person's name, matching the
+                            // people Photos itself knows.
+                            PhotosPicker("From Photos…",
+                                         selection: $photosPickerItem,
+                                         matching: .images)
+                                .help("Pick from your Photos library — type the person's name in the picker's search to see Photos' own matches")
+                        }
                         Button(person.isArtificial ? "Find Logo…" : "Find Photo…") {
                             if person.isArtificial {
                                 if logoQuery.isEmpty {

@@ -48,6 +48,17 @@ extension MyCommunityView {
 
 A starter version of this template is one click away in the app: Settings → View Modules → Copy Starter Module.
 
+## Show in
+
+The note editor's context menu ends with **Show in ▸** every installed
+view. Choosing yours navigates to it carrying a payload: declare
+`showInAppetite: .text` in your module if the view is about text
+snippets (the reader's selection travels), or leave the default
+`.note` if it is about notes as nodes (the whole note travels). Pick
+the payload up once with `model.takeShowInPayload(for: "your-id")` —
+Trails does this to open its trail-laying sheet with the note as the
+first stop.
+
 ## Sharing a view
 
 Send the file. Installing is dropping it into the project and adding its registry line — views are ordinary source code in the open repository, which means every view anyone runs is code anyone can read. Contribute yours by pull request, and it ships to the whole community in the next build.

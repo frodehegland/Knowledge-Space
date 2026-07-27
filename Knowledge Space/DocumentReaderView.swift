@@ -39,7 +39,9 @@ struct DocumentReaderView: View {
             if let body = doc.body {
                 let appendixIDs = doc.visualMetaParagraphIDs
                     .union(doc.analysisParagraphIDs)
-                ForEach(body) { paragraph in
+                ForEach(body.filter {
+                    state.showsVisualMeta || !appendixIDs.contains($0.id)
+                }) { paragraph in
                     ParagraphView(paragraph: paragraph,
                                   isAppendix: appendixIDs.contains(paragraph.id),
                                   isHighlighted: paragraph.id == state.pendingFragment,
@@ -49,6 +51,16 @@ struct DocumentReaderView: View {
             } else if let wraps = doc.wraps {
                 sidecarView(wraps)
             }
+            // Visual-Meta is every document's visible companion: a file
+            // that carries its appendix shows it above (half size, after
+            // its rule); one that does not yet shows the block derived
+            // from its own fields, so the metadata always stands on the
+            // page with the words. The button at the foot folds it away
+            // and back, per reading.
+            if state.showsVisualMeta, doc.visualMetaParagraphIDs.isEmpty {
+                derivedVisualMeta
+            }
+            metadataToggle
             backlinksSection
         }
         // The reading measure: the column's width in the
@@ -158,6 +170,29 @@ struct DocumentReaderView: View {
                 .foregroundStyle(.secondary)
         }
         .padding(.vertical, 8)
+    }
+
+    /// Metadata / Hide Metadata, quiet at the document's foot.
+    private var metadataToggle: some View {
+        Button(state.showsVisualMeta ? "Hide Metadata" : "Metadata") {
+            withAnimation(.snappy) { state.showsVisualMeta.toggle() }
+        }
+        .buttonStyle(.plain)
+        .font(.caption)
+        .foregroundStyle(.tertiary)
+        .help("The document's Visual-Meta, shown on the page — the appendix its file carries, or the block its own fields derive")
+    }
+
+    /// The derived Visual-Meta block, at the appendix's half size.
+    private var derivedVisualMeta: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Divider()
+                .padding(.top, 12)
+            Text(VisualMeta.displayBlock(for: doc))
+                .font(.system(size: 9, design: .serif))
+                .foregroundStyle(.secondary)
+                .textSelection(.enabled)
+        }
     }
 
     // MARK: Backlinks

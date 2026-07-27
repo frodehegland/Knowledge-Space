@@ -126,7 +126,12 @@ nonisolated struct LiquidDoc: Identifiable, Hashable, Sendable {
         // carrying a location where the capture had one.
         // A book is the long form: authored like a letter but living a
         // longer life, with its own place in the sidebar.
-        case letter, note, book, rfc, personal, project, meeting, transcript, extract, article, external
+        // A source is a work of reference as a first-class citizen —
+        // one source, one address, its own BibTeX in `references`. A
+        // quote lifts a source's words into a document of its own; an
+        // annotation anchors a comment to a place in one. All three
+        // live in the Library section, not the correspondence lists.
+        case letter, note, book, rfc, personal, project, meeting, transcript, extract, article, external, source, quote, annotation
 
         var displayName: String {
             switch self {
@@ -141,8 +146,20 @@ nonisolated struct LiquidDoc: Identifiable, Hashable, Sendable {
             case .extract: "Extract"
             case .article: "Article"
             case .external: "External"
+            case .source: "Source"
+            case .quote: "Quote"
+            case .annotation: "Annotation"
             }
         }
+    }
+
+    /// The kinds that live in the Library section — the reference
+    /// shelf — rather than the correspondence lists: a source never
+    /// floods the Inbox, and fifty quotes on one book stay under it.
+    nonisolated var isLibraryKind: Bool {
+        documentType == DocumentType.source.rawValue
+            || documentType == DocumentType.quote.rawValue
+            || documentType == DocumentType.annotation.rawValue
     }
 
     /// The recommended `action` vocabulary — a note's standing. Raw
@@ -192,6 +209,11 @@ nonisolated struct LiquidDoc: Identifiable, Hashable, Sendable {
         /// ladder (document, paragraph, span). Readers highlight the span
         /// where it occurs; where it doesn't, the paragraph scope stands.
         var span: String? = nil
+        /// Where in the target *work* the link points, as free-form prose
+        /// ("p. 37", "chapter 3", "12:40") — the rung below `fragment`
+        /// for targets whose insides have no paragraph ids, wrapped
+        /// files above all. Displayed, never parsed.
+        var locator: String? = nil
     }
 
     struct Wrapped: Hashable, Sendable {
@@ -352,7 +374,8 @@ extension LiquidDoc {
             let to = LiquidAddress.canonical(toString)
             guard LiquidAddress.isValid(to) else { return nil }
             return Link(to: to, fragment: rawLink.fragment, rel: rawLink.rel,
-                        bibtex: rawLink.bibtex, span: rawLink.span)
+                        bibtex: rawLink.bibtex, span: rawLink.span,
+                        locator: rawLink.locator)
         }
 
         var wraps: Wrapped?
@@ -495,6 +518,7 @@ extension LiquidDoc {
         var rel: String?
         var bibtex: String?
         var span: String?
+        var locator: String?
     }
 
     private nonisolated struct RawWrapped: Decodable {

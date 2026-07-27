@@ -88,6 +88,17 @@ nonisolated enum VisualMeta {
         return published
     }
 
+    /// Visual-Meta as every document's visible companion: the machine
+    /// block derived live from the document's own fields, for readers
+    /// to show on the page when the file does not carry an appendix
+    /// yet — metadata on the same level as the words from the note's
+    /// first breath. The JSON stays the only record; publication still
+    /// writes the full appendix in.
+    nonisolated static func displayBlock(for doc: LiquidDoc,
+                                         identity: AuthorIdentity? = nil) -> String {
+        metaBlock(for: doc, identity: identity)
+    }
+
     /// The machine-readable block, kept as a single paragraph so the marker
     /// structure survives intact for end-of-document parsers.
     private static func metaBlock(for doc: LiquidDoc, identity: AuthorIdentity?) -> String {

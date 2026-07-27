@@ -1,4 +1,7 @@
 import SwiftUI
+#if os(macOS)
+import AppKit
+#endif
 
 /// A note's page: the words, editable in place — no Edit, no Done. The
 /// buffer seeds once per note and saves itself: a moment after typing
@@ -36,6 +39,10 @@ struct NoteWritingView: View {
     @State private var autosave: Task<Void, Never>?
     @FocusState private var writing: Bool
     #if os(macOS)
+    /// The AppKit editor's focus, mirrored both ways.
+    @State private var editorFocused = false
+    #endif
+    #if os(macOS)
     /// Names the reader told to stay as written in this note, lowercased.
     @State private var dismissedNames: Set<String> = []
     /// A new contact begun from a typed name, presented as the form.
@@ -47,8 +54,28 @@ struct NoteWritingView: View {
             if state.flowReading {
                 flowedReading
             } else {
+                #if os(macOS)
+                // AppKit-backed, so the context menu is ours: the
+                // basics, spelling, and Show in <View> — nothing else.
+                NoteTextEditor(text: $text,
+                               fontSize: state.listTextSize + 1,
+                               inline: inline,
+                               focused: $editorFocused,
+                               showInItems: showInMenuItems(selection:))
+                    .padding(.horizontal, inline ? 2 : 20)
+                    .padding(.top, inline ? 6 : 33)   // the note's single empty line
+                    .padding(.bottom, inline ? 6 : 16)
+                    .frame(maxWidth: measure ?? .infinity, alignment: .leading)
+                    .frame(maxWidth: .infinity,
+                           maxHeight: inline ? nil : .infinity,
+                           alignment: centersContent ? .top : .topLeading)
+                    .frame(minHeight: inline ? 44 : 0)
+                    .overlay(alignment: .topLeading) { emptyHint }
+                #else
                 TextEditor(text: $text)
-                    .font(.system(size: 17, design: .serif))
+                    // An open note reads one point larger than the
+                    // list's rows (Settings ▸ Appearance sets those).
+                    .font(.system(size: state.listTextSize + 1, design: .serif))
                     .lineSpacing(6)
                     .scrollContentBackground(.hidden)
                     // Inline, the editor holds all its words and the
@@ -63,19 +90,15 @@ struct NoteWritingView: View {
                            alignment: centersContent ? .top : .topLeading)
                     .frame(minHeight: inline ? 44 : 0)
                     .focused($writing)
-                    .overlay(alignment: .topLeading) {
-                        if text.isEmpty {
-                            Text("Write. A blank line starts a new paragraph; # starts a heading; **bold** and *italic* read as written.")
-                                .foregroundStyle(.tertiary)
-                                .padding(.horizontal, inline ? 6 : 26)
-                                .padding(.top, inline ? 6 : 33)
-                                .allowsHitTesting(false)
-                        }
-                    }
+                    .overlay(alignment: .topLeading) { emptyHint }
+                #endif
             }
             if state.showsVisualMeta {
                 metadataReading
             }
+            metadataToggle
+                .padding(.horizontal, 20)
+                .padding(.bottom, 4)
             #if os(macOS)
             nameSuggestionsBar
             #endif
@@ -95,8 +118,20 @@ struct NoteWritingView: View {
             #if os(macOS)
             loadDismissedNames()
             #endif
-            // A fresh, empty note invites the first words at once.
-            if text.isEmpty { writing = true }
+            // A fresh, empty note invites the first words at once. The
+            // focus is asked for a beat after the editor enters the
+            // window — asked in the same turn (inside a list row
+            // especially) the request is dropped on the floor.
+            if text.isEmpty {
+                Task { @MainActor in
+                    try? await Task.sleep(for: .milliseconds(80))
+                    #if os(macOS)
+                    editorFocused = true
+                    #else
+                    writing = true
+                    #endif
+                }
+            }
         }
         .onChange(of: text) {
             guard loaded, text != baseText else { return }
@@ -113,24 +148,87 @@ struct NoteWritingView: View {
         .onChange(of: scenePhase) { _, phase in
             if phase != .active { save() }
         }
-        .onDisappear { save() }
+        // While the words are being typed in the list, the list fades
+        // the other rows; the fade lifts with the focus, or when the
+        // note closes mid-edit.
+        .onChange(of: writing) {
+            if inline { state.editingInList = writing }
+        }
+        #if os(macOS)
+        .onChange(of: editorFocused) {
+            if inline { state.editingInList = editorFocused }
+        }
+        #endif
+        .onDisappear {
+            save()
+            if inline, state.editingInList { state.editingInList = false }
+        }
         // The writing page stands on the design's page grey.
         .background(AppGreys.page)
         .environment(\.colorScheme, .light)
     }
 
-    /// The metadata riding with the note — its Visual-Meta appendix and
-    /// analyses, the paragraphs the editor keeps out of the writing —
-    /// rendered read-only under the words at the reader's half size.
-    /// Shown by the options column's Visual-Meta button; the blocks
-    /// travel with the file whether or not they are shown.
+    /// The empty page's invitation, gone with the first words.
+    @ViewBuilder private var emptyHint: some View {
+        if text.isEmpty {
+            Text("Write. A blank line starts a new paragraph; # starts a heading; **bold** and *italic* read as written.")
+                .foregroundStyle(.tertiary)
+                .padding(.horizontal, inline ? 6 : 26)
+                .padding(.top, inline ? 6 : 33)
+                .allowsHitTesting(false)
+        }
+    }
+
+    #if os(macOS)
+    /// The context menu's foot: Show in ▸ every installed view. The
+    /// chosen view is handed the selection or the whole note, per the
+    /// appetite it declares (text snippets or notes as nodes).
+    private func showInMenuItems(selection: String?) -> [NSMenuItem] {
+        let submenu = NSMenu()
+        for module in LibraryViewRegistry.modules {
+            submenu.addItem(ClosureMenuItem(title: module.name) { [state, docID = doc.id] in
+                state.showIn(viewID: module.id, selectedText: selection, docID: docID)
+            })
+        }
+        let root = NSMenuItem(title: "Show in", action: nil, keyEquivalent: "")
+        root.submenu = submenu
+        return [root]
+    }
+    #endif
+
+    /// Metadata / Hide Metadata, quiet at the note's foot.
+    private var metadataToggle: some View {
+        Button(state.showsVisualMeta ? "Hide Metadata" : "Metadata") {
+            withAnimation(.snappy) { state.showsVisualMeta.toggle() }
+        }
+        .buttonStyle(.plain)
+        .font(.caption)
+        .foregroundStyle(.tertiary)
+        .help("The note's Visual-Meta, shown on the page — the appendix its file carries, or the block its own fields derive")
+    }
+
+    /// Visual-Meta on the note's page — every note's visible companion.
+    /// A file already carrying its appendix (and analyses) shows those
+    /// paragraphs at the reader's half size; a note not yet published
+    /// shows the block derived live from its own fields. The options
+    /// column's Visual-Meta button folds it away; the file is the same
+    /// either way.
     private var metadataReading: some View {
-        ScrollView {
+        let carried = (doc.body ?? []).filter {
+            Self.hiddenIDs(of: doc).contains($0.id)
+        }
+        return ScrollView {
             VStack(alignment: .leading, spacing: 4) {
-                ForEach((doc.body ?? []).filter {
-                    Self.hiddenIDs(of: doc).contains($0.id)
-                }) { paragraph in
-                    ParagraphView(paragraph: paragraph, isAppendix: true)
+                if carried.isEmpty {
+                    Divider()
+                    Text(VisualMeta.displayBlock(for: doc))
+                        .font(.system(size: 9, design: .serif))
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                } else {
+                    ForEach(carried) { paragraph in
+                        ParagraphView(paragraph: paragraph, isAppendix: true)
+                    }
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -462,11 +560,23 @@ struct NoteWritingView: View {
             ? Self.derivedTitle(for: text.trimmingCharacters(in: .whitespacesAndNewlines))
             : source.title
 
+        // Links are re-detected from the words, but the provenance the
+        // old links carried — a citation's BibTeX, a quote's locator —
+        // survives the rebuild: the connection's record is not the
+        // text's to lose.
+        var links = LiquidDoc.detectedLinks(in: body)
+        for index in links.indices {
+            guard let old = source.links.first(where: {
+                $0.to == links[index].to && $0.fragment == links[index].fragment
+            }) else { continue }
+            if links[index].bibtex == nil { links[index].bibtex = old.bibtex }
+            if links[index].locator == nil { links[index].locator = old.locator }
+        }
         var updated = source
         updated.id = doc.id
         updated.title = title
         updated.body = body
-        updated.links = LiquidDoc.detectedLinks(in: body)
+        updated.links = links
         updated.wraps = nil
         updated.fileURL = doc.fileURL
         do {
@@ -527,3 +637,244 @@ struct NoteWritingView: View {
         baseDiskData = diskData
     }
 }
+
+#if os(macOS)
+
+// MARK: - The AppKit editor (the context menu is ours)
+
+/// The note's editor, AppKit-backed so its context menu can be owned:
+/// reduced to the basics — Cut, Copy, Paste — plus spelling (the one
+/// system concern kept), with Show in ▸ <View> at the foot. Everything
+/// else the system injects is refused or stripped, Digital Letters'
+/// pattern. Inline it sizes to its words and the list scrolls; in a
+/// pane it scrolls itself.
+private struct NoteTextEditor: NSViewRepresentable {
+    @Binding var text: String
+    var fontSize: Double
+    var inline: Bool
+    @Binding var focused: Bool
+    /// Builds the Show in items for the current selection.
+    var showInItems: (String?) -> [NSMenuItem]
+
+    func makeCoordinator() -> Coordinator { Coordinator(self) }
+
+    func makeNSView(context: Context) -> NSView {
+        let textView = MenuOwningTextView(usingTextLayoutManager: false)
+        context.coordinator.textView = textView
+        textView.delegate = context.coordinator
+        textView.allowsUndo = true
+        textView.isRichText = false
+        textView.importsGraphics = false
+        textView.usesFontPanel = false
+        textView.drawsBackground = false
+        textView.textContainerInset = .zero
+        textView.autoresizingMask = [.width]
+        textView.isVerticallyResizable = true
+        textView.isHorizontallyResizable = false
+        textView.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude,
+                                  height: CGFloat.greatestFiniteMagnitude)
+        textView.textContainer?.widthTracksTextView = true
+        textView.sizesToFit = inline
+        textView.onFocusChange = { [weak coordinator = context.coordinator] inFocus in
+            coordinator?.focusChanged(inFocus)
+        }
+        textView.showInItems = { [weak coordinator = context.coordinator] selection in
+            coordinator?.parent.showInItems(selection) ?? []
+        }
+        textView.string = text
+        applyStyle(textView)
+        if inline { return textView }
+        let scrollView = NSScrollView()
+        scrollView.documentView = textView
+        scrollView.hasVerticalScroller = true
+        scrollView.autohidesScrollers = true
+        scrollView.borderType = .noBorder
+        scrollView.drawsBackground = false
+        return scrollView
+    }
+
+    func updateNSView(_ view: NSView, context: Context) {
+        context.coordinator.parent = self
+        guard let textView = context.coordinator.textView else { return }
+        if textView.string != text {
+            textView.string = text
+            applyStyle(textView)
+        }
+        if context.coordinator.appliedFontSize != fontSize {
+            context.coordinator.appliedFontSize = fontSize
+            applyStyle(textView)
+        }
+        if focused, let window = textView.window,
+           window.firstResponder !== textView {
+            window.makeFirstResponder(textView)
+        }
+    }
+
+    /// One uniform style: the body serif at the chosen size, black,
+    /// the page's line spacing.
+    private func applyStyle(_ textView: NSTextView) {
+        let size = CGFloat(fontSize)
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.lineSpacing = 6
+        let descriptor = NSFont.systemFont(ofSize: size).fontDescriptor
+            .withDesign(.serif)
+        let font = descriptor.flatMap { NSFont(descriptor: $0, size: size) }
+            ?? NSFont.systemFont(ofSize: size)
+        let attributes: [NSAttributedString.Key: Any] = [
+            .font: font,
+            .paragraphStyle: paragraph,
+            .foregroundColor: NSColor.black,
+        ]
+        textView.typingAttributes = attributes
+        textView.textStorage?.setAttributes(
+            attributes,
+            range: NSRange(location: 0, length: (textView.string as NSString).length))
+        textView.invalidateIntrinsicContentSize()
+    }
+
+    @MainActor final class Coordinator: NSObject, NSTextViewDelegate {
+        var parent: NoteTextEditor
+        weak var textView: MenuOwningTextView?
+        var appliedFontSize: Double = 0
+
+        init(_ parent: NoteTextEditor) { self.parent = parent }
+
+        func textDidChange(_ notification: Notification) {
+            guard let textView else { return }
+            parent.text = textView.string
+            textView.invalidateIntrinsicContentSize()
+        }
+
+        func focusChanged(_ inFocus: Bool) {
+            if parent.focused != inFocus { parent.focused = inFocus }
+        }
+    }
+}
+
+/// The menu is owned at the view level: on current SDKs the text system
+/// can build its menu without consulting the delegate hook, so the
+/// override is the reliable seam (Digital Letters' pattern).
+private final class MenuOwningTextView: NSTextView, NSMenuDelegate {
+    var showInItems: ((String?) -> [NSMenuItem])?
+    var onFocusChange: ((Bool) -> Void)?
+    /// Inline in the list: the view reports its words' height and the
+    /// list scrolls, instead of scrolling within.
+    var sizesToFit = false
+
+    override var intrinsicContentSize: NSSize {
+        guard sizesToFit, let container = textContainer,
+              let manager = layoutManager else {
+            return super.intrinsicContentSize
+        }
+        manager.ensureLayout(for: container)
+        let used = manager.usedRect(for: container)
+        return NSSize(width: NSView.noIntrinsicMetric,
+                      height: ceil(used.height) + textContainerInset.height * 2)
+    }
+
+    override func didChangeText() {
+        super.didChangeText()
+        if sizesToFit { invalidateIntrinsicContentSize() }
+    }
+
+    override func setFrameSize(_ newSize: NSSize) {
+        super.setFrameSize(newSize)
+        if sizesToFit { invalidateIntrinsicContentSize() }
+    }
+
+    override func becomeFirstResponder() -> Bool {
+        let accepted = super.becomeFirstResponder()
+        if accepted { onFocusChange?(true) }
+        return accepted
+    }
+
+    override func resignFirstResponder() -> Bool {
+        let accepted = super.resignFirstResponder()
+        if accepted { onFocusChange?(false) }
+        return accepted
+    }
+
+    /// Anything in the menu we did not put there was injected by the
+    /// system after we returned it; it goes.
+    static let ownedItemTag = 0x0716
+
+    /// The editor's menu is ours: the basics, the misspelling's
+    /// suggestions where there are any, and Show in at the foot.
+    override func menu(for event: NSEvent) -> NSMenu? {
+        let system = super.menu(for: event)
+        let menu = NSMenu()
+        // AppKit injects Services, AutoFill, and similar into context
+        // menus on its own; refuse plug-ins and gate the rest at open.
+        menu.allowsContextMenuPlugIns = false
+        menu.delegate = self
+        menu.addItem(NSMenuItem(title: "Cut", action: #selector(NSText.cut(_:)), keyEquivalent: ""))
+        menu.addItem(NSMenuItem(title: "Copy", action: #selector(NSText.copy(_:)), keyEquivalent: ""))
+        menu.addItem(NSMenuItem(title: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: ""))
+        if let system {
+            let spelling = system.items.filter(Self.isSpellingItem)
+            if !spelling.isEmpty {
+                menu.addItem(.separator())
+                for item in spelling {
+                    system.removeItem(item)   // an item belongs to one menu
+                    menu.addItem(item)
+                }
+            }
+        }
+        let range = selectedRange()
+        let selection = range.length > 0
+            ? (string as NSString).substring(with: range) : nil
+        if let items = showInItems?(selection), !items.isEmpty {
+            menu.addItem(.separator())
+            for item in items { menu.addItem(item) }
+        }
+        for item in menu.items { item.tag = Self.ownedItemTag }
+        return menu
+    }
+
+    func menuNeedsUpdate(_ menu: NSMenu) {
+        for item in menu.items where item.tag != Self.ownedItemTag {
+            menu.removeItem(item)
+        }
+    }
+
+    /// Spelling suggestions and controls, identified by their actions
+    /// rather than their localized titles.
+    private static func isSpellingItem(_ item: NSMenuItem) -> Bool {
+        let spellingSelectors: Set<String> = [
+            "changeSpelling:", "ignoreSpelling:", "learnSpelling:",
+            "unlearnSpelling:", "showGuessPanel:", "checkSpelling:",
+        ]
+        func matches(_ menuItem: NSMenuItem) -> Bool {
+            guard let action = menuItem.action else { return false }
+            let name = NSStringFromSelector(action)
+            return spellingSelectors.contains(name)
+                || name.hasPrefix("toggleAutomaticSpellingCorrection")
+                || name.hasPrefix("toggleContinuousSpellChecking")
+                || name.hasPrefix("toggleGrammarChecking")
+        }
+        if matches(item) { return true }
+        if let submenu = item.submenu {
+            return submenu.items.contains(where: matches)
+        }
+        return false
+    }
+}
+
+/// Bridges a Swift closure to an NSMenuItem target/action pair.
+final class ClosureMenuItem: NSMenuItem {
+    private let handler: @MainActor () -> Void
+
+    init(title: String, handler: @escaping @MainActor () -> Void) {
+        self.handler = handler
+        super.init(title: title, action: #selector(run), keyEquivalent: "")
+        target = self
+    }
+
+    @available(*, unavailable)
+    required init(coder: NSCoder) { fatalError("not used") }
+
+    @objc private func run() {
+        MainActor.assumeIsolated { handler() }
+    }
+}
+#endif

@@ -329,7 +329,7 @@ extension LiquidDoc {
         let link: Link
         init(_ link: Link) { self.link = link }
 
-        enum CodingKeys: String, CodingKey { case to, fragment, rel, bibtex, span }
+        enum CodingKeys: String, CodingKey { case to, fragment, rel, bibtex, span, locator }
 
         func encode(to encoder: Encoder) throws {
             var container = encoder.container(keyedBy: CodingKeys.self)
@@ -338,6 +338,7 @@ extension LiquidDoc {
             try container.encodeIfPresent(link.rel, forKey: .rel)
             try container.encodeIfPresent(link.bibtex, forKey: .bibtex)
             try container.encodeIfPresent(link.span, forKey: .span)
+            try container.encodeIfPresent(link.locator, forKey: .locator)
         }
     }
 

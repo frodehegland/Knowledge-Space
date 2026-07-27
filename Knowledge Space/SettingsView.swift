@@ -3,6 +3,7 @@ import SwiftUI
 import AppKit
 import UniformTypeIdentifiers
 import ImagePlayground
+import FoundationModels
 
 /// The app's Settings window (Knowledge Space → Settings…, ⌘,) — the
 /// panes carried over from Origami Text that apply here: who is reading,
@@ -66,6 +67,30 @@ private struct AppearanceSettingsView: View {
                 Text("Note Layout")
             } footer: {
                 Text("In the list, a clicked note grows in place to hold all its words — still the writing page — with the controls on the right. The other layouts open the note in its own pane, the controls beside it or under it. Documents that read rather than write always open in their own pane.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Section {
+                Picker("Articles shelf", selection: $state.articlesShelfLabel) {
+                    Text("Articles").tag("Articles")
+                    Text("Papers").tag("Papers")
+                }
+                .pickerStyle(.inline)
+            } header: {
+                Text("Library")
+            } footer: {
+                Text("What the Library's shelf of non-book works calls itself in the sidebar — your community's word for them.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Section {
+                Stepper(value: $state.listTextSize, in: 10...20, step: 1) {
+                    Text("List text size: \(Int(state.listTextSize)) pt")
+                }
+            } header: {
+                Text("Notes List")
+            } footer: {
+                Text("The size of the list's rows in the In-the-list layout — the title and the body's first words, set in New York, the body's own type.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -499,8 +524,37 @@ private struct LibrarySettingsView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
+            Section {
+                LabeledContent("Reader Library") {
+                    Text(state.readerLibraryURL?.path ?? "Not set")
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .foregroundStyle(.secondary)
+                }
+                Button("Choose Reader Library…") { chooseReaderLibrary() }
+                Button("Scan Now") { state.scanReaderLibrary() }
+                    .disabled(state.readerLibraryURL == nil)
+                Button("Re-scan Shelf") { state.reharvestSources() }
+                    .disabled(state.readerLibraryURL == nil)
+                    .help("Re-reads every shelved source's PDF, refreshing titles, authors, abstracts, and margin notes the first scans may have missed")
+            } footer: {
+                Text("Where Reader keeps its PDFs. Knowledge Space reads each PDF's Visual-Meta — parsed from the end, as the format instructs — and every find becomes a source on the shelf, pointing back at its PDF so it opens in Reader. Scanned quietly at launch and on Scan Now; the PDFs themselves are never moved or changed.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
         }
         .formStyle(.grouped)
+    }
+
+    private func chooseReaderLibrary() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.message = "Choose the folder where Reader keeps its PDFs (the Reader Library)."
+        panel.prompt = "Grant"
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        state.chooseReaderLibrary(url)
     }
 
     private func chooseFolder() {
@@ -571,8 +625,34 @@ private struct AISettingsView: View {
         }
     }
 
+    /// The one honest readout of the on-device model's standing —
+    /// every AI feature in the app runs on it.
+    private var modelAvailability: String {
+        switch SystemLanguageModel.default.availability {
+        case .available:
+            return "Available — Apple Intelligence's on-device model. Everything AI in this app runs on it; nothing leaves this Mac."
+        case .unavailable(.deviceNotEligible):
+            return "Unavailable — this Mac does not support Apple Intelligence."
+        case .unavailable(.appleIntelligenceNotEnabled):
+            return "Unavailable — Apple Intelligence is switched off in System Settings."
+        case .unavailable(.modelNotReady):
+            return "Unavailable — the model is still downloading; it becomes available on its own."
+        case .unavailable:
+            return "Unavailable on this Mac."
+        }
+    }
+
     var body: some View {
         Form {
+            Section {
+                LabeledContent("On-device model") {
+                    Text(modelAvailability)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.trailing)
+                }
+            } header: {
+                Text("Model")
+            }
             Section {
                 Picker("Prompt", selection: $selection) {
                     ForEach(["AI Insights", "Themes", "Open Questions", "Agreements",
