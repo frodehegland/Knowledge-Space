@@ -2,6 +2,7 @@
 import SwiftUI
 import AppKit
 import UniformTypeIdentifiers
+import ImagePlayground
 
 /// The app's Settings window (Knowledge Space → Settings…, ⌘,) — the
 /// panes carried over from Origami Text that apply here: who is reading,
@@ -14,6 +15,8 @@ struct SettingsView: View {
         TabView {
             AuthorSettingsView()
                 .tabItem { Label("Author", systemImage: "person.text.rectangle") }
+            AppearanceSettingsView()
+                .tabItem { Label("Appearance", systemImage: "paintpalette") }
             LibrarySettingsView()
                 .tabItem { Label("Library", systemImage: "books.vertical") }
             LocationsSettingsView()
@@ -30,6 +33,47 @@ struct SettingsView: View {
     }
 }
 
+/// The window's look: a theme picked once, painting the columns, the
+/// list, and the writing page together.
+private struct AppearanceSettingsView: View {
+    @Environment(AppState.self) private var state
+
+    var body: some View {
+        @Bindable var state = state
+        Form {
+            Section {
+                Picker("Theme", selection: $state.theme) {
+                    ForEach(AppTheme.allCases) { theme in
+                        Text(theme.label).tag(theme)
+                    }
+                }
+                .pickerStyle(.inline)
+            } header: {
+                Text("Appearance")
+            } footer: {
+                Text("Gentle is the design's quiet greys — soft columns, grey buttons, an off-white page. High Contrast is black text on white throughout, the buttons outlined.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Section {
+                Picker("Note Layout", selection: $state.noteLayout) {
+                    ForEach(NoteLayout.allCases) { layout in
+                        Text(layout.label).tag(layout)
+                    }
+                }
+                .pickerStyle(.inline)
+            } header: {
+                Text("Note Layout")
+            } footer: {
+                Text("In the list, a clicked note grows in place to hold all its words — still the writing page — with the controls on the right. The other layouts open the note in its own pane, the controls beside it or under it. Documents that read rather than write always open in their own pane.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .formStyle(.grouped)
+    }
+}
+
 /// Who is reading — the user's card: the full public identity, kept in
 /// the shared folder as an ordinary Origami document, exactly as the
 /// phone keeps it. A bare name is never asked for; the name documents
@@ -37,6 +81,16 @@ struct SettingsView: View {
 /// people whose documents this library declines to show.
 private struct AuthorSettingsView: View {
     @Environment(AppState.self) private var state
+    @Environment(\.supportsImagePlayground) private var supportsImagePlayground
+    /// How a photograph is processed when it joins a contact record —
+    /// the style and prompt Image Playground draws with, carried over
+    /// from Digital Letters so both apps draw the community alike.
+    @AppStorage(AppSettings.portraitStyleKey)
+    private var portraitStyle = PortraitStyle.illustration.rawValue
+    @AppStorage(AppSettings.portraitPromptKey)
+    private var portraitPrompt = PortraitStyle.defaultConcept
+    @AppStorage(AppSettings.portraitInstantProcessingKey)
+    private var instantProcessing = false
     @State private var card = IdentityCard()
     @State private var loadedCardID: String?
     /// A newly picked photograph, held until Save Card processes it
@@ -49,6 +103,17 @@ private struct AuthorSettingsView: View {
     @State private var orcidMatches: [OrcidLookup.Match] = []
     @State private var showingOrcidMatches = false
     @State private var orcidError: String?
+
+    /// How the portrait pipeline stands on this Mac, in a sentence.
+    private var portraitsFooter: String {
+        if !supportsImagePlayground {
+            "Cartoon portraits need Apple Intelligence, which is not available on this Mac. Photos added to contact records are shown as-is."
+        } else if !state.portraits.supportsAutomaticGeneration {
+            "This Mac only allows cartoon portraits through the Image Playground window, so each is drawn from the person's form — this style and prompt are pre-set there. The original photos are never altered."
+        } else {
+            "Photos added to a contact record are turned into cartoon portraits, drawn on this Mac by Apple's Image Playground using this style and prompt. Changing the style re-draws every portrait from its original photo — the photos themselves are never altered, and an AI's logo is never processed."
+        }
+    }
 
     var body: some View {
         @Bindable var state = state
@@ -108,6 +173,42 @@ private struct AuthorSettingsView: View {
                 Text("Your Card")
             } footer: {
                 Text("Your public identity — nothing on the card is private. It is kept in the shared folder as an ordinary Origami document, so the phone and every other app read the same record. The photograph is processed to a small square, stored in the folder under the card's id, and named on the card. Documents credit the card's name as their author, attention lists are matched against it, and exports carry its ORCID iD and affiliation in Visual-Meta.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Section {
+                Picker("Cartoon style", selection: $portraitStyle) {
+                    ForEach(PortraitStyle.allCases) { style in
+                        Text(style.label).tag(style.rawValue)
+                    }
+                }
+                .onChange(of: portraitStyle) {
+                    state.portraits.restyleAllPortraits()
+                }
+                TextField("Portrait prompt", text: $portraitPrompt, axis: .vertical)
+                    .lineLimit(2...4)
+                if portraitPrompt != PortraitStyle.defaultConcept {
+                    Button("Reset Prompt to Default") {
+                        portraitPrompt = PortraitStyle.defaultConcept
+                    }
+                }
+                Toggle("Process photos the moment they are added",
+                       isOn: $instantProcessing)
+                if state.portraits.isRestyling {
+                    ProgressView(value: Double(state.portraits.restyleDone),
+                                 total: Double(max(state.portraits.restyleTotal, 1))) {
+                        Text("Re-drawing portraits… \(state.portraits.restyleDone) of \(state.portraits.restyleTotal)")
+                            .font(.caption)
+                    }
+                } else if state.portraits.supportsAutomaticGeneration {
+                    Button("Redo All Portraits") {
+                        state.portraits.restyleAllPortraits()
+                    }
+                }
+            } header: {
+                Text("Contact Portraits")
+            } footer: {
+                Text(portraitsFooter)
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

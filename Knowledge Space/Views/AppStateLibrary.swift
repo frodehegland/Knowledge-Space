@@ -167,7 +167,7 @@ extension AppState {
         let existing = ownCard
         let created = existing?.created ?? .now
         let id = existing?.id ?? LiquidAddress.makeID(author: name, created: created) { candidate in
-            self.index.byID[candidate] != nil
+            self.index.isIDTaken(candidate)
         }
         var card = card
         if let photoData, let processed = CardPhoto.processed(from: photoData) {

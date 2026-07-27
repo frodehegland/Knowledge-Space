@@ -10,6 +10,9 @@ import FoundationModels
 struct NoteOptionsColumn: View {
     @Environment(AppState.self) private var state
     let doc: LiquidDoc
+    /// Settings ▸ Appearance can lay the controls under the note
+    /// instead: the same sections, standing side by side in a bar.
+    var underNote = false
 
     @State private var running: Set<NoteAnalysis.Kind> = []
     @State private var errorText: String?
@@ -21,11 +24,16 @@ struct NoteOptionsColumn: View {
     }
 
     var body: some View {
+        if underNote { bottomBar } else { sideColumn }
+    }
+
+    private var sideColumn: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
                 actionSection
                 fileSection
                 analysisSection
+                flowSection
                 if doc.body != nil {
                     locationRow
                 }
@@ -43,20 +51,75 @@ struct NoteOptionsColumn: View {
         .greyColumnAppearance()
     }
 
+    /// The same controls under the note: each section keeps its
+    /// column's width and they stand shoulder to shoulder, the bar
+    /// scrolling when the window runs out of room.
+    private var bottomBar: some View {
+        ScrollView([.horizontal, .vertical]) {
+            HStack(alignment: .top, spacing: 28) {
+                actionSection
+                    .frame(width: 170)
+                fileSection
+                    .frame(width: 170)
+                VStack(alignment: .leading, spacing: 20) {
+                    analysisSection
+                    flowSection
+                    if doc.body != nil {
+                        locationRow
+                    }
+                    if let errorText {
+                        Text(errorText)
+                            .font(.caption)
+                            .foregroundStyle(.orange)
+                    }
+                }
+                .frame(width: 190, alignment: .leading)
+            }
+            .padding(14)
+        }
+        .frame(maxWidth: .infinity)
+        .frame(height: 235)
+        .greyColumnAppearance()
+    }
+
     // MARK: Action
 
+    /// The note's standing — written into the file itself, so every
+    /// device agrees. Clicking the current standing clears it back to
+    /// nothing; setting one saves the note out of the drafts.
     private var actionSection: some View {
         section("Action") {
-            ForEach(SidebarCatalog.actionFolders, id: \.self) { folder in
-                filingButton(folder)
+            ForEach(LiquidDoc.Action.allCases, id: \.self) { action in
+                actionButton(action)
             }
         }
+    }
+
+    private func actionButton(_ action: LiquidDoc.Action) -> some View {
+        Button {
+            state.setAction(doc.actionValue == action ? nil : action, for: doc)
+        } label: {
+            HStack {
+                Text(action.displayName)
+                if doc.actionValue == action {
+                    Spacer(minLength: 4)
+                    Image(systemName: "checkmark")
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .buttonStyle(GreyColumnButtonStyle())
     }
 
     // MARK: File
 
     private var fileSection: some View {
         section("File") {
+            // A letter's own file comes first: done means filed under
+            // Letters, out of Draft Letters.
+            if doc.documentType == LiquidDoc.DocumentType.letter.rawValue {
+                filingButton("Letters", label: "Letter")
+            }
             ForEach(SidebarCatalog.standardFiles, id: \.folder) { file in
                 filingButton(file.folder, label: file.label)
             }
@@ -90,15 +153,11 @@ struct NoteOptionsColumn: View {
         }
     }
 
-    /// The user's own folders: everything but the Action three, the
-    /// standard files, and Archived, which have their own places in
-    /// the column.
+    /// The user's own folders: everything but the standard files and
+    /// Archived, which have their own places in the column.
     private var fileFolders: [String] {
         state.filingFolders.filter { folder in
             folder.caseInsensitiveCompare(AppState.archivedFolderName) != .orderedSame
-                && !SidebarCatalog.actionFolders.contains {
-                    $0.caseInsensitiveCompare(folder) == .orderedSame
-                }
                 && !SidebarCatalog.standardFiles.contains {
                     $0.folder.caseInsensitiveCompare(folder) == .orderedSame
                 }
@@ -128,6 +187,7 @@ struct NoteOptionsColumn: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         }
+        .buttonStyle(GreyColumnButtonStyle())
     }
 
     // MARK: Analysis
@@ -227,26 +287,58 @@ struct NoteOptionsColumn: View {
 
     /// The note with its place changed and everything else carried over.
     private func replacingLocation(of doc: LiquidDoc, with location: String?) -> LiquidDoc {
-        LiquidDoc(format: doc.format,
-                  id: doc.id,
-                  title: doc.title,
-                  author: doc.author,
-                  created: doc.created,
-                  body: doc.body ?? [],
-                  links: doc.links,
-                  wraps: nil,
-                  attention: doc.attention,
-                  date: doc.date,
-                  aiOnBehalf: doc.aiOnBehalf,
-                  draft: doc.draft,
-                  onBehalfOf: doc.onBehalfOf,
-                  documentType: doc.documentType,
-                  location: location,
-                  concepts: doc.concepts,
-                  layouts: doc.layouts,
-                  mapConnections: doc.mapConnections,
-                  references: doc.references,
-                  fileURL: doc.fileURL)
+        var updated = doc
+        updated.location = location
+        return updated
+    }
+
+    // MARK: Flow
+
+    /// Flow, the reading aid from Digital Letters: dense prose broken
+    /// open — the note's words rendered for reading, sentences on
+    /// their own lines. The note itself is untouched; Unflow returns
+    /// to writing.
+    private var flowSection: some View {
+        section("Reading") {
+            Button {
+                withAnimation(.snappy) { state.flowReading.toggle() }
+            } label: {
+                HStack {
+                    Text(state.flowReading ? "Unflow" : "Flow")
+                    if state.flowReading {
+                        Spacer(minLength: 4)
+                        Image(systemName: "checkmark")
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .buttonStyle(GreyColumnButtonStyle())
+            .help("Break dense text open while reading: sentences get their own lines, clauses break after commas, parentheses stand apart — the note itself is untouched")
+            Button {
+                withAnimation(.snappy) { state.showsVisualMeta.toggle() }
+            } label: {
+                HStack {
+                    Text("Visual-Meta")
+                    if state.showsVisualMeta {
+                        Spacer(minLength: 4)
+                        Image(systemName: "checkmark")
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .buttonStyle(GreyColumnButtonStyle())
+            .disabled(hiddenMetadataParagraphs.isEmpty)
+            .help(hiddenMetadataParagraphs.isEmpty
+                  ? "This note carries no Visual-Meta appendix or analyses yet"
+                  : "Show the metadata riding with the note — its Visual-Meta appendix and analyses — under the words. The blocks travel with the file either way.")
+        }
+    }
+
+    /// The metadata paragraphs the note editor keeps out of the writing:
+    /// the Visual-Meta appendix and the written analyses.
+    private var hiddenMetadataParagraphs: [LiquidDoc.Paragraph] {
+        let hidden = doc.visualMetaParagraphIDs.union(doc.analysisParagraphIDs)
+        return (doc.body ?? []).filter { hidden.contains($0.id) }
     }
 
     /// Quiet text, the location row's style — clicking runs the

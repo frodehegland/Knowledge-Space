@@ -10,8 +10,11 @@ struct LibrarySidebarView: View {
     #endif
     @State private var editingViews = false
     #if os(macOS)
-    /// The person form, opened from ctrl-click on People.
+    /// The person form, revealed from the People row.
     @State private var addingPerson = false
+    /// The place the pointer is resting on — People answers with its
+    /// reveal triangle.
+    @State private var hoveredPlace: SidebarItem?
     #endif
 
     var body: some View {
@@ -27,21 +30,51 @@ struct LibrarySidebarView: View {
                     // stands above the Library heading, unnamed.
                     Section {
                         ForEach(state.shownPlaces(of: section.places)) { place in
-                            Label(place.name, systemImage: place.systemImage)
-                                // Light grey icons, not the accent blue.
-                                .listItemTint(SidebarCatalog.iconTint)
-                                .tag(place.item)
+                            HStack(spacing: 0) {
+                                Label(place.name, systemImage: place.systemImage)
+                                Spacer(minLength: 0)
                                 #if os(macOS)
-                                // Ctrl-click on People adds someone to the
-                                // shared contact directory.
-                                .contextMenu {
-                                    if place.item == .people {
+                                // Resting the pointer on People reveals a
+                                // triangle; it opens the way to a new
+                                // person in the shared contact directory.
+                                if place.item == .people, hoveredPlace == .people {
+                                    Menu {
                                         Button("New Person…") {
                                             addingPerson = true
                                         }
+                                    } label: {
+                                        Image(systemName: "chevron.down")
+                                            .font(.caption.weight(.semibold))
+                                            .foregroundStyle(.secondary)
                                     }
+                                    .menuIndicator(.hidden)
+                                    .buttonStyle(.plain)
+                                    .fixedSize()
+                                    .help("Add a person to the contacts")
                                 }
                                 #endif
+                            }
+                            // Light grey icons, not the accent blue.
+                            .listItemTint(SidebarCatalog.iconTint)
+                            .tag(place.item)
+                            #if os(macOS)
+                            // Ctrl-click a filing folder of the user's own
+                            // making to remove the category; its notes stay.
+                            .contextMenu {
+                                if case .filedFolder(let folder) = place.item,
+                                   state.canRemoveFilingFolder(folder) {
+                                    Button("Remove Folder…", role: .destructive) {
+                                        state.removeFilingFolder(folder)
+                                    }
+                                }
+                            }
+                            #endif
+                            #if os(macOS)
+                            .onHover { inside in
+                                guard place.item == .people else { return }
+                                hoveredPlace = inside ? .people : nil
+                            }
+                            #endif
                         }
                         if section.title.isEmpty {
                             Button {
@@ -49,7 +82,7 @@ struct LibrarySidebarView: View {
                             } label: {
                                 Label {
                                     Text("New Note")
-                                        .foregroundStyle(.secondary)
+                                        .foregroundStyle(AppGreys.buttonText)
                                 } icon: {
                                     Image(systemName: "square.and.pencil")
                                         .foregroundStyle(SidebarCatalog.iconTint)
@@ -58,13 +91,27 @@ struct LibrarySidebarView: View {
                             .buttonStyle(.plain)
                             .disabled(state.index.folderURL == nil)
                             .help("A new note, straight into writing (⌘N)")
+                            Button {
+                                state.newLetter()
+                            } label: {
+                                Label {
+                                    Text("New Letter")
+                                        .foregroundStyle(AppGreys.buttonText)
+                                } icon: {
+                                    Image(systemName: "envelope")
+                                        .foregroundStyle(SidebarCatalog.iconTint)
+                                }
+                            }
+                            .buttonStyle(.plain)
+                            .disabled(state.index.folderURL == nil)
+                            .help("A new letter — a note marked Letter, drafted under Draft Letters")
                         }
                         if section.title == "Views" {
                             Button {
                                 editingViews = true
                             } label: {
                                 Label("Edit Views…", systemImage: "slider.horizontal.3")
-                                    .foregroundStyle(.secondary)
+                                    .foregroundStyle(AppGreys.buttonText)
                             }
                             .buttonStyle(.plain)
                         }
@@ -96,6 +143,7 @@ struct LibrarySidebarView: View {
                 openSettings()
             } label: {
                 Label("Settings", systemImage: "gearshape")
+                    .foregroundStyle(AppGreys.buttonText)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .contentShape(Rectangle())
             }
@@ -108,6 +156,13 @@ struct LibrarySidebarView: View {
         // material, so Knowledge Space is told apart from Liquid
         // Information at a glance.
         .greyColumnAppearance()
+        // The same thin line the options column stands behind: the flat
+        // greys swallow the split view's own divider, so the sidebar
+        // draws its edge itself.
+        .overlay(alignment: .trailing) {
+            HStack(spacing: 0) { Divider() }
+                .ignoresSafeArea()
+        }
         .sheet(isPresented: $editingViews) {
             EditViewsSheet()
         }
@@ -121,8 +176,9 @@ struct LibrarySidebarView: View {
         }
         #endif
         .navigationTitle("Knowledge Space")
-        // The same column width as Liquid Information's sidebar.
-        .navigationSplitViewColumnWidth(min: 215, ideal: 230)
+        // A slim spine, but never so slim the app's own name truncates:
+        // the minimum holds "Knowledge Space" whole at its headline size.
+        .navigationSplitViewColumnWidth(min: 160, ideal: 170)
     }
 }
 
@@ -175,13 +231,83 @@ struct EditViewsSheet: View {
     }
 }
 
+/// The window's appearance, chosen in Settings ▸ Appearance: Gentle is
+/// the design's quiet greys; High Contrast is black text on white.
+enum AppTheme: String, CaseIterable, Identifiable {
+    case gentle
+    case highContrast
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .gentle: "Gentle"
+        case .highContrast: "High Contrast"
+        }
+    }
+
+    static let key = "appearanceTheme"
+
+    static var current: AppTheme {
+        AppTheme(rawValue: UserDefaults.standard.string(forKey: key) ?? "") ?? .gentle
+    }
+}
+
+/// The window's colors, answering for the chosen theme. Gentle: side
+/// columns #eaeaea, buttons #d9d9d9 with #4d4d4d text, the list and
+/// writing page #ebebeb, every other word black. High Contrast:
+/// everything white, all text black, buttons outlined so they still
+/// read as buttons.
+enum AppGreys {
+    static var column: Color {
+        AppTheme.current == .highContrast
+            ? .white : Color(red: 234 / 255, green: 234 / 255, blue: 234 / 255)
+    }
+    static var button: Color {
+        AppTheme.current == .highContrast
+            ? .white : Color(red: 217 / 255, green: 217 / 255, blue: 217 / 255)
+    }
+    static var buttonText: Color {
+        AppTheme.current == .highContrast
+            ? .black : Color(red: 77 / 255, green: 77 / 255, blue: 77 / 255)
+    }
+    static var buttonBorder: Color {
+        AppTheme.current == .highContrast ? .black : .clear
+    }
+    static var page: Color {
+        AppTheme.current == .highContrast
+            ? .white : Color(red: 235 / 255, green: 235 / 255, blue: 235 / 255)
+    }
+    /// The default for every other word in the window — body, lists,
+    /// sidebar: pure black, not the system's softened label grey.
+    /// Applied once at the window root; .secondary and explicit greys
+    /// still read as themselves.
+    static var text: Color { .black }
+}
+
 /// The grey the window's side columns share — the sidebar and the note
-/// options column. One flat shade, darker than the stock sidebar, with
-/// the dark scheme forced so every label on it stands in white.
+/// options column. One flat light shade, the light scheme held so the
+/// greys read the same whatever the system appearance.
 extension View {
     func greyColumnAppearance() -> some View {
         self
-            .background(Color(white: 0.18).ignoresSafeArea())
-            .environment(\.colorScheme, .dark)
+            .background(AppGreys.column.ignoresSafeArea())
+            .environment(\.colorScheme, .light)
+    }
+}
+
+/// The side columns' button: a quiet rounded rectangle, #616161 words
+/// on #e0e0e0.
+struct GreyColumnButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .foregroundStyle(AppGreys.buttonText)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 5)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(AppGreys.button, in: RoundedRectangle(cornerRadius: 7))
+            .overlay(RoundedRectangle(cornerRadius: 7)
+                .strokeBorder(AppGreys.buttonBorder))
+            .opacity(configuration.isPressed ? 0.7 : 1)
     }
 }

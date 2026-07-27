@@ -21,6 +21,10 @@ struct ContentView: View {
     /// Full screen is a focus mode, entered and left with ESC — like
     /// Origami Text and Author: only the reading area shows.
     @State private var isFullScreen = false
+    /// The sidebar has no toggle — it is the way to every place — so
+    /// its column stays open no matter what state the window restores
+    /// with or what a stray gesture collapses.
+    @State private var columnVisibility: NavigationSplitViewVisibility = .all
     #if os(macOS)
     /// Full screen keeps a doorway: hovering the left edge slides the
     /// sidebar in as an overlay; moving away lets it fade.
@@ -53,7 +57,7 @@ struct ContentView: View {
             } else if LibraryViewRegistry.module(for: state.sidebarSelection)?.hidesDocumentList == true {
                 // Whole-library views keep the sidebar — the way to every
                 // other place — and give the canvas the list column's room.
-                NavigationSplitView {
+                NavigationSplitView(columnVisibility: $columnVisibility) {
                     LibrarySidebarView()
                         #if os(macOS)
                         .toolbar(removing: .sidebarToggle)
@@ -61,17 +65,45 @@ struct ContentView: View {
                 } detail: {
                     detailPane
                 }
+            } else if state.notesOpenInList {
+                // "In the list": two columns only — the sidebar and the
+                // list, which is the page. No third pane at all.
+                NavigationSplitView(columnVisibility: $columnVisibility) {
+                    LibrarySidebarView()
+                        #if os(macOS)
+                        .toolbar(removing: .sidebarToggle)
+                        #endif
+                } detail: {
+                    contentPane
+                        .scrollContentBackground(.hidden)
+                        .background(AppGreys.page)
+                        .environment(\.colorScheme, .light)
+                        #if os(macOS)
+                        .safeAreaInset(edge: .bottom, spacing: 0) { findBar }
+                        .safeAreaInset(edge: .top, spacing: 0) {
+                            contentHeader
+                        }
+                        #endif
+                }
+                #if !os(macOS)
+                .searchable(text: $state.searchText, prompt: "Title, author, or text")
+                #endif
             } else {
-                NavigationSplitView {
+                NavigationSplitView(columnVisibility: $columnVisibility) {
                     LibrarySidebarView()
                         #if os(macOS)
                         .toolbar(removing: .sidebarToggle)
                         #endif
                 } content: {
                     contentPane
+                        // The list stands on the design's page grey,
+                        // whatever the system appearance.
+                        .scrollContentBackground(.hidden)
+                        .background(AppGreys.page)
+                        .environment(\.colorScheme, .light)
                         // The list is a spine, not a page: it keeps to a
                         // modest width so the words get the room.
-                        .navigationSplitViewColumnWidth(min: 150, ideal: 200, max: 340)
+                        .navigationSplitViewColumnWidth(min: 150, ideal: 225, max: 340)
                         #if os(macOS)
                         // Find sits framed at the foot of the notes list
                         // and filters it; the Timeline heading sits as a
@@ -90,6 +122,11 @@ struct ContentView: View {
                 #endif
             }
         }
+        // Whatever tries to fold the sidebar away — window restoration,
+        // a divider drag to zero — it comes straight back.
+        .onChange(of: columnVisibility) {
+            if columnVisibility != .all { columnVisibility = .all }
+        }
         .fileImporter(isPresented: $showingFolderPicker,
                       allowedContentTypes: [.folder]) { result in
             if case .success(let url) = result {
@@ -106,11 +143,12 @@ struct ContentView: View {
         .onChange(of: scenePhase) { _, phase in
             if phase == .active { state.index.rescan() }
         }
-        // "To Do" and "Done" stand ready once the library has been read.
+        // Once the library has been read, old folder-style actions
+        // migrate into the notes themselves.
         .onChange(of: state.index.isScanning) { _, scanning in
-            if !scanning { state.ensureStandingNotes() }
+            if !scanning { state.libraryUpkeep() }
         }
-        .task { state.ensureStandingNotes() }
+        .task { state.libraryUpkeep() }
         // A folder bookmarked while the app could only read needs one
         // fresh pick to write again; ask straight away.
         .task {
@@ -151,6 +189,9 @@ struct ContentView: View {
             }
         }
         .animation(.default, value: state.transientNote)
+        // A theme change repaints the whole window: the colors are read
+        // where they are used, so the window rebuilds around them.
+        .id(state.theme)
         // The Mac's toolbar stays bare — the title and the sidebar
         // toggle alone, as the layout shows. New Note lives on ⌘N, the
         // folder in Settings ▸ Library, and Find in the options column.
@@ -210,6 +251,8 @@ struct ContentView: View {
         case .timeline: timelineHeader
         case .place: listHeader("Places")
         case .people: listHeader("People")
+        case .draftLetters: listHeader("Draft Letters")
+        case .action(let action): listHeader(action.displayName)
         default: EmptyView()
         }
     }
@@ -282,7 +325,9 @@ struct ContentView: View {
         }
         .padding(10)
         .frame(maxWidth: .infinity)
-        .background(.bar)
+        // The strip stands on the same page grey as the list above it,
+        // not a system material band of its own.
+        .background(AppGreys.page)
     }
     #endif
 
@@ -297,7 +342,7 @@ struct ContentView: View {
            let detail = module.makeDetail?(state) {
             detail
         } else if let doc = state.selectedDoc {
-            if doc.documentType == LiquidDoc.DocumentType.note.rawValue {
+            if Self.isWritable(doc) {
                 NoteWritingView(doc: doc, measure: 800, centersContent: true)
                     .id(doc.id)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -521,9 +566,34 @@ struct ContentView: View {
             DocumentListView(grouping: .place)
         } else if state.sidebarSelection == .people {
             PeopleListView()
+        } else if state.sidebarSelection == .draftLetters {
+            DocumentListView(draftLettersOnly: true)
+        } else if case .action(let action)? = state.sidebarSelection {
+            DocumentListView(action: action)
         } else {
             // The Inbox: the reader's notes plus anything unread.
             DocumentListView(inboxOnly: true)
+        }
+    }
+
+    /// Notes and letters write in place; every other kind reads.
+    /// The kinds that are their own writing page — notes and letters.
+    /// The document list asks too, for the in-list layout.
+    static func isWritable(_ doc: LiquidDoc) -> Bool {
+        doc.documentType == LiquidDoc.DocumentType.note.rawValue
+            || doc.documentType == LiquidDoc.DocumentType.letter.rawValue
+    }
+
+    /// A note — or a letter, a note in every way — is its own writing
+    /// space: click and type; it saves itself. Other kinds read
+    /// through the reader.
+    @ViewBuilder private func notePane(_ doc: LiquidDoc) -> some View {
+        if Self.isWritable(doc) {
+            NoteWritingView(doc: doc)
+                .id(doc.id)
+        } else {
+            DocumentReaderView(doc: doc)
+                .id(doc.id)
         }
     }
 
@@ -535,18 +605,24 @@ struct ContentView: View {
                   let detail = module.makeDetail?(state) {
             detail
         } else if let doc = state.selectedDoc {
-            HStack(spacing: 0) {
-                // A note is its own writing space — click and type; it
-                // saves itself. Other kinds read through the reader.
-                if doc.documentType == LiquidDoc.DocumentType.note.rawValue {
-                    NoteWritingView(doc: doc)
-                        .id(doc.id)
-                } else {
-                    DocumentReaderView(doc: doc)
-                        .id(doc.id)
+            // Where the note stands and where its controls go — the
+            // reader's choice, made in Settings ▸ Appearance. (In the
+            // two-column "In the list" arrangement this pane does not
+            // exist; reaching here — a module's list, People, parallel
+            // reading — the document opens as in the own-pane layouts.)
+            switch state.noteLayout {
+            case .controlsUnder:
+                VStack(spacing: 0) {
+                    notePane(doc)
+                    Divider()
+                    NoteOptionsColumn(doc: doc, underNote: true)
                 }
-                Divider()
-                NoteOptionsColumn(doc: doc)
+            default:
+                HStack(spacing: 0) {
+                    notePane(doc)
+                    Divider()
+                    NoteOptionsColumn(doc: doc)
+                }
             }
         } else if state.sidebarSelection == .people,
                   let listing = state.selectedPersonListing {

@@ -79,21 +79,13 @@ nonisolated enum VisualMeta {
 
         add(metaBlock(for: doc, identity: identity))
 
-        return LiquidDoc(format: doc.format,
-                         id: doc.id,
-                         title: doc.title,
-                         author: doc.author,
-                         created: doc.created,
-                         body: paragraphs,
-                         links: doc.links,
-                         wraps: nil,
-                         attention: doc.attention,
-                         date: doc.date,
-                         aiOnBehalf: doc.aiOnBehalf,
-                         draft: doc.draft,
-                         onBehalfOf: doc.onBehalfOf,
-                         documentType: doc.documentType,
-                         fileURL: doc.fileURL)
+        // Only the body changes: every other field — action, location,
+        // concepts, layouts, connections, references, and whatever comes
+        // next — travels into the published copy untouched, keeping the
+        // JSON authoritative over the appendix that describes it.
+        var published = doc
+        published.body = paragraphs
+        return published
     }
 
     /// The machine-readable block, kept as a single paragraph so the marker

@@ -127,6 +127,19 @@ final class LibraryIndex {
         }
     }
 
+    /// Whether a candidate document id is already spoken for — by any
+    /// indexed document (Archived included) or by an id-named file the
+    /// scanner has not read yet. The writer's side of collision honesty:
+    /// nobody may emit an id that collides knowingly, and the reach is
+    /// everything this library can see, not just what its lists show.
+    func isIDTaken(_ candidate: String) -> Bool {
+        if allByID[candidate] != nil { return true }
+        guard let folderURL else { return false }
+        return FileManager.default.fileExists(
+            atPath: folderURL.appendingPathComponent(candidate)
+                .appendingPathExtension(LiquidDoc.fileExtension).path)
+    }
+
     /// Follows `revises` chains forward to the newest revision.
     /// On a cycle, returns the input unchanged.
     func latestRevision(of id: String) -> String {
@@ -273,7 +286,14 @@ nonisolated enum LibraryScanner {
         var mentions: [String: [String]] = [:]
         for entry in timeline.reversed()
         where entry.doc.documentType != IdentityCard.documentType {
-            let text = entry.doc.bodyEditingText.lowercased()
+            // Content only: the Visual-Meta appendix is metadata, and its
+            // self-citation names the author — not a mention in the words.
+            let appendixIDs = entry.doc.visualMetaParagraphIDs
+            let text = (entry.doc.body ?? [])
+                .filter { !appendixIDs.contains($0.id) }
+                .map(\.text)
+                .joined(separator: "\n")
+                .lowercased()
             guard !text.isEmpty else { continue }
             for set in nameSets
             where set.names.contains(where: { containsWholeName($0, in: text) }) {

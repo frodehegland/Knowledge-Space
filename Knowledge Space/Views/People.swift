@@ -36,6 +36,15 @@ nonisolated struct Person: Codable, Identifiable, Hashable, Sendable {
     /// machine shows the face with the name. Optional so records saved
     /// before the field existed still decode.
     var portraitFile: String?
+    /// Marks a record that is an AI model, not a person: the given name
+    /// holds the model's name ("Claude"), the affiliation its company
+    /// ("Anthropic"), and `aiVersion` its version. Optional so earlier
+    /// records still decode. Digital Letters does not know these fields
+    /// yet — its rewrite of People.json drops them; re-toggling restores.
+    var isAI: Bool?
+    var isArtificial: Bool { isAI ?? false }
+    /// The AI model's version ("5", "4.6"); AI records only.
+    var aiVersion: String?
     var localID: String = UUID().uuidString
 
     var id: String { orcid.isEmpty ? localID : orcid }
@@ -67,6 +76,8 @@ nonisolated struct Person: Codable, Identifiable, Hashable, Sendable {
         if (merged.publicProfile ?? "").isEmpty { merged.publicProfile = other.publicProfile }
         if merged.letterDistribution == nil { merged.letterDistribution = other.letterDistribution }
         if merged.portraitFile == nil { merged.portraitFile = other.portraitFile }
+        if merged.isAI == nil { merged.isAI = other.isAI }
+        if (merged.aiVersion ?? "").isEmpty { merged.aiVersion = other.aiVersion }
         for email in other.emails
         where !merged.emails.contains(where: { $0.caseInsensitiveCompare(email) == .orderedSame }) {
             merged.emails.append(email)
@@ -371,5 +382,135 @@ nonisolated enum PhotoSearchClient {
                       let imageURL = URL(string: source) else { return nil }
                 return FoundPhoto(title: page.title, imageURL: imageURL)
             }
+    }
+
+    // MARK: Logos
+
+    /// Logos found online for an AI's company and model. Two things set
+    /// this apart from the photograph search: the page search carries
+    /// "AI" beside each term, so the model's page outranks people who
+    /// share its name ("Claude"); and the logos are taken from each
+    /// matching page's own image files — company and product logos are
+    /// non-free, so the lead-image path the photograph search uses
+    /// never sees them.
+    static func searchLogos(terms: [String]) async throws -> [FoundPhoto] {
+        var titles: [String] = []
+        for term in terms {
+            let query = term.contains("AI") ? term : term + " AI"
+            for title in try await pageTitles(matching: query, limit: 4)
+            where !titles.contains(title) {
+                titles.append(title)
+            }
+        }
+        let files = try await logoFiles(onPages: titles)
+        return try await thumbnails(for: files)
+    }
+
+    /// The titles of the pages matching a search, best first.
+    private static func pageTitles(matching query: String, limit: Int) async throws -> [String] {
+        let data = try await api([
+            URLQueryItem(name: "action", value: "query"),
+            URLQueryItem(name: "list", value: "search"),
+            URLQueryItem(name: "srsearch", value: query),
+            URLQueryItem(name: "srlimit", value: String(limit)),
+            URLQueryItem(name: "srnamespace", value: "0"),
+        ])
+        struct Envelope: Decodable {
+            struct Query: Decodable { let search: [Item]? }
+            struct Item: Decodable { let title: String }
+            let query: Query?
+        }
+        return (try JSONDecoder().decode(Envelope.self, from: data).query?.search ?? [])
+            .map(\.title)
+    }
+
+    /// Wikipedia's shared interface art, never anyone's logo.
+    private static let logoNoise = ["commons-logo", "oojs", "symbol category",
+                                    "wikidata", "wikimedia", "wiktionary",
+                                    "question book", "edit-ltr"]
+
+    /// The logo-looking image files on the given pages, page order kept,
+    /// at most two per page.
+    private static func logoFiles(onPages titles: [String]) async throws -> [String] {
+        guard !titles.isEmpty else { return [] }
+        let data = try await api([
+            URLQueryItem(name: "action", value: "query"),
+            URLQueryItem(name: "titles", value: titles.joined(separator: "|")),
+            URLQueryItem(name: "prop", value: "images"),
+            URLQueryItem(name: "imlimit", value: "100"),
+        ])
+        struct Envelope: Decodable {
+            struct Query: Decodable { let pages: [Page]? }
+            struct Page: Decodable {
+                let title: String
+                let images: [Image]?
+            }
+            struct Image: Decodable { let title: String }
+            let query: Query?
+        }
+        let pages = try JSONDecoder().decode(Envelope.self, from: data).query?.pages ?? []
+        let byTitle = Dictionary(pages.map { ($0.title, $0.images ?? []) },
+                                 uniquingKeysWith: { first, _ in first })
+        var files: [String] = []
+        for pageTitle in titles {
+            var kept = 0
+            for image in byTitle[pageTitle] ?? [] {
+                let name = image.title.lowercased()
+                guard kept < 2, files.count < 10,
+                      name.contains("logo") || name.contains("symbol"),
+                      !logoNoise.contains(where: { name.contains($0) }),
+                      !files.contains(image.title)
+                else { continue }
+                files.append(image.title)
+                kept += 1
+            }
+        }
+        return files
+    }
+
+    /// Renderable thumbnails for image files — an SVG logo comes back
+    /// as a PNG — in the order asked for.
+    private static func thumbnails(for files: [String]) async throws -> [FoundPhoto] {
+        guard !files.isEmpty else { return [] }
+        let data = try await api([
+            URLQueryItem(name: "action", value: "query"),
+            URLQueryItem(name: "titles", value: files.joined(separator: "|")),
+            URLQueryItem(name: "prop", value: "imageinfo"),
+            URLQueryItem(name: "iiprop", value: "url"),
+            URLQueryItem(name: "iiurlwidth", value: "600"),
+        ])
+        struct Envelope: Decodable {
+            struct Query: Decodable { let pages: [Page]? }
+            struct Page: Decodable {
+                let title: String
+                let imageinfo: [Info]?
+            }
+            struct Info: Decodable { let thumburl: String? }
+            let query: Query?
+        }
+        let pages = try JSONDecoder().decode(Envelope.self, from: data).query?.pages ?? []
+        let urls = Dictionary(pages.map { ($0.title, $0.imageinfo?.first?.thumburl) },
+                              uniquingKeysWith: { first, _ in first })
+        return files.compactMap { file in
+            guard let source = urls[file] ?? nil, let url = URL(string: source) else { return nil }
+            // "File:Anthropic logo.svg" → "Anthropic logo".
+            let name = file.replacingOccurrences(of: "File:", with: "")
+                .replacingOccurrences(of: ".svg", with: "")
+                .replacingOccurrences(of: ".png", with: "")
+            return FoundPhoto(title: name, imageURL: url)
+        }
+    }
+
+    private static func api(_ items: [URLQueryItem]) async throws -> Data {
+        var components = URLComponents(string: "https://en.wikipedia.org/w/api.php")
+        components?.queryItems = items + [
+            URLQueryItem(name: "format", value: "json"),
+            URLQueryItem(name: "formatversion", value: "2"),
+        ]
+        guard let url = components?.url else { return Data() }
+        var request = URLRequest(url: url)
+        // Wikimedia asks API clients to identify themselves.
+        request.setValue("KnowledgeSpace/1.0 (macOS)", forHTTPHeaderField: "User-Agent")
+        return try await URLSession.shared.data(for: request).0
     }
 }

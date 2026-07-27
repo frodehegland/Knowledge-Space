@@ -151,26 +151,10 @@ nonisolated enum NoteAnalysis {
 
     private static func replacingBody(of doc: LiquidDoc,
                                       with paragraphs: [LiquidDoc.Paragraph]) -> LiquidDoc {
-        LiquidDoc(format: doc.format,
-                  id: doc.id,
-                  title: doc.title,
-                  author: doc.author,
-                  created: doc.created,
-                  body: paragraphs,
-                  links: doc.links,
-                  wraps: nil,
-                  attention: doc.attention,
-                  date: doc.date,
-                  aiOnBehalf: doc.aiOnBehalf,
-                  draft: doc.draft,
-                  onBehalfOf: doc.onBehalfOf,
-                  documentType: doc.documentType,
-                  location: doc.location,
-                  concepts: doc.concepts,
-                  layouts: doc.layouts,
-                  mapConnections: doc.mapConnections,
-                  references: doc.references,
-                  fileURL: doc.fileURL)
+        // Only the body changes; every other field rides along untouched.
+        var updated = doc
+        updated.body = paragraphs
+        return updated
     }
 }
 

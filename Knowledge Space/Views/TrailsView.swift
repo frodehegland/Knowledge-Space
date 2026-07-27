@@ -791,9 +791,8 @@ private struct NewTrailSheet: View {
         let trimmed = name.trimmingCharacters(in: .whitespaces)
         let created = Date.now
         let author = model.authorName
-        let taken = Set(model.index.byID.keys)
         let id = LiquidAddress.makeID(author: author, created: created,
-                                      isTaken: { taken.contains($0) })
+                                      isTaken: { model.index.isIDTaken($0) })
         let ordered = Dictionary(uniqueKeysWithValues: stops.enumerated().map { ($1.docID, $0) })
         let documentStops = stops.enumerated().map { index, stop in
             // A delta stop may only follow an earlier one; anything else

@@ -401,9 +401,8 @@ struct StrangerView: View {
         }
         let created = Date.now
         let author = "The Stranger"
-        let taken = Set(model.index.byID.keys)
         let id = LiquidAddress.makeID(author: author, created: created,
-                                      isTaken: { taken.contains($0) })
+                                      isTaken: { model.index.isIDTaken($0) })
         var paragraphs: [LiquidDoc.Paragraph] = []
         var links: [LiquidDoc.Link] = []
         var linked: Set<String> = []

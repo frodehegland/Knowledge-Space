@@ -371,9 +371,8 @@ struct GlossaryView: View {
         }
         let created = Date.now
         let author = model.authorName
-        let taken = Set(model.index.byID.keys)
         let id = LiquidAddress.makeID(author: author, created: created,
-                                      isTaken: { taken.contains($0) })
+                                      isTaken: { model.index.isIDTaken($0) })
         var paragraphs: [LiquidDoc.Paragraph] = []
         var counter = 0
         func add(_ text: String, heading: Int? = nil) {

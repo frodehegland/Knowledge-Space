@@ -4,6 +4,28 @@ import Observation
 import AppKit
 #endif
 
+/// Where a clicked note opens, chosen in Settings ▸ Appearance. The
+/// default is the list itself: the row grows to hold all the words —
+/// still the writing page, click and type — with the controls standing
+/// on the window's right. The other layouts open the note in its own
+/// pane, controls beside or under it. Documents that read rather than
+/// write (articles, transcripts…) always open in their own pane.
+enum NoteLayout: String, CaseIterable, Identifiable {
+    case inList
+    case controlsBeside
+    case controlsUnder
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .inList: "In the list"
+        case .controlsBeside: "Own pane, controls beside"
+        case .controlsUnder: "Own pane, controls under"
+        }
+    }
+}
+
 /// App-wide state: the library folder and its index, plus reader
 /// navigation. The folder choice persists across launches as a
 /// security-scoped bookmark.
@@ -31,12 +53,59 @@ final class AppState {
     var selectedDocID: String? {
         didSet {
             if let selectedDocID { markRead(selectedDocID) }
+            if oldValue != selectedDocID {
+                flowReading = false
+                showsVisualMeta = false
+            }
         }
     }
+    /// Whether the note page shows the metadata riding with the note —
+    /// the Visual-Meta appendix and the written analyses — rendered
+    /// under the words. Display only: the blocks travel with the file
+    /// whether or not they are shown. Resets when the reading moves on.
+    var showsVisualMeta = false
+    /// Flow, the reading aid carried over from Digital Letters: while
+    /// on, dense prose is broken open for reading — sentences on their
+    /// own lines, clauses after commas, parentheses apart. Display
+    /// only, never written into the document; it turns off when the
+    /// reading moves to another note.
+    var flowReading = false
     /// A paragraph to scroll to and flash, on arrival by fragment link.
     var pendingFragment: String?
     /// Superseded documents are hidden by default; history stays reachable.
     var showsSuperseded = false
+    /// The window's appearance — Gentle greys or High Contrast — chosen
+    /// in Settings ▸ Appearance; the window rebuilds when it changes.
+    var theme: AppTheme = AppTheme.current {
+        didSet { UserDefaults.standard.set(theme.rawValue, forKey: AppTheme.key) }
+    }
+    /// Whether the window currently stands as the two-column "In the
+    /// list" arrangement: documents open in the list itself and no
+    /// third pane exists. A module's canvas, the People place, and
+    /// parallel reading still bring their own pane.
+    var notesOpenInList: Bool {
+        noteLayout == .inList
+            && parallelDoc == nil
+            && sidebarSelection != .people
+            && LibraryViewRegistry.module(for: sidebarSelection) == nil
+    }
+
+    /// Where a clicked note opens — see `NoteLayout`. This machine's
+    /// presentation choice, persisted like the theme, chosen in
+    /// Settings ▸ Appearance.
+    var noteLayout: NoteLayout = {
+        if let raw = UserDefaults.standard.string(forKey: "noteLayout"),
+           let layout = NoteLayout(rawValue: raw) {
+            return layout
+        }
+        // The older two-way choice, honored once; otherwise the default.
+        return UserDefaults.standard.bool(forKey: "noteControlsUnderNote")
+            ? .controlsUnder : .inList
+    }() {
+        didSet {
+            UserDefaults.standard.set(noteLayout.rawValue, forKey: "noteLayout")
+        }
+    }
 
     // MARK: - View-module state (see LibraryViewModule.swift)
 
@@ -65,12 +134,6 @@ final class AppState {
             self?.currentPlace = place
         }
         placeFinder.begin()
-        // "To Do" is a standing filing folder: filing a note there marks
-        // it to do, and the sidebar's To Do place lists exactly those.
-        if !filingFolders.contains(where: { $0.caseInsensitiveCompare("To Do") == .orderedSame }) {
-            filingFolders.insert("To Do", at: 0)
-            UserDefaults.standard.set(filingFolders, forKey: "filingFolders")
-        }
         // Archived is a trash can: the index keeps its documents out of
         // every list and view until they are unfiled.
         index.setArchivedIDs(archivedDocumentIDs)
@@ -203,6 +266,28 @@ final class AppState {
         UserDefaults.standard.set(Array(draftDocumentIDs), forKey: "draftDocumentIDs")
     }
 
+    // MARK: - Action (the note's standing, travelling in the file)
+
+    /// Sets the note's action standing — nothing, To Do, In Progress,
+    /// Done, or Cancelled — written into the file itself, like the
+    /// draft flag, so every device agrees. Choosing a standing is
+    /// saving: the draft flag clears with it.
+    func setAction(_ action: LiquidDoc.Action?, for doc: LiquidDoc) {
+        var updated = doc
+        updated.action = action?.rawValue
+        if action != nil {
+            if draftDocumentIDs.remove(doc.id) != nil { persistDraftIDs() }
+            updated.draft = false
+        }
+        guard updated.action != doc.action || updated.draft != doc.draft else { return }
+        do {
+            try updated.jsonData().write(to: updated.fileURL, options: .atomic)
+            index.rescan()
+        } catch {
+            showNote("Could not update the note: \(error.localizedDescription)")
+        }
+    }
+
     // MARK: - Filing (the system shared with Origami Text)
 
     /// The one folder with special meaning: a document filed here leaves
@@ -236,12 +321,11 @@ final class AppState {
     }
 
     /// The sidebar's Filed section: the same folders the note column
-    /// offers, in the same order — the Action run, the standard files,
-    /// the user's own — then any folder only the filings remember, with
-    /// Archived last.
+    /// offers, in the same order — the standard files, the user's own —
+    /// then any folder only the filings remember, with Archived last.
     var sidebarFiledFolders: [String] {
-        var folders = SidebarCatalog.actionFolders
-            + SidebarCatalog.standardFiles.map(\.folder)
+        var folders = SidebarCatalog.standardFiles.map(\.folder)
+            + ["Letters"]
         func append(_ candidates: [String]) {
             for candidate in candidates
             where candidate.caseInsensitiveCompare(Self.archivedFolderName) != .orderedSame
@@ -316,6 +400,127 @@ final class AppState {
     }
 
     #if os(macOS)
+    /// A folder the user may remove: their own filing folders. The
+    /// structural places — the standard files, Letters, and Archived —
+    /// return on their own, so offering their removal would be a lie.
+    func canRemoveFilingFolder(_ name: String) -> Bool {
+        let structural = SidebarCatalog.standardFiles.map(\.folder)
+            + ["Letters", Self.archivedFolderName]
+        return !structural.contains { $0.caseInsensitiveCompare(name) == .orderedSame }
+    }
+
+    /// Ctrl-click ▸ Remove Folder…: the category goes; its notes stay.
+    /// Filing is a local preference, so nothing touches the files —
+    /// the notes simply return to the library at large. Asked about
+    /// only when the folder holds something.
+    func removeFilingFolder(_ name: String) {
+        let filedIDs = filedFolders
+            .filter { $0.value.caseInsensitiveCompare(name) == .orderedSame }
+            .map(\.key)
+        if !filedIDs.isEmpty {
+            let alert = NSAlert()
+            alert.messageText = "Remove Folder “\(name)”?"
+            alert.informativeText = filedIDs.count == 1
+                ? "Its note stays in the library — it is just no longer filed here."
+                : "Its \(filedIDs.count) notes stay in the library — they are just no longer filed here."
+            alert.addButton(withTitle: "Remove")
+            alert.addButton(withTitle: "Cancel")
+            guard alert.runModal() == .alertFirstButtonReturn else { return }
+        }
+        for id in filedIDs { filedFolders.removeValue(forKey: id) }
+        filingFolders.removeAll { $0.caseInsensitiveCompare(name) == .orderedSame }
+        UserDefaults.standard.set(filingFolders, forKey: "filingFolders")
+        persistFiling()
+        // The place being read is gone: land somewhere real.
+        if case .filedFolder(let selected) = sidebarSelection,
+           selected.caseInsensitiveCompare(name) == .orderedSame {
+            sidebarSelection = .library
+        }
+    }
+
+    /// Ctrl-click ▸ Delete File…: after confirmation, the document's
+    /// file moves to the Trash — recoverable there, but gone from the
+    /// shared folder for everyone who syncs it. The one deliberately
+    /// destructive act in the app, so it is asked about every time,
+    /// and the Trash keeps the words.
+    func deleteFile(_ doc: LiquidDoc) {
+        let alert = NSAlert()
+        alert.messageText = "Delete “\(doc.title)”?"
+        alert.informativeText = "“\(doc.fileURL.lastPathComponent)” moves to the Trash and leaves the shared folder — for everyone who syncs it. (Filing under Archived hides a note without removing it.)"
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "Delete")
+        alert.addButton(withTitle: "Cancel")
+        alert.buttons.first?.hasDestructiveAction = true
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        do {
+            try FileManager.default.trashItem(at: doc.fileURL, resultingItemURL: nil)
+        } catch {
+            showNote("Could not delete the file: \(error.localizedDescription)")
+            return
+        }
+        if filedFolders.removeValue(forKey: doc.id) != nil { persistFiling() }
+        if selectedDocID == doc.id { selectedDocID = nil }
+        index.rescan()
+        showNote("“\(doc.title)” moved to the Trash.")
+    }
+
+    // MARK: - Renaming files
+
+    /// The human half of the document's file name — what precedes the
+    /// "--<id>" suffix, or "" when the file is named by its bare id.
+    /// A file outside the convention (a legacy name) is offered whole.
+    private static func fileNameSlug(of doc: LiquidDoc) -> String {
+        var stem = doc.fileURL.lastPathComponent
+        if stem.lowercased().hasSuffix("." + LiquidDoc.fileExtension) {
+            stem = String(stem.dropLast(LiquidDoc.fileExtension.count + 1))
+        }
+        if stem.lowercased() == doc.id { return "" }
+        if stem.lowercased().hasSuffix("--" + doc.id) {
+            return String(stem.dropLast(doc.id.count + 2))
+        }
+        return stem
+    }
+
+    /// Ctrl-click ▸ Rename File…: changes the human half of a document's
+    /// file name and nothing else. The address stays in the name —
+    /// "<slug>--<id>.liquid.json", or the bare id when the slug is
+    /// cleared — so citations keep resolving and the folder stays
+    /// browsable, the reason the format forbids free renames. The
+    /// document's contents are untouched.
+    func renameFile(of doc: LiquidDoc) {
+        let alert = NSAlert()
+        alert.messageText = "Rename File"
+        alert.informativeText = "The file's human-readable name. Its address — \(doc.id) — stays in the file name, so links to “\(doc.title)” keep resolving."
+        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 280, height: 24))
+        field.stringValue = Self.fileNameSlug(of: doc)
+        alert.accessoryView = field
+        alert.addButton(withTitle: "Rename")
+        alert.addButton(withTitle: "Cancel")
+        alert.window.initialFirstResponder = field
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        let slug = field.stringValue.trimmingCharacters(in: .whitespaces)
+            .replacingOccurrences(of: "/", with: "-")
+            .replacingOccurrences(of: ":", with: "-")
+        let ext = LiquidDoc.fileExtension
+        let name = slug.isEmpty ? "\(doc.id).\(ext)" : "\(slug)--\(doc.id).\(ext)"
+        let destination = doc.fileURL.deletingLastPathComponent()
+            .appendingPathComponent(name)
+        guard destination.path != doc.fileURL.path else { return }
+        guard !FileManager.default.fileExists(atPath: destination.path) else {
+            showNote("A file named “\(name)” is already in the folder.")
+            return
+        }
+        do {
+            try FileManager.default.moveItem(at: doc.fileURL, to: destination)
+            index.rescan()
+            showNote("Renamed to “\(name)”.")
+        } catch {
+            showNote("Could not rename the file: \(error.localizedDescription)")
+        }
+    }
+    #endif
+
+    #if os(macOS)
     /// Converts pre-rename `.origamitext` documents back into the library.
     /// The JSON inside is identical, so conversion is validation plus a
     /// rename: each file is decoded to prove it is a document, then written
@@ -387,17 +592,30 @@ final class AppState {
     /// A new note on the desk: an ordinary note document in the library
     /// folder, opened straight into writing.
     func newNote() {
+        makeNewDocument(type: .note, landing: .library)
+    }
+
+    /// A new letter: a note in every way, marked `letter` — Knowledge
+    /// Space's internal category until Digital Letters' sending arrives.
+    /// It drafts under Draft Letters, and its File button files it
+    /// under Letters.
+    func newLetter() {
+        makeNewDocument(type: .letter, landing: .draftLetters)
+    }
+
+    private func makeNewDocument(type: LiquidDoc.DocumentType, landing: SidebarItem) {
         guard let folderURL = index.folderURL else {
             showNote("Choose a library folder first — notes live there.")
             return
         }
         let created = Date.now
         let id = LiquidAddress.makeID(author: authorName, created: created) { candidate in
-            self.index.allByID[candidate] != nil
+            self.index.isIDTaken(candidate)
         }
-        // A new note starts as a draft — unfiled, so it lists in the
-        // Inbox awaiting its Action or File. The flag travels in the
-        // file, so other devices agree; filing clears it.
+        // A new document starts as a draft — a note lists in the Inbox
+        // awaiting its Action or File, a letter under Draft Letters. The
+        // flag travels in the file, so other devices agree; filing
+        // clears it.
         let doc = LiquidDoc(format: LiquidDoc.knownFormat,
                             id: id,
                             title: "Untitled",
@@ -407,7 +625,7 @@ final class AppState {
                             links: [],
                             wraps: nil,
                             draft: true,
-                            documentType: LiquidDoc.DocumentType.note.rawValue,
+                            documentType: type.rawValue,
                             location: currentPlace,
                             fileURL: folderURL.appendingPathComponent(id)
                                 .appendingPathExtension(LiquidDoc.fileExtension))
@@ -420,52 +638,51 @@ final class AppState {
             return
         }
         index.rescan()
-        sidebarSelection = .library
+        sidebarSelection = landing
         selectedDocID = id
     }
 
-    // MARK: - The standing notes
+    // MARK: - Library upkeep
 
-    /// "To Do" and "Done" stand at the top of the list — ordinary note
-    /// documents in the community folder, created once when the library
-    /// doesn't hold them yet.
-    private var ensuredStandingNotes = false
+    /// One pass once the library has been read. The action standing now
+    /// lives in each note's file; upkeep migrates the old way of saying
+    /// it — a note filed under To Do, In Progress, or Done gets that
+    /// standing written into it and leaves the folder, and those names
+    /// leave the filing offer.
+    private var upkeepDone = false
 
-    func ensureStandingNotes() {
-        guard !ensuredStandingNotes, let folderURL = index.folderURL,
-              !index.isScanning else { return }
-        let standing = [("To Do", "Add tasks here."),
-                        ("Done", "Move finished tasks here.")]
-        let existing = Set(index.allByID.values.map {
-            $0.doc.title.trimmingCharacters(in: .whitespaces).lowercased()
-        })
-        let missing = standing.filter { !existing.contains($0.0.lowercased()) }
-        ensuredStandingNotes = true
-        guard !missing.isEmpty else { return }
-        for (offset, (title, starter)) in missing.enumerated() {
-            // Distinct creation instants keep the derived ids distinct.
-            let created = Date.now.addingTimeInterval(TimeInterval(offset))
-            let id = LiquidAddress.makeID(author: authorName, created: created) { candidate in
-                self.index.allByID[candidate] != nil
+    func libraryUpkeep() {
+        guard !upkeepDone, index.folderURL != nil, !index.isScanning else { return }
+        upkeepDone = true
+        var migrated = 0
+        for (docID, folder) in filedFolders {
+            let action: LiquidDoc.Action? = switch folder.lowercased() {
+            case "to do": .toDo
+            case "in progress": .inProgress
+            case "done": .done
+            default: nil
             }
-            let doc = LiquidDoc(format: LiquidDoc.knownFormat,
-                                id: id,
-                                title: title,
-                                author: authorName,
-                                created: created,
-                                body: [LiquidDoc.Paragraph(id: "p1", heading: nil, text: starter)],
-                                links: [],
-                                wraps: nil,
-                                documentType: LiquidDoc.DocumentType.note.rawValue,
-                                fileURL: folderURL.appendingPathComponent(id)
-                                    .appendingPathExtension(LiquidDoc.fileExtension))
-            do {
-                try doc.jsonData().write(to: doc.fileURL, options: .atomic)
-            } catch {
-                showNote("Could not create “\(title)”: \(error.localizedDescription)")
-            }
+            guard let action, let doc = index.allByID[docID]?.doc else { continue }
+            var updated = doc
+            updated.action = action.rawValue
+            guard (try? updated.jsonData().write(to: updated.fileURL, options: .atomic)) != nil
+            else { continue }
+            filedFolders.removeValue(forKey: docID)
+            migrated += 1
         }
-        index.rescan()
+        let legacyFolders = ["to do", "in progress", "done"]
+        let hadLegacy = filingFolders.contains { legacyFolders.contains($0.lowercased()) }
+        if hadLegacy {
+            filingFolders.removeAll { legacyFolders.contains($0.lowercased()) }
+            UserDefaults.standard.set(filingFolders, forKey: "filingFolders")
+        }
+        if migrated > 0 || hadLegacy {
+            persistFiling()
+            index.rescan()
+        }
+        if migrated > 0 {
+            showNote("To Do, In Progress, and Done now travel inside the notes — \(migrated) moved over.")
+        }
     }
 
     /// People whose documents are hidden from the library lists. The files
@@ -544,25 +761,6 @@ final class AppState {
         }
     }
 
-    /// Applies an approved merge of two contact records: the originals
-    /// leave the directory, the approved record stands, and a portrait
-    /// an absorbed record had follows when the surviving one has none.
-    func approveMergedPerson(_ merged: Person, replacing originals: [Person]) {
-        if portraits.original(for: merged.localID) == nil,
-           let donor = originals.first(where: {
-               $0.localID != merged.localID && portraits.original(for: $0.localID) != nil
-           }),
-           let photo = portraits.original(for: donor.localID) {
-            portraits.adoptPhoto(photo, for: merged.localID)
-        }
-        for original in originals {
-            people.remove(original)
-        }
-        people.upsert(merged)
-        publishPortraits()
-        showNote("Merged into “\(merged.displayName)” — every name on the record answers to it now")
-        index.rescan()
-    }
     #endif
 
     /// Opens an `origamitext://open/<id>#<fragment>` link. Per the format,

@@ -173,7 +173,7 @@ extension LiquidDoc {
         let doc: LiquidDoc
         init(_ doc: LiquidDoc) { self.doc = doc }
 
-        enum CodingKeys: String, CodingKey { case about, format, id, title, author, created, date, body, links, wraps, attention, aiOnBehalf, draft, onBehalfOf, documentType, location, concepts, layouts, connections, references }
+        enum CodingKeys: String, CodingKey { case about, format, id, title, author, created, date, body, links, wraps, attention, aiOnBehalf, draft, action, onBehalfOf, documentType, location, concepts, layouts, connections, references }
 
         func encode(to encoder: Encoder) throws {
             var container = encoder.container(keyedBy: CodingKeys.self)
@@ -207,6 +207,9 @@ extension LiquidDoc {
             }
             if doc.draft {
                 try container.encode(true, forKey: .draft)
+            }
+            if let action = doc.action {
+                try container.encode(action, forKey: .action)
             }
             if let onBehalfOf = doc.onBehalfOf {
                 try container.encode(onBehalfOf, forKey: .onBehalfOf)
@@ -424,8 +427,12 @@ extension LiquidDoc.Paragraph {
 }
 
 extension LiquidDoc {
-    /// Ids of paragraphs belonging to the Visual-Meta appendix (from its
-    /// heading onward), so the reader can render it unobtrusively.
+    /// Ids of paragraphs belonging to the Visual-Meta appendix, so the
+    /// reader can render it unobtrusively and the note editor can keep
+    /// it out of the writing. The appendix opens with a rule ("---")
+    /// one paragraph before its heading; that rule is the appendix's
+    /// too — without it, an editor hiding the appendix leaves a bare
+    /// "---" stranded at the note's foot.
     nonisolated var visualMetaParagraphIDs: Set<String> {
         guard let body,
               let start = body.firstIndex(where: {
@@ -433,7 +440,15 @@ extension LiquidDoc {
                       || $0.text.contains(VisualMeta.startMarker)
               })
         else { return [] }
-        return Set(body[start...].map(\.id))
+        var first = start
+        if start > body.startIndex {
+            let previous = body[body.index(before: start)]
+            let trimmed = previous.text.trimmingCharacters(in: .whitespaces)
+            if trimmed.count >= 3, trimmed.allSatisfy({ $0 == "-" }) {
+                first = body.index(before: start)
+            }
+        }
+        return Set(body[first...].map(\.id))
     }
 }
 // MARK: - Bot documents

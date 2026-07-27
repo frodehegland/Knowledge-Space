@@ -6,15 +6,21 @@ import CryptoKit
 ///
 /// Document ids are short human-readable strings (see LiquidAddress) that
 /// double as the file name; legacy UUID ids are accepted as opaque strings.
+///
+/// Fields a derived copy may legitimately differ in (a publication's
+/// appendix-bearing body, a conflict copy's fresh id) are `var`, so
+/// rebuilders write `var copy = doc` and change only what changed —
+/// never re-thread the memberwise initializer, which silently drops
+/// whatever fields were added after the call site was written.
 nonisolated struct LiquidDoc: Identifiable, Hashable, Sendable {
     let format: String
-    let id: String
-    let title: String
+    var id: String
+    var title: String
     let author: String
-    let created: Date
-    let body: [Paragraph]?
-    let links: [Link]
-    let wraps: Wrapped?
+    var created: Date
+    var body: [Paragraph]?
+    var links: [Link]
+    var wraps: Wrapped?
     /// People this document is addressed to — "for the attention of".
     /// Plain names, readable by any person or system.
     var attention: [String] = []
@@ -31,6 +37,12 @@ nonisolated struct LiquidDoc: Identifiable, Hashable, Sendable {
     /// author publishes it. Travels in the file so a note captured on
     /// one device stays a draft on the others.
     var draft: Bool = false
+    /// The note's action standing — the lifecycle axis, orthogonal to
+    /// filing: absent means nothing, else "todo", "in progress",
+    /// "done", or "cancelled" (see `Action`). A lowercase token
+    /// travelling in the file like `draft`, so every device agrees; a
+    /// token this app has never heard of is preserved verbatim.
+    var action: String? = nil
     /// Whose words these are, when they are not the author's own — the
     /// speaker a statement was lifted from a transcript for. `author`
     /// stays the person who made and exported the document; the named
@@ -61,7 +73,7 @@ nonisolated struct LiquidDoc: Identifiable, Hashable, Sendable {
     var mapConnections: [MapConnection] = []
     /// External citation records — see `Reference`.
     var references: [Reference] = []
-    let fileURL: URL          // where it was loaded from (not part of JSON)
+    var fileURL: URL          // where it was loaded from (not part of JSON)
 
     /// The instant the document is listed, sorted, and filtered by.
     var listedDate: Date { date?.sortDate ?? created }
@@ -131,6 +143,30 @@ nonisolated struct LiquidDoc: Identifiable, Hashable, Sendable {
             case .external: "External"
             }
         }
+    }
+
+    /// The recommended `action` vocabulary — a note's standing. Raw
+    /// values are the lowercase tokens written to JSON; the vocabulary
+    /// is open like `documentType`, unknown tokens kept as-is.
+    enum Action: String, CaseIterable, Hashable, Sendable {
+        case toDo = "todo"
+        case inProgress = "in progress"
+        case done = "done"
+        case cancelled = "cancelled"
+
+        var displayName: String {
+            switch self {
+            case .toDo: "To Do"
+            case .inProgress: "In Progress"
+            case .done: "Done"
+            case .cancelled: "Cancelled"
+            }
+        }
+    }
+
+    /// The action as vocabulary, when the token names a known standing.
+    var actionValue: Action? {
+        action.flatMap(Action.init(rawValue:))
     }
 
     struct Paragraph: Identifiable, Hashable, Sendable {
@@ -381,11 +417,17 @@ extension LiquidDoc {
             return Reference(id: referenceID, bibtex: bibtex)
         }
 
+        // Open vocabulary, like documentType: any token survives.
+        let action = raw.action
+            .map { $0.trimmingCharacters(in: .whitespaces).lowercased() }
+            .flatMap { $0.isEmpty ? nil : $0 }
+
         return LiquidDoc(format: format, id: id, title: title, author: author,
                          created: created, body: body, links: links, wraps: wraps,
                          attention: attention, date: date,
                          aiOnBehalf: raw.aiOnBehalf ?? false,
                          draft: raw.draft ?? false,
+                         action: action,
                          onBehalfOf: onBehalfOf,
                          documentType: documentType,
                          location: location,
@@ -420,6 +462,7 @@ extension LiquidDoc {
         var date: String?
         var aiOnBehalf: Bool?
         var draft: Bool?
+        var action: String?
         var onBehalfOf: String?
         var documentType: String?
         var location: String?

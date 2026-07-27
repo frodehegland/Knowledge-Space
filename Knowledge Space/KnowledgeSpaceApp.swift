@@ -59,9 +59,23 @@ struct KnowledgeSpaceApp: App {
                 .environment(mapState)
         }
         #else
-        WindowGroup {
+        // A single, titled window: macOS lists "Knowledge Space" in the
+        // Window menu by itself, so a closed window can always be
+        // reopened from there.
+        Window("Knowledge Space", id: "library") {
             ContentView()
                 .environment(state)
+                // The window's words default to true black (see
+                // AppGreys.text); secondary and quieter styles keep
+                // their own greys.
+                .foregroundStyle(AppGreys.text)
+                // The design is a fixed light design: one scheme for
+                // the whole window, so every divider line — sidebar
+                // edge, section rules, the options column's — resolves
+                // to the same separator grey, whatever the system
+                // appearance. (The columns force this individually
+                // too; this catches everything between them.)
+                .environment(\.colorScheme, .light)
         }
         // ⌘N is a new note — the core act — displacing New Window.
         .commands {

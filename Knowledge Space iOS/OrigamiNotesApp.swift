@@ -5,6 +5,50 @@ import os
 
 private let log = Logger(subsystem: "com.origami.notes", category: "notes")
 
+/// The phone is a capture app, and the format document's capture fixture
+/// (ORIGAMI-DOCUMENT-FORMAT.md §11) is the whole of what it may write.
+/// This contract pins the initial JSON to exactly that shape: the §11
+/// fields, plus the `about` preamble every save carries, the `links` the
+/// body's addresses imply, and the `draft` flag a phone note starts with.
+/// A debug build halts the moment a field creeps in or goes missing,
+/// naming the drift; a release build never blocks a note from being
+/// written, but logs it. If a change to the shape is deliberate, update
+/// the format document and this contract together.
+private nonisolated enum CaptureContract {
+    /// Every top-level key a freshly captured note may carry.
+    static let allowedKeys: Set<String> = [
+        "about", "format", "id", "title", "author", "created",
+        "body", "links", "draft", "documentType", "location",
+    ]
+    /// The keys the standard requires of every text document.
+    static let requiredKeys: Set<String> = [
+        "format", "id", "title", "author", "created", "body",
+    ]
+
+    static func check(_ data: Data) {
+        guard let object = try? JSONSerialization.jsonObject(with: data),
+              let json = object as? [String: Any] else {
+            log.error("CaptureContract: initial note JSON is not an object")
+            assertionFailure("CaptureContract: initial note JSON is not an object")
+            return
+        }
+        let present = Set(json.keys)
+        let unexpected = present.subtracting(allowedKeys).sorted()
+        let missing = requiredKeys.subtracting(present).sorted()
+        guard !unexpected.isEmpty || !missing.isEmpty else { return }
+        var drift: [String] = []
+        if !unexpected.isEmpty {
+            drift.append("beyond the capture shape: \(unexpected.joined(separator: ", "))")
+        }
+        if !missing.isEmpty {
+            drift.append("missing required fields: \(missing.joined(separator: ", "))")
+        }
+        let message = "CaptureContract: initial note JSON drifted — \(drift.joined(separator: "; "))"
+        log.error("\(message)")
+        assertionFailure(message)
+    }
+}
+
 /// Origami Text for iOS: the capture end of the format. Notes only —
 /// create, edit, done. Every note is an ordinary Origami document
 /// (`documentType: "note"`) written straight into the community folder,
@@ -224,8 +268,14 @@ final class NotesModel {
             lastError = "Set your name first — a note carries its author."
             return nil
         }
+        // Collision detection reaches the whole folder, not just the
+        // notes this phone shows: the file about to be written must not
+        // silently replace a document already answering to the address.
         let id = LiquidAddress.makeID(author: authorName, created: created) { candidate in
             self.notes.contains { $0.id == candidate }
+                || FileManager.default.fileExists(
+                    atPath: folderURL.appendingPathComponent(candidate)
+                        .appendingPathExtension(LiquidDoc.fileExtension).path)
         }
         let body = LiquidDoc.parseBody(from: bodyText)
         // A phone-captured note starts as a draft; the flag travels in
@@ -245,7 +295,9 @@ final class NotesModel {
                             fileURL: folderURL.appendingPathComponent(id)
                                 .appendingPathExtension(LiquidDoc.fileExtension))
         do {
-            try doc.jsonData().write(to: doc.fileURL, options: .atomic)
+            let data = try doc.jsonData()
+            CaptureContract.check(data)
+            try data.write(to: doc.fileURL, options: .atomic)
             notes.insert(doc, at: 0)
             return doc
         } catch {
@@ -260,19 +312,15 @@ final class NotesModel {
     func save(_ doc: LiquidDoc, title: String, bodyText: String) {
         let trimmedTitle = title.trimmingCharacters(in: .whitespaces)
         let body = LiquidDoc.parseBody(from: bodyText)
-        let updated = LiquidDoc(format: doc.format,
-                                id: doc.id,
-                                title: trimmedTitle.isEmpty ? "Untitled" : trimmedTitle,
-                                author: doc.author,
-                                created: doc.created,
-                                body: body,
-                                links: LiquidDoc.detectedLinks(in: body),
-                                wraps: nil,
-                                date: doc.date,
-                                draft: doc.draft,
-                                documentType: doc.documentType,
-                                location: doc.location,
-                                fileURL: doc.fileURL)
+        // Title, body, and the links the body implies are the phone's
+        // to change — nothing else. Copy-and-mutate carries every other
+        // field through, so a standing or attention set on the Mac
+        // survives an edit made here.
+        var updated = doc
+        updated.title = trimmedTitle.isEmpty ? "Untitled" : trimmedTitle
+        updated.body = body
+        updated.links = LiquidDoc.detectedLinks(in: body)
+        updated.wraps = nil
         do {
             try updated.jsonData().write(to: updated.fileURL, options: .atomic)
         } catch {

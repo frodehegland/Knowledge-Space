@@ -22,6 +22,10 @@ struct NoteWritingView: View {
     /// its center (full screen).
     var measure: CGFloat? = nil
     var centersContent: Bool = false
+    /// Inline: the note expanded in the list itself (Settings ▸
+    /// Appearance, "In the list"). The editor sizes to its words and
+    /// the list scrolls around it, rather than scrolling within.
+    var inline: Bool = false
 
     @State private var text = ""
     /// What the buffer was seeded from — "unchanged" means text == baseText.
@@ -40,30 +44,47 @@ struct NoteWritingView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            TextEditor(text: $text)
-                .font(.system(size: 17, design: .serif))
-                .lineSpacing(6)
-                .scrollContentBackground(.hidden)
-                .padding(.horizontal, 20)
-                .padding(.top, 33)   // the note's single empty line
-                .padding(.bottom, 16)
-                .frame(maxWidth: measure ?? .infinity, alignment: .leading)
-                .frame(maxWidth: .infinity, maxHeight: .infinity,
-                       alignment: centersContent ? .top : .topLeading)
-                .focused($writing)
-                .overlay(alignment: .topLeading) {
-                    if text.isEmpty {
-                        Text("Write. A blank line starts a new paragraph; # starts a heading; **bold** and *italic* read as written.")
-                            .foregroundStyle(.tertiary)
-                            .padding(.horizontal, 26)
-                            .padding(.top, 33)
-                            .allowsHitTesting(false)
+            if state.flowReading {
+                flowedReading
+            } else {
+                TextEditor(text: $text)
+                    .font(.system(size: 17, design: .serif))
+                    .lineSpacing(6)
+                    .scrollContentBackground(.hidden)
+                    // Inline, the editor holds all its words and the
+                    // list scrolls; in its own pane, it scrolls itself.
+                    .scrollDisabled(inline)
+                    .padding(.horizontal, inline ? 2 : 20)
+                    .padding(.top, inline ? 6 : 33)   // the note's single empty line
+                    .padding(.bottom, inline ? 6 : 16)
+                    .frame(maxWidth: measure ?? .infinity, alignment: .leading)
+                    .frame(maxWidth: .infinity,
+                           maxHeight: inline ? nil : .infinity,
+                           alignment: centersContent ? .top : .topLeading)
+                    .frame(minHeight: inline ? 44 : 0)
+                    .focused($writing)
+                    .overlay(alignment: .topLeading) {
+                        if text.isEmpty {
+                            Text("Write. A blank line starts a new paragraph; # starts a heading; **bold** and *italic* read as written.")
+                                .foregroundStyle(.tertiary)
+                                .padding(.horizontal, inline ? 6 : 26)
+                                .padding(.top, inline ? 6 : 33)
+                                .allowsHitTesting(false)
+                        }
                     }
-                }
+            }
+            if state.showsVisualMeta {
+                metadataReading
+            }
             #if os(macOS)
             nameSuggestionsBar
             #endif
-            backlinksSection
+            // Backlinks stay out of the note's in-list page — the list
+            // around it is context enough; the section returns when the
+            // note has a page of its own (full screen, own pane).
+            if !inline {
+                backlinksSection
+            }
         }
         .onAppear {
             guard !loaded else { return }
@@ -93,6 +114,58 @@ struct NoteWritingView: View {
             if phase != .active { save() }
         }
         .onDisappear { save() }
+        // The writing page stands on the design's page grey.
+        .background(AppGreys.page)
+        .environment(\.colorScheme, .light)
+    }
+
+    /// The metadata riding with the note — its Visual-Meta appendix and
+    /// analyses, the paragraphs the editor keeps out of the writing —
+    /// rendered read-only under the words at the reader's half size.
+    /// Shown by the options column's Visual-Meta button; the blocks
+    /// travel with the file whether or not they are shown.
+    private var metadataReading: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 4) {
+                ForEach((doc.body ?? []).filter {
+                    Self.hiddenIDs(of: doc).contains($0.id)
+                }) { paragraph in
+                    ParagraphView(paragraph: paragraph, isAppendix: true)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 20)
+            .padding(.vertical, 8)
+        }
+        .frame(maxHeight: 260)
+    }
+
+    /// Flow: the same words the editor holds, rendered paragraph by
+    /// paragraph with the flowed line breaks — a reading presentation.
+    /// Unflow returns to the editor; the file is untouched either way.
+    /// Inline, the list scrolls, so no scroll view of its own.
+    @ViewBuilder private var flowedReading: some View {
+        if inline {
+            flowedColumn
+                .padding(.vertical, 6)
+        } else {
+            ScrollView {
+                flowedColumn
+                    .padding(.horizontal, 20)
+                    .padding(.top, 33)
+                    .padding(.bottom, 16)
+            }
+        }
+    }
+
+    private var flowedColumn: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            ForEach(LiquidDoc.parseBody(from: text)) { paragraph in
+                ParagraphView(paragraph: paragraph, flowed: true)
+            }
+        }
+        .frame(maxWidth: measure ?? .infinity, alignment: .leading)
+        .frame(maxWidth: .infinity, alignment: centersContent ? .center : .leading)
     }
 
     #if os(macOS)
@@ -293,7 +366,7 @@ struct NoteWritingView: View {
             VStack(alignment: .leading, spacing: 6) {
                 Divider()
                 Text("Backlinks")
-                    .font(.system(size: 15, weight: .bold, design: .serif))
+                    .font(.system(size: 15, design: .serif))
                 ForEach(backlinks, id: \.self) { ref in
                     if let entry = state.index.byID[ref.fromID] {
                         Button {
@@ -389,26 +462,13 @@ struct NoteWritingView: View {
             ? Self.derivedTitle(for: text.trimmingCharacters(in: .whitespacesAndNewlines))
             : source.title
 
-        let updated = LiquidDoc(format: source.format,
-                                id: doc.id,
-                                title: title,
-                                author: source.author,
-                                created: source.created,
-                                body: body,
-                                links: LiquidDoc.detectedLinks(in: body),
-                                wraps: nil,
-                                attention: source.attention,
-                                date: source.date,
-                                aiOnBehalf: source.aiOnBehalf,
-                                draft: source.draft,
-                                onBehalfOf: source.onBehalfOf,
-                                documentType: source.documentType,
-                                location: source.location,
-                                concepts: source.concepts,
-                                layouts: source.layouts,
-                                mapConnections: source.mapConnections,
-                                references: source.references,
-                                fileURL: doc.fileURL)
+        var updated = source
+        updated.id = doc.id
+        updated.title = title
+        updated.body = body
+        updated.links = LiquidDoc.detectedLinks(in: body)
+        updated.wraps = nil
+        updated.fileURL = doc.fileURL
         do {
             let data = try updated.jsonData()
             try data.write(to: updated.fileURL, options: .atomic)
@@ -427,25 +487,19 @@ struct NoteWritingView: View {
               let folderURL = state.index.folderURL else { return }
         let created = Date.now
         let id = LiquidAddress.makeID(author: incoming.author, created: created) { candidate in
-            state.index.allByID[candidate] != nil
+            state.index.isIDTaken(candidate)
         }
-        let copy = LiquidDoc(format: incoming.format,
-                             id: id,
-                             title: "\(incoming.title) (conflict copy)",
-                             author: incoming.author,
-                             created: created,
-                             body: incoming.body,
-                             links: incoming.links,
-                             wraps: nil,
-                             attention: incoming.attention,
-                             date: incoming.date,
-                             aiOnBehalf: incoming.aiOnBehalf,
-                             draft: incoming.draft,
-                             onBehalfOf: incoming.onBehalfOf,
-                             documentType: incoming.documentType,
-                             location: incoming.location,
-                             fileURL: folderURL.appendingPathComponent(id)
-                                 .appendingPathExtension(LiquidDoc.fileExtension))
+        // The copy differs only in identity — a fresh id, moment, and
+        // file of its own. Everything else the incoming version carried
+        // (concepts, layouts, references, and fields yet to come) is
+        // preserved: no part of it is lost to the race.
+        var copy = incoming
+        copy.id = id
+        copy.title = "\(incoming.title) (conflict copy)"
+        copy.created = created
+        copy.wraps = nil
+        copy.fileURL = folderURL.appendingPathComponent(id)
+            .appendingPathExtension(LiquidDoc.fileExtension)
         try? copy.jsonData().write(to: copy.fileURL, options: .atomic)
         state.showNote("This note changed elsewhere while you wrote — the other version is kept as “\(copy.title)”.")
     }

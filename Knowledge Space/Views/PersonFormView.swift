@@ -37,9 +37,8 @@ struct PersonFormView: View {
     @State private var pickedContact: ContactPick?
     /// Whether an added photo is processed into its cartoon immediately.
     @AppStorage(AppSettings.portraitInstantProcessingKey) private var instantProcessing = false
-    /// Records folded into this one via "This is also:" — merged into the
-    /// form already, deleted from the directory on Save.
-    @State private var absorbed: [Person] = []
+    /// The names of records already imported into this one and deleted.
+    @State private var imported: [String] = []
     @State private var alsoSelectionID: String?
     @State private var showsDeleteConfirmation = false
 
@@ -49,14 +48,13 @@ struct PersonFormView: View {
         model.people.people.contains { $0.localID == person.localID }
     }
 
-    /// Every other name the record could absorb: the directory's other
+    /// Every other name the record could import: the directory's other
     /// records, then authors in the library who have no record yet.
     private var mergeCandidates: [Person] {
         var result: [Person] = []
         var seen = Set<String>()
         for other in model.people.people
         where other.localID != person.localID
-            && !absorbed.contains(where: { $0.localID == other.localID })
             && !person.answersTo(other.displayName) {
             result.append(other)
             seen.insert(other.displayName.lowercased())
@@ -64,8 +62,7 @@ struct PersonFormView: View {
         for name in model.libraryAuthorNames {
             guard !seen.contains(name.lowercased()),
                   !person.answersTo(name),
-                  model.people.person(named: name) == nil,
-                  !absorbed.contains(where: { $0.answersTo(name) })
+                  model.people.person(named: name) == nil
             else { continue }
             result.append(Person(displayName: name))
         }
@@ -112,6 +109,43 @@ struct PersonFormView: View {
         )
     }
 
+    /// The record as an AI model: on, the form keeps to model name,
+    /// company, and version, and the display name is the model's alone.
+    private var aiBinding: Binding<Bool> {
+        Binding(
+            get: { person.isArtificial },
+            set: { on in
+                person.isAI = on ? true : nil
+                if on {
+                    // A model has one name: the person parts fold away.
+                    person.middleName = ""
+                    person.familyName = ""
+                }
+            }
+        )
+    }
+
+    private var aiVersionBinding: Binding<String> {
+        Binding(
+            get: { person.aiVersion ?? "" },
+            set: { person.aiVersion = $0.isEmpty ? nil : $0 }
+        )
+    }
+
+    /// This contact is a model, not a person.
+    private var aiToggle: some View {
+        Toggle("AI", isOn: aiBinding)
+            .toggleStyle(.button)
+            .help("This contact is an AI model, not a person — the record keeps its model name, company, and version, with the company's logo for a face")
+    }
+
+    /// What the logo search looks for: the company, else the model name.
+    private var logoQuery: String {
+        let company = person.affiliation.trimmingCharacters(in: .whitespaces)
+        return company.isEmpty
+            ? person.givenName.trimmingCharacters(in: .whitespaces) : company
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             Text(heading)
@@ -121,19 +155,34 @@ struct PersonFormView: View {
 
             Form {
                 portraitSection
-                Section("Name") {
-                    TextField("First name", text: $person.givenName)
-                    TextField("Middle name", text: $person.middleName)
-                    TextField("Last name", text: $person.familyName)
-                    TextField("Affiliation", text: $person.affiliation)
-                    Button {
-                        showsContactsSearch = true
-                    } label: {
-                        Label("Find in Contacts…", systemImage: "person.text.rectangle")
+                Section(person.isArtificial ? "AI Model" : "Name") {
+                    if person.isArtificial {
+                        TextField("Model name", text: $person.givenName,
+                                  prompt: Text("for example Claude"))
+                        TextField("Company", text: $person.affiliation,
+                                  prompt: Text("for example Anthropic"))
+                        TextField("Version", text: aiVersionBinding,
+                                  prompt: Text("for example 5"))
+                        aiToggle
+                    } else {
+                        TextField("First name", text: $person.givenName)
+                        TextField("Middle name", text: $person.middleName)
+                        TextField("Last name", text: $person.familyName)
+                        TextField("Affiliation", text: $person.affiliation)
+                        HStack {
+                            Button {
+                                showsContactsSearch = true
+                            } label: {
+                                Label("Find in Contacts…", systemImage: "person.text.rectangle")
+                            }
+                            .help("Fill this record from your Contacts — name, email, affiliation, and photo. Contacts is only read, never changed.")
+                            Spacer()
+                            aiToggle
+                        }
                     }
-                    .help("Fill this record from your Contacts — name, email, affiliation, and photo. Contacts is only read, never changed.")
                 }
 
+                if !person.isArtificial {
                 Section {
                     TextField("Aliases", text: aliasesBinding,
                               prompt: Text("Other names, comma-separated"))
@@ -219,13 +268,14 @@ struct PersonFormView: View {
                     }
                 }
 
-                // Two records, one person: choosing another name folds
-                // its record into this one — everything carries over,
-                // the other name becomes an alias when different, and
-                // the absorbed record is deleted on Save.
+                // Two records, one person: choosing another name imports
+                // everything it holds into this record — the other name
+                // becomes an alias when different — and deletes the
+                // other record at once.
                 if !mergeCandidates.isEmpty {
                     Section {
-                        Picker("This is also:", selection: $alsoSelectionID) {
+                        Picker("Import and delete from other record:",
+                               selection: $alsoSelectionID) {
                             Text("—").tag(String?.none)
                             ForEach(mergeCandidates) { candidate in
                                 Text(candidate.displayName).tag(Optional(candidate.localID))
@@ -235,21 +285,21 @@ struct PersonFormView: View {
                             guard let id = alsoSelectionID,
                                   let other = mergeCandidates.first(where: { $0.localID == id })
                             else { return }
-                            person = person.merged(absorbing: other)
-                            absorbed.append(other)
+                            importAndDelete(other)
                             alsoSelectionID = nil
                         }
-                        if !absorbed.isEmpty {
-                            Text("Folding in: \(absorbed.map(\.displayName).joined(separator: ", ")) — their records are deleted when you save.")
+                        if !imported.isEmpty {
+                            Text("Imported and deleted: \(imported.joined(separator: ", ")).")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         }
                     } footer: {
-                        Text("Another record that is really this person. Choosing one takes its information over to this record — its name becomes an alias when it differs — and deletes the other record on Save.")
+                        Text("Another record that is really this person. Choosing one imports everything it holds into this record — its name becomes an alias when it differs — and deletes the other record immediately.")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
                 }
+                } // The person-only sections end here; a model needs none.
             }
             .formStyle(.grouped)
 
@@ -263,11 +313,6 @@ struct PersonFormView: View {
                 Button("Cancel") { dismiss() }
                 Button("Save") {
                     onSave(person)
-                    // Records folded in via "This is also:" go now — their
-                    // information is already on this one.
-                    if !absorbed.isEmpty {
-                        model.approveMergedPerson(person, replacing: absorbed)
-                    }
                     dismiss()
                 }
                 .buttonStyle(.borderedProminent)
@@ -301,10 +346,15 @@ struct PersonFormView: View {
             if let photo = pickedFoundPhoto {
                 pickedFoundPhoto = nil
                 model.portraits.adoptPhoto(photo, for: person.localID)
-                processPortrait()
+                // A logo stays as it is; a person's photo is drawn into
+                // its cartoon.
+                if !person.isArtificial { processPortrait() }
             }
         }) {
-            PhotoSearchSheet(name: person.displayName, orcid: person.orcid) { photo in
+            PhotoSearchSheet(name: person.isArtificial ? logoQuery : person.displayName,
+                             orcid: person.isArtificial ? "" : person.orcid,
+                             searchesLogos: person.isArtificial,
+                             alsoSearch: person.isArtificial ? person.givenName : "") { photo in
                 pickedFoundPhoto = photo
             }
         }
@@ -331,11 +381,27 @@ struct PersonFormView: View {
                                         in: [PortraitStyle.current.playgroundStyle])
     }
 
+    /// Imports everything the other record holds into this one — its
+    /// name becoming an alias when it differs — hands over its portrait
+    /// when this record has none, and deletes the other record at once.
+    private func importAndDelete(_ other: Person) {
+        person = person.merged(absorbing: other)
+        if model.portraits.original(for: person.localID) == nil,
+           let photo = model.portraits.original(for: other.localID) {
+            model.portraits.adoptPhoto(photo, for: person.localID)
+        }
+        model.portraits.removeImages(for: other.localID)
+        model.people.remove(other)
+        model.index.rescan()
+        imported.append(other.displayName)
+    }
+
     /// Stores the photo; processing into a cartoon follows only when
-    /// Instant Processing is on, or when the user clicks Process.
+    /// Instant Processing is on, or when the user clicks Process — and
+    /// never for an AI's logo, which is used as it is.
     private func adopt(_ photo: NSImage) {
         model.portraits.adoptPhoto(photo, for: person.localID)
-        if instantProcessing {
+        if instantProcessing, !person.isArtificial {
             processPortrait()
         }
     }
@@ -362,14 +428,21 @@ struct PersonFormView: View {
     /// draws the cartoon portrait used everywhere. The photo is kept
     /// untouched, so the cartoon can be re-drawn in another style.
     private var portraitSection: some View {
-        Section("Portrait") {
+        Section(person.isArtificial ? "Logo" : "Portrait") {
             HStack(alignment: .center, spacing: 14) {
                 portraitPreview
                 VStack(alignment: .leading, spacing: 8) {
                     HStack {
                         Button("Choose…") { showsPhotoImporter = true }
-                        Button("Find Photo…") {
-                            if person.displayName.trimmingCharacters(in: .whitespaces).isEmpty,
+                        Button(person.isArtificial ? "Find Logo…" : "Find Photo…") {
+                            if person.isArtificial {
+                                if logoQuery.isEmpty {
+                                    photoSearchNotice = "Fill in the company or model name first, so the search knows whose logo to look for."
+                                } else {
+                                    photoSearchNotice = nil
+                                    showsPhotoSearch = true
+                                }
+                            } else if person.displayName.trimmingCharacters(in: .whitespaces).isEmpty,
                                person.orcid.trimmingCharacters(in: .whitespaces).isEmpty {
                                 photoSearchNotice = "Fill in a name or ORCID iD first, so the search knows who to look for."
                             } else {
@@ -377,17 +450,23 @@ struct PersonFormView: View {
                                 showsPhotoSearch = true
                             }
                         }
-                        .help("Search online for a photograph of this person")
+                        .help(person.isArtificial
+                              ? "Search online for the company's logo"
+                              : "Search online for a photograph of this person")
                         if model.portraits.hasOriginal(for: person.localID) {
-                            Button("Process") { processPortrait() }
-                                .disabled(isGeneratingPortrait || !supportsImagePlayground)
+                            if !person.isArtificial {
+                                Button("Process") { processPortrait() }
+                                    .disabled(isGeneratingPortrait || !supportsImagePlayground)
+                            }
                             Button("Remove", role: .destructive) {
                                 model.portraits.removeImages(for: person.localID)
                             }
                         }
-                        Toggle("Instant", isOn: $instantProcessing)
-                            .toggleStyle(.checkbox)
-                            .help("Process a photo into its cartoon portrait the moment it is added")
+                        if !person.isArtificial {
+                            Toggle("Instant", isOn: $instantProcessing)
+                                .toggleStyle(.checkbox)
+                                .help("Process a photo into its cartoon portrait the moment it is added")
+                        }
                     }
                     if let photoSearchNotice {
                         Text(photoSearchNotice)
@@ -414,9 +493,17 @@ struct PersonFormView: View {
         ZStack {
             if let image = model.portraits.portrait(for: person.localID)
                 ?? model.portraits.original(for: person.localID) {
-                Image(nsImage: image)
-                    .resizable()
-                    .scaledToFill()
+                if person.isArtificial {
+                    // A logo shows whole, never cropped to the frame.
+                    Image(nsImage: image)
+                        .resizable()
+                        .scaledToFit()
+                        .padding(4)
+                } else {
+                    Image(nsImage: image)
+                        .resizable()
+                        .scaledToFill()
+                }
             } else {
                 Circle().fill(.quaternary)
                 Image(systemName: "person.crop.circle")
@@ -433,7 +520,13 @@ struct PersonFormView: View {
     }
 
     @ViewBuilder private var portraitStatus: some View {
-        if isGeneratingPortrait {
+        if person.isArtificial {
+            Text(model.portraits.hasOriginal(for: person.localID)
+                 ? "The logo is used as it is — no cartoon is drawn."
+                 : "Drop an image here, choose one, or find the company's logo online.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        } else if isGeneratingPortrait {
             Text("Drawing the cartoon portrait…")
                 .font(.caption)
                 .foregroundStyle(.secondary)
@@ -602,6 +695,12 @@ private struct ContactsSearchSheet: View {
                     Text("No contacts match “\(query)”.")
                         .foregroundStyle(.secondary)
                         .frame(maxWidth: .infinity, minHeight: 120)
+                } else if !hasSearched {
+                    // Nothing filled in yet: the field above takes a
+                    // name — or anything — and Return searches.
+                    Text("Type a name — or anything — and press Return to search your Contacts.")
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, minHeight: 120)
                 } else {
                     ScrollView {
                         VStack(alignment: .leading, spacing: 6) {
@@ -711,9 +810,7 @@ private struct ContactsSearchSheet: View {
     private nonisolated static func findContacts(matching query: String) async throws -> [FoundContact] {
         let store = CNContactStore()
         if CNContactStore.authorizationStatus(for: .contacts) == .notDetermined {
-            guard (try? await store.requestAccess(for: .contacts)) == true else {
-                throw ContactsAccessError()
-            }
+            _ = try? await store.requestAccess(for: .contacts)
         }
         guard CNContactStore.authorizationStatus(for: .contacts) == .authorized else {
             throw ContactsAccessError()
@@ -743,11 +840,19 @@ private struct ContactsSearchSheet: View {
 /// images of Wikipedia pages matching the name (resolved from the ORCID
 /// registry when only the iD is filled in). Clicking one adopts it and
 /// processing starts immediately; Cancel leaves the record untouched.
+/// For an AI record the same search runs on the company's name, whose
+/// page's lead image is its logo — adopted as it is.
 private struct PhotoSearchSheet: View {
     let name: String
     let orcid: String
+    var searchesLogos = false
+    /// A second subject searched beside the name — the AI's model name
+    /// beside its company, so both sets of images are offered.
+    var alsoSearch: String = ""
     let onPick: (NSImage) -> Void
     @Environment(\.dismiss) private var dismiss
+
+    private var noun: String { searchesLogos ? "Logos" : "Photographs" }
 
     private struct Candidate: Identifiable {
         let id: String
@@ -761,7 +866,9 @@ private struct PhotoSearchSheet: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text(searchedName.isEmpty ? "Finding a Photograph" : "Photographs of \(searchedName)")
+            Text(searchedName.isEmpty
+                 ? (searchesLogos ? "Finding a Logo" : "Finding a Photograph")
+                 : "\(noun) of \(searchedName)")
                 .font(.title3)
             Group {
                 if isSearching {
@@ -776,29 +883,51 @@ private struct PhotoSearchSheet: View {
                         .foregroundStyle(.red)
                         .frame(maxWidth: .infinity, minHeight: 150)
                 } else if candidates.isEmpty {
-                    Text("No photographs found for “\(searchedName)”.")
+                    Text("No \(noun.lowercased()) found for “\(searchedName)”.")
                         .foregroundStyle(.secondary)
                         .frame(maxWidth: .infinity, minHeight: 150)
                 } else {
                     VStack(alignment: .leading, spacing: 8) {
-                        Text("Click a photograph to use it — processing starts immediately.")
+                        Text(searchesLogos
+                             ? "Click a logo to use it — it is kept as it is."
+                             : "Click a photograph to use it — processing starts immediately.")
                             .font(.caption)
                             .foregroundStyle(.secondary)
-                        HStack(alignment: .top, spacing: 10) {
+                        LazyVGrid(columns: [GridItem(.adaptive(minimum: 96), spacing: 10,
+                                                     alignment: .top)],
+                                  alignment: .leading, spacing: 10) {
                             ForEach(candidates) { candidate in
                                 VStack(spacing: 4) {
                                     Button {
                                         onPick(candidate.image)
                                         dismiss()
                                     } label: {
-                                        Image(nsImage: candidate.image)
-                                            .resizable()
-                                            .scaledToFill()
-                                            .frame(width: 96, height: 96)
-                                            .clipShape(RoundedRectangle(cornerRadius: 8))
+                                        // A logo shows whole; a photo fills
+                                        // its square. Either way the image
+                                        // stays inside its button — a wide
+                                        // logo's unclipped overflow would
+                                        // lie over the neighbouring buttons
+                                        // and swallow their clicks.
+                                        Group {
+                                            if searchesLogos {
+                                                Image(nsImage: candidate.image)
+                                                    .resizable()
+                                                    .scaledToFit()
+                                                    .padding(6)
+                                            } else {
+                                                Image(nsImage: candidate.image)
+                                                    .resizable()
+                                                    .scaledToFill()
+                                            }
+                                        }
+                                        .frame(width: 96, height: 96)
+                                        .clipShape(RoundedRectangle(cornerRadius: 8))
+                                        .background(.quaternary.opacity(0.5),
+                                                    in: RoundedRectangle(cornerRadius: 8))
+                                        .contentShape(RoundedRectangle(cornerRadius: 8))
                                     }
                                     .buttonStyle(.plain)
-                                    .help("Use this photograph (from “\(candidate.title)” on Wikipedia)")
+                                    .help("Use this image (from “\(candidate.title)” on Wikipedia)")
                                     Text(candidate.title)
                                         .font(.caption2)
                                         .foregroundStyle(.secondary)
@@ -812,7 +941,9 @@ private struct PhotoSearchSheet: View {
                 }
             }
             HStack {
-                Text("Photographs are the lead images of matching Wikipedia pages.")
+                Text(searchesLogos
+                     ? "Logos come from the matching Wikipedia pages' own images."
+                     : "Photographs are the lead images of matching Wikipedia pages.")
                     .font(.caption)
                     .foregroundStyle(.tertiary)
                 Spacer()
@@ -826,22 +957,48 @@ private struct PhotoSearchSheet: View {
 
     private func load() async {
         do {
-            var query = name.trimmingCharacters(in: .whitespaces)
-            if query.isEmpty {
-                query = try await ORCIDClient.name(forORCID: orcid) ?? ""
+            var primary = name.trimmingCharacters(in: .whitespaces)
+            if primary.isEmpty {
+                primary = try await ORCIDClient.name(forORCID: orcid) ?? ""
             }
-            guard !query.isEmpty else {
+            var queries = [primary, alsoSearch.trimmingCharacters(in: .whitespaces)]
+                .filter { !$0.isEmpty }
+            // The same word twice searches once.
+            if queries.count == 2,
+               queries[0].caseInsensitiveCompare(queries[1]) == .orderedSame {
+                queries.removeLast()
+            }
+            guard !queries.isEmpty else {
                 error = "The ORCID record did not give a name to search for."
                 isSearching = false
                 return
             }
-            searchedName = query
-            // Over-fetch, then keep the first five whose images download.
+            searchedName = queries.joined(separator: " · ")
             var found: [Candidate] = []
-            for photo in try await PhotoSearchClient.searchPhotos(name: query) {
-                if found.count == 5 { break }
-                if let image = await Self.download(photo.imageURL) {
-                    found.append(Candidate(id: photo.id, title: photo.title, image: image))
+            if searchesLogos {
+                // Logos come from the matching pages' own image files;
+                // keep the first six that download.
+                for photo in try await PhotoSearchClient.searchLogos(terms: queries) {
+                    if found.count == 6 { break }
+                    guard !found.contains(where: { $0.title == photo.title }) else { continue }
+                    if let image = await Self.download(photo.imageURL) {
+                        found.append(Candidate(id: photo.id, title: photo.title, image: image))
+                    }
+                }
+            } else {
+                // Over-fetch, then keep the first few whose images
+                // download, shared evenly between the subjects.
+                let perQuery = queries.count == 1 ? 5 : 3
+                for query in queries {
+                    var kept = 0
+                    for photo in try await PhotoSearchClient.searchPhotos(name: query) {
+                        if kept == perQuery { break }
+                        guard !found.contains(where: { $0.title == photo.title }) else { continue }
+                        if let image = await Self.download(photo.imageURL) {
+                            found.append(Candidate(id: photo.id, title: photo.title, image: image))
+                            kept += 1
+                        }
+                    }
                 }
             }
             candidates = found

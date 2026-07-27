@@ -7,6 +7,8 @@ enum SidebarItem: Hashable {
     case timeline     // every note, by time, latest on top
     case place        // the same notes, grouped by country and town
     case people       // the same notes, grouped by author
+    case draftLetters // letters still being written
+    case action(LiquidDoc.Action)  // notes by standing: To Do, Done…
     case filedFolder(String)  // one filing folder, straight from the sidebar
     case view(String)
 
@@ -24,9 +26,9 @@ struct SidebarPlace: Identifiable {
 }
 
 enum SidebarCatalog {
-    /// The light grey every sidebar icon wears — place rows and action
-    /// rows alike, so the column reads as one set.
-    static let iconTint = Color(white: 0.75)
+    /// The grey every sidebar icon wears — place rows and action rows
+    /// alike, so the column reads as one set.
+    static var iconTint: Color { AppGreys.buttonText }
 
     /// The head of the column: the Inbox stands alone above the Library
     /// heading, with New Note (added by the sidebar view) under it.
@@ -41,14 +43,29 @@ enum SidebarCatalog {
         // rather than with the other views.
         SidebarPlace(name: "Map", systemImage: "map", item: .view("places")),
         SidebarPlace(name: "People", systemImage: "person.2", item: .people),
+        SidebarPlace(name: "Draft Letters", systemImage: "envelope.open", item: .draftLetters),
     ]
 
-    /// The note column's fixed offering, in its order — the Action run,
-    /// then the standard files, each button's word beside the folder it
-    /// files under. The sidebar's Filed section mirrors the same list.
-    static let actionFolders = ["To Do", "In Progress", "Done"]
+    /// The note column's standard files, each button's word beside the
+    /// folder it files under. The sidebar's Filed section mirrors this.
     static let standardFiles: [(label: String, folder: String)] =
         [("Thought", "Thoughts"), ("Journal", "Journal"), ("Note", "Notes")]
+
+    /// The Action section: the note's standing, one place per state —
+    /// the lifecycle axis, orthogonal to filing, read from the notes
+    /// themselves.
+    static let actions: [SidebarPlace] = LiquidDoc.Action.allCases.map {
+        SidebarPlace(name: $0.displayName, systemImage: icon(for: $0), item: .action($0))
+    }
+
+    static func icon(for action: LiquidDoc.Action) -> String {
+        switch action {
+        case .toDo: "checklist"
+        case .inProgress: "clock"
+        case .done: "checkmark.circle"
+        case .cancelled: "xmark.circle"
+        }
+    }
 
     /// The installed views — minus any module the Library section
     /// already seats (the Map lives under Places).
@@ -71,19 +88,18 @@ enum SidebarCatalog {
 
     private static func filedIcon(for folder: String) -> String {
         switch folder {
-        case "To Do": return "checklist"
-        case "In Progress": return "clock"
-        case "Done": return "checkmark.circle"
         case "Thoughts": return "lightbulb"
         case "Journal": return "book.closed"
         case "Notes": return "note.text"
+        case "Letters": return "envelope"
         case AppState.archivedFolderName: return "archivebox"
         default: return "folder"
         }
     }
 
     static func sections(filedFolders: [String]) -> [(title: String, places: [SidebarPlace])] {
-        [("", top), ("Library", library), ("Filed", filed(filedFolders)), ("Views", views)]
+        [("", top), ("Library", library), ("Action", actions),
+         ("Filed", filed(filedFolders)), ("Views", views)]
     }
 }
 
@@ -203,14 +219,25 @@ struct DocumentListView: View {
     /// The Inbox keeps to the reader's own notes plus anything unread;
     /// a read document steps aside once opened.
     var inboxOnly = false
+    /// The Draft Letters list: letters still being written.
+    var draftLettersOnly = false
+    /// Narrows the list to notes with one action standing.
+    var action: LiquidDoc.Action? = nil
+
+    /// Whether the inline note's controls are unfolded — each newly
+    /// opened note starts with them tucked behind the reveal triangle.
+    @State private var controlsRevealed = false
 
     enum Grouping {
         case time, place
     }
 
-    /// The entries this list speaks for: the Inbox's, one folder's, or
-    /// everything.
+    /// The entries this list speaks for: the Inbox's, one standing's,
+    /// one folder's, or everything.
     private var scopedEntries: [IndexEntry] {
+        if let action {
+            return state.filteredEntries.filter { $0.doc.actionValue == action }
+        }
         if let filedUnder {
             // A folder's list reads straight from the filings, so it
             // shows every note filed there — however the library lists
@@ -220,13 +247,24 @@ struct DocumentListView: View {
                 .compactMap { state.index.allByID[$0.key] }
                 .sorted { $0.doc.listedDate > $1.doc.listedDate }
         }
+        if draftLettersOnly {
+            return state.filteredEntries.filter {
+                $0.doc.documentType == LiquidDoc.DocumentType.letter.rawValue
+                    && state.isDraft($0.doc)
+            }
+        }
         guard inboxOnly else { return state.filteredEntries }
-        // The Inbox is only what is new and unread — a filed note has
-        // moved on to its folder, and the standing To Do and Done notes
-        // keep to their own sidebar places.
+        // The Inbox is only what still awaits a verdict: nothing filed,
+        // no action standing set. A letter being written lives under
+        // Draft Letters, and the old standing To Do and Done notes keep
+        // out of the way.
         return state.filteredEntries.filter { entry in
-            (entry.doc.documentType == LiquidDoc.DocumentType.note.rawValue
+            let type = entry.doc.documentType
+            let isLetter = type == LiquidDoc.DocumentType.letter.rawValue
+            return (type == LiquidDoc.DocumentType.note.rawValue || isLetter
                 || state.isUnread(entry.doc))
+                && !(isLetter && state.isDraft(entry.doc))
+                && entry.doc.action == nil
                 && state.folder(for: entry.doc) == nil
                 && !Self.pinnedTitles.contains {
                     entry.doc.title.trimmingCharacters(in: .whitespaces)
@@ -235,10 +273,19 @@ struct DocumentListView: View {
         }
     }
 
+    /// The list's selection. "In the list", the expanded note is its
+    /// own evidence of being open, so the list reports no selection —
+    /// no accent highlight swallowing the writing page.
+    private var listSelection: Binding<String?> {
+        Binding(
+            get: { state.notesOpenInList ? nil : state.selectedDocID },
+            set: { if let id = $0 { state.selectedDocID = id } }
+        )
+    }
+
     var body: some View {
-        @Bindable var state = state
         VStack(spacing: 0) {
-            List(selection: $state.selectedDocID) {
+            List(selection: listSelection) {
                 // A bare place the search has placed awaits the reader's
                 // word before it groups under that country.
                 if grouping == .place, !state.places.pendingVerification.isEmpty {
@@ -248,29 +295,67 @@ struct DocumentListView: View {
                         }
                     }
                 }
-                // The standing notes, above every grouping.
-                if !pinnedEntries.isEmpty {
-                    Section {
-                        ForEach(pinnedEntries) { entry in
-                            DocumentRow(entry: entry)
-                                .tag(entry.id)
-                                .listRowSeparator(.hidden)
-                        }
-                    }
-                }
                 ForEach(groups, id: \.label) { group in
                     Section(group.label) {
                         ForEach(group.entries) { entry in
-                            DocumentRow(entry: entry, detail: detail(for: entry.doc))
-                                .tag(entry.id)
-                                .listRowSeparator(.hidden)
-                                // A folder's rows keep the Filed list's
-                                // put-it-back.
-                                .contextMenu {
-                                    if filedUnder != nil {
-                                        Button("Unfile") { state.unfile(entry.doc) }
+                            Group {
+                                // "In the list" (Settings ▸ Appearance):
+                                // the clicked document grows in place —
+                                // a note into its writing page, other
+                                // kinds into their reading — all the
+                                // words held, no pane opening.
+                                if isExpanded(entry) {
+                                    // Thin rules above and below mark
+                                    // where the open document begins
+                                    // and the list resumes.
+                                    VStack(spacing: 0) {
+                                        Divider()
+                                        if ContentView.isWritable(entry.doc) {
+                                            NoteWritingView(doc: entry.doc, inline: true)
+                                                .id(entry.doc.id)
+                                                .padding(.vertical, 6)
+                                            // The note's commands wait
+                                            // under the words, behind a
+                                            // reveal triangle — the same
+                                            // bar the "controls under"
+                                            // layout uses; the reversed
+                                            // triangle folds it away.
+                                            if controlsRevealed {
+                                                Divider()
+                                                NoteOptionsColumn(doc: entry.doc,
+                                                                  underNote: true)
+                                            }
+                                            controlsToggle
+                                        } else {
+                                            DocumentReaderView(doc: entry.doc, inline: true)
+                                                .id(entry.doc.id)
+                                                .padding(.vertical, 6)
+                                        }
+                                        Divider()
+                                    }
+                                } else {
+                                    DocumentRow(entry: entry, detail: detail(for: entry.doc))
+                                }
+                            }
+                            .tag(entry.id)
+                            .listRowSeparator(.hidden)
+                            // A folder's rows keep the Filed list's
+                            // put-it-back.
+                            .contextMenu {
+                                if filedUnder != nil {
+                                    Button("Unfile") { state.unfile(entry.doc) }
+                                }
+                                #if os(macOS)
+                                Button("Rename File…") {
+                                    state.renameFile(of: entry.doc)
+                                }
+                                if filedUnder != nil {
+                                    Button("Delete File…", role: .destructive) {
+                                        state.deleteFile(entry.doc)
                                     }
                                 }
+                                #endif
+                            }
                         }
                     }
                 }
@@ -297,7 +382,17 @@ struct DocumentListView: View {
             .overlay {
                 if state.index.folderURL != nil, scopedEntries.isEmpty,
                    !state.index.isScanning {
-                    if let filedUnder {
+                    if draftLettersOnly {
+                        ContentUnavailableView(
+                            "No Draft Letters",
+                            systemImage: "envelope.open",
+                            description: Text("A new letter starts here; its Letter button files it under Letters when it is done."))
+                    } else if let action {
+                        ContentUnavailableView(
+                            "Nothing \(action.displayName)",
+                            systemImage: SidebarCatalog.icon(for: action),
+                            description: Text("Give a note this standing — in the Action row beside it — and it lists here."))
+                    } else if let filedUnder {
                         ContentUnavailableView(
                             "Nothing Here",
                             systemImage: "checklist",
@@ -315,6 +410,30 @@ struct DocumentListView: View {
         .task(id: state.index.timeline.count) {
             state.places.resolveMissing(in: state.filteredEntries.map(\.doc.location))
         }
+        // A different note opens with its controls tucked away again.
+        .onChange(of: state.selectedDocID) { controlsRevealed = false }
+    }
+
+    /// Whether this entry is the document open in the list itself.
+    private func isExpanded(_ entry: IndexEntry) -> Bool {
+        state.notesOpenInList && entry.id == state.selectedDocID
+    }
+
+    /// The reveal triangle under an inline note: click for the note's
+    /// controls; reversed, click to fold them away again.
+    private var controlsToggle: some View {
+        Button {
+            withAnimation(.snappy) { controlsRevealed.toggle() }
+        } label: {
+            Image(systemName: controlsRevealed ? "chevron.up" : "chevron.down")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 3)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help(controlsRevealed ? "Hide the note's controls" : "Show the note's controls")
     }
 
     private func placeVerificationRow(_ record: PlaceDirectory.Record) -> some View {
@@ -335,30 +454,18 @@ struct DocumentListView: View {
 
     // MARK: The standing notes
 
-    /// "To Do" and "Done" stand at the top of the list, above the
-    /// groupings; see AppState.ensureStandingNotes().
+    /// "To Do" and "Done" — ordinary notes the library keeps standing
+    /// (see AppState.ensureStandingNotes()). They list under their own
+    /// dates like any note, never pinned; the Inbox leaves them out
+    /// entirely, their Filed places being their homes.
     static let pinnedTitles = ["To Do", "Done"]
-
-    private var pinnedEntries: [IndexEntry] {
-        // The standing notes head the whole library, not a folder's
-        // slice or the Inbox.
-        guard filedUnder == nil, !inboxOnly else { return [] }
-        return Self.pinnedTitles.compactMap { title in
-            state.filteredEntries.first {
-                $0.doc.title.trimmingCharacters(in: .whitespaces)
-                    .caseInsensitiveCompare(title) == .orderedSame
-            }
-        }
-    }
 
     // MARK: Grouping
 
     private var groups: [(label: String, entries: [IndexEntry])] {
-        let pinnedIDs = Set(pinnedEntries.map(\.id))
-        let entries = scopedEntries.filter { !pinnedIDs.contains($0.id) }
         switch grouping {
-        case .place: return placeGroups(entries)
-        case .time: return timeGroups(entries)
+        case .place: return placeGroups(scopedEntries)
+        case .time: return timeGroups(scopedEntries)
         }
     }
 
@@ -487,23 +594,18 @@ struct PeopleListView: View {
     var body: some View {
         List(selection: selection) {
             ForEach(people) { listing in
-                // The reveal triangle unfolds the person's contact
-                // details in place; clicking the person fills the next
-                // column with the notes that name them.
-                DisclosureGroup {
-                    contactDetails(listing.person)
-                } label: {
-                    personRow(listing)
-                }
-                .tag(listing.id)
-                .listRowSeparator(.hidden)
-                #if os(macOS)
-                .contextMenu {
-                    Button("Edit Person…") {
-                        editingListing = listing
+                // Clicking a person fills the next column with the
+                // notes that name them, their contact details above.
+                personRow(listing)
+                    .tag(listing.id)
+                    .listRowSeparator(.hidden)
+                    #if os(macOS)
+                    .contextMenu {
+                        Button("Edit Person…") {
+                            editingListing = listing
+                        }
                     }
-                }
-                #endif
+                    #endif
             }
         }
         .overlay {
@@ -512,7 +614,7 @@ struct PeopleListView: View {
                 ContentUnavailableView(
                     "No People",
                     systemImage: "person.2",
-                    description: Text("People appear here from the shared folder's contact records — Digital Letters' People.json and the phone's identity cards. Ctrl-click People in the sidebar to add someone."))
+                    description: Text("People appear here from the shared folder's contact records — Digital Letters' People.json and the phone's identity cards. Rest the pointer on People in the sidebar and click its triangle to add someone."))
             }
         }
         #if os(macOS)
@@ -526,39 +628,17 @@ struct PeopleListView: View {
         #endif
     }
 
-    /// The record's lines, unfolded under the name.
-    @ViewBuilder private func contactDetails(_ person: Person) -> some View {
-        let details: [(String, String)] = [
-            ("ORCID", person.orcid),
-            ("Affiliation", person.affiliation),
-            ("Email", person.emails.joined(separator: ", ")),
-            ("Aliases", (person.aliases ?? []).joined(separator: ", ")),
-            ("Profile", person.publicProfile ?? ""),
-        ].filter { !$0.1.isEmpty }
-        if details.isEmpty {
-            Text("The record carries only the name.")
-                .font(.caption)
-                .foregroundStyle(.tertiary)
-        } else {
-            ForEach(details, id: \.0) { label, value in
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(label)
-                        .font(.caption2)
-                        .foregroundStyle(.tertiary)
-                    Text(value)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-            }
-        }
-    }
-
     private func personRow(_ listing: PersonListing) -> some View {
         let mentionCount = state.index.mentions[listing.id]?.count ?? 0
         return HStack(spacing: 10) {
             PersonAvatarView(name: listing.person.displayName, size: 32)
             VStack(alignment: .leading, spacing: 2) {
-                Text(listing.person.displayName)
+                HStack(spacing: 5) {
+                    Text(listing.person.displayName)
+                    if listing.person.isArtificial {
+                        aiBadge
+                    }
+                }
                 if !listing.person.affiliation.isEmpty {
                     Text(listing.person.affiliation)
                         .font(.caption)
@@ -577,6 +657,16 @@ struct PeopleListView: View {
         }
         .padding(.vertical, 2)
     }
+
+    /// The quiet mark of a model among people.
+    private var aiBadge: some View {
+        Text("AI")
+            .font(.caption2.weight(.semibold))
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 4)
+            .padding(.vertical, 1)
+            .overlay(RoundedRectangle(cornerRadius: 3).strokeBorder(.quaternary))
+    }
 }
 
 /// One row of the People place: a contact record from the directory, or
@@ -589,10 +679,9 @@ struct PersonListing: Identifiable {
     let cardDocID: String?
 }
 
-/// A person's page in the reading column: the notes that name them,
-/// newest first, under their face and name. Clicking a note opens it
-/// in this column's place; the contact details stay with the People
-/// list, under the reveal triangle.
+/// A person's page in the reading column: their contact details under
+/// their face and name, then the notes that name them, newest first.
+/// Clicking a note opens it in this column's place.
 struct PersonMentionsView: View {
     @Environment(AppState.self) private var state
     let listing: PersonListing
@@ -617,6 +706,7 @@ struct PersonMentionsView: View {
             }
             .padding(.vertical, 6)
             .listRowSeparator(.hidden)
+            contactDetails(listing.person)
             Section("Mentioned In") {
                 ForEach(mentions) { entry in
                     Button {
@@ -637,6 +727,29 @@ struct PersonMentionsView: View {
                     systemImage: "person.2",
                     description: Text("No note names \(listing.person.displayName) yet — by their name or an alias from their record."))
             }
+        }
+    }
+
+    /// The record's lines, under the name — affiliation rides with the
+    /// name itself, so it is not repeated here.
+    @ViewBuilder private func contactDetails(_ person: Person) -> some View {
+        let details: [(String, String)] = [
+            ("ORCID", person.orcid),
+            ("Version", person.aiVersion ?? ""),
+            ("Email", person.emails.joined(separator: ", ")),
+            ("Aliases", (person.aliases ?? []).joined(separator: ", ")),
+            ("Profile", person.publicProfile ?? ""),
+        ].filter { !$0.1.isEmpty }
+        ForEach(details, id: \.0) { label, value in
+            VStack(alignment: .leading, spacing: 1) {
+                Text(label)
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+                Text(value)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            .listRowSeparator(.hidden)
         }
     }
 }
