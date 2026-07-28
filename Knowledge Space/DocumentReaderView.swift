@@ -36,17 +36,33 @@ struct DocumentReaderView: View {
     private var readerColumn: some View {
         VStack(alignment: .leading, spacing: 18) {
             header
+            // The study's terms — keywords, concepts, and names tagged
+            // person — as live chips, the same interactions the source
+            // pages offer: digests and any other document carrying a
+            // concept pool.
+            if !doc.concepts.isEmpty {
+                termChips
+            }
             if let body = doc.body {
                 let appendixIDs = doc.visualMetaParagraphIDs
                     .union(doc.analysisParagraphIDs)
                 ForEach(body.filter {
                     state.showsVisualMeta || !appendixIDs.contains($0.id)
                 }) { paragraph in
-                    ParagraphView(paragraph: paragraph,
-                                  isAppendix: appendixIDs.contains(paragraph.id),
-                                  isHighlighted: paragraph.id == state.pendingFragment,
-                                  flowed: state.flowReading)
-                        .id(paragraph.id)
+                    // A "Photo: <name>" line names an image beside the
+                    // note in the folder (a scan's capture) — shown as
+                    // the picture itself, clickable to open full size.
+                    if let name = Self.photoFileName(in: paragraph.text) {
+                        photoView(name)
+                            .id(paragraph.id)
+                    } else {
+                        ParagraphView(paragraph: paragraph,
+                                      isAppendix: appendixIDs.contains(paragraph.id),
+                                      isHighlighted: paragraph.id == state.pendingFragment,
+                                      flowed: state.flowReading,
+                                      transcript: paragraph.speaker == nil ? nil : doc)
+                            .id(paragraph.id)
+                    }
                 }
             } else if let wraps = doc.wraps {
                 sidecarView(wraps)
@@ -118,6 +134,27 @@ struct DocumentReaderView: View {
                         .italic()
                         .foregroundStyle(.secondary)
                 }
+                // A digest is a pointer as much as a page: the way to
+                // its original stands right under the title.
+                if doc.isDigest {
+                    Button {
+                        state.openDigestOriginal(doc)
+                    } label: {
+                        Label("Open Original", systemImage: "arrow.up.forward.app")
+                    }
+                    .help("Opens the file this digest distills, in whatever app owns it")
+                }
+                #if os(macOS)
+                // An adopted email keeps its way back into Mail.
+                if let mail = Self.mailPointerURL(of: doc) {
+                    Button {
+                        NSWorkspace.shared.open(mail)
+                    } label: {
+                        Label("Open in Mail", systemImage: "envelope.open")
+                    }
+                    .help("Opens the original message in Mail")
+                }
+                #endif
                 warnings
                 Divider()
             }
@@ -152,6 +189,47 @@ struct DocumentReaderView: View {
             .foregroundStyle(tint)
             .padding(8)
             .background(tint.opacity(0.1), in: RoundedRectangle(cornerRadius: 8))
+    }
+
+    // MARK: Photo
+
+    /// The image filename a "Photo: <name>" line names — a plain name
+    /// in the same folder, not a path.
+    static func photoFileName(in text: String) -> String? {
+        guard text.hasPrefix("Photo: ") else { return nil }
+        let name = String(text.dropFirst("Photo: ".count))
+            .trimmingCharacters(in: .whitespaces)
+        guard !name.isEmpty, !name.contains("/") else { return nil }
+        return name
+    }
+
+    /// The scan's photograph, shown in the note and clickable to open
+    /// full size in the system's viewer.
+    @ViewBuilder private func photoView(_ name: String) -> some View {
+        let url = state.index.folderURL?.appendingPathComponent(name)
+        #if os(macOS)
+        if let url, let image = NSImage(contentsOf: url) {
+            Button {
+                NSWorkspace.shared.open(url)
+            } label: {
+                Image(nsImage: image)
+                    .resizable()
+                    .scaledToFit()
+                    .frame(maxWidth: 320, maxHeight: 320, alignment: .leading)
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
+            }
+            .buttonStyle(.plain)
+            .help("Open the photo full size")
+        } else {
+            Label(name, systemImage: "photo")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+        }
+        #else
+        Label(name, systemImage: "photo")
+            .font(.callout)
+            .foregroundStyle(.secondary)
+        #endif
     }
 
     // MARK: Sidecar
@@ -193,6 +271,83 @@ struct DocumentReaderView: View {
                 .foregroundStyle(.secondary)
                 .textSelection(.enabled)
         }
+    }
+
+    /// The message:// link an adopted email carries in its pointer line.
+    static func mailPointerURL(of doc: LiquidDoc) -> URL? {
+        guard let line = (doc.body ?? []).last(where: { $0.text.hasPrefix("Email: message://") })
+        else { return nil }
+        return URL(string: String(line.text.dropFirst("Email: ".count))
+            .trimmingCharacters(in: .whitespaces))
+    }
+
+    // MARK: Term chips
+
+    /// A term on its way into the contacts, via its chip's menu.
+    @State private var newPerson: Person?
+
+    private var termChips: some View {
+        LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), alignment: .leading)],
+                  alignment: .leading, spacing: 6) {
+            ForEach(doc.concepts) { concept in
+                termChip(concept)
+            }
+        }
+        #if os(macOS)
+        .sheet(item: $newPerson) { person in
+            PersonFormView(person: person, heading: "New Person") { updated in
+                state.people.upsert(updated)
+                state.publishPortraits()
+                state.index.rescan()
+            }
+        }
+        #endif
+    }
+
+    /// One term as a live button — SourcesView's chip, word for word:
+    /// any view narrowed to the term; a name also stands in People or
+    /// Authors, or begins a contact record.
+    private func termChip(_ concept: LiquidDoc.Concept) -> some View {
+        let isName = concept.tag == "person"
+        return Menu {
+            Menu("Show in") {
+                ForEach(LibraryViewRegistry.modules) { module in
+                    Button(module.name) {
+                        state.showTerm(concept.name, inView: module.id, from: doc.id)
+                    }
+                }
+            }
+            if isName {
+                Divider()
+                Button("Show in People") { state.showPerson(concept.name) }
+                Button("Show in Authors") { state.showCitedAuthor(concept.name) }
+                #if os(macOS)
+                if state.people.person(named: concept.name) == nil {
+                    Button("Add to Contacts…") {
+                        newPerson = Person(displayName: concept.name)
+                    }
+                }
+                #endif
+            }
+        } label: {
+            HStack(spacing: 4) {
+                if isName {
+                    Image(systemName: "person")
+                }
+                Text(concept.name)
+                    .lineLimit(1)
+            }
+            .font(.caption)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 3)
+            .background(.quaternary, in: Capsule())
+        }
+        .menuIndicator(.hidden)
+        .buttonStyle(.plain)
+        .fixedSize()
+        .help(isName
+              ? "A name the document mentions — open it in any view, see the person, or start a contact"
+              : "Open any view narrowed to “\(concept.name)”")
     }
 
     // MARK: Backlinks
@@ -237,6 +392,8 @@ struct DocumentReaderView: View {
 /// markdown, and addresses as live links. Appendix paragraphs render at
 /// half size — metadata, not content.
 struct ParagraphView: View {
+    @Environment(AppState.self) private var state
+
     let paragraph: LiquidDoc.Paragraph
     var isAppendix = false
     var isHighlighted = false
@@ -244,6 +401,10 @@ struct ParagraphView: View {
     /// parentheses). Display only; headings and the appendix are left
     /// alone.
     var flowed = false
+    /// The transcript this paragraph speaks in, when it does: with it,
+    /// the speaker's name becomes a menu — see the person in any view,
+    /// or copy their words into notes that cite their way back.
+    var transcript: LiquidDoc? = nil
 
     private var isRule: Bool {
         let text = paragraph.displayText
@@ -260,13 +421,32 @@ struct ParagraphView: View {
     var body: some View {
         if isRule {
             Divider()
+        } else if let speaker = paragraph.speaker {
+            // A transcript line, set like a script: the name in its own
+            // column at the left, the words beside it. Only the words
+            // are selectable — text selection on the whole row swallows
+            // the clicks the name's menu needs.
+            HStack(alignment: .firstTextBaseline, spacing: 12) {
+                Group {
+                    if let transcript {
+                        speakerMenu(speaker, in: transcript)
+                    } else {
+                        speakerLabel(speaker)
+                    }
+                }
+                .frame(width: 130, alignment: .trailing)
+                Text(shownText)
+                    .font(font)
+                    .lineSpacing(6 * scale)
+                    .textSelection(.enabled)
+                Spacer(minLength: 0)
+            }
+            .padding(4)
+            .background(isHighlighted ? Color.yellow.opacity(0.35) : Color.clear,
+                        in: RoundedRectangle(cornerRadius: 4))
+            .animation(.easeOut(duration: 0.6), value: isHighlighted)
         } else {
             VStack(alignment: .leading, spacing: 3) {
-                if let speaker = paragraph.speaker {
-                    Text(speaker)
-                        .font(.system(size: 13 * scale, weight: .semibold))
-                        .foregroundStyle(.secondary)
-                }
                 Text(shownText)
                     .font(font)
                     .lineSpacing((paragraph.effectiveHeading == nil ? 6 : 3) * scale)
@@ -277,6 +457,44 @@ struct ParagraphView: View {
             .animation(.easeOut(duration: 0.6), value: isHighlighted)
             .textSelection(.enabled)
         }
+    }
+
+    /// The name as the column shows it, menu or not.
+    private func speakerLabel(_ name: String) -> some View {
+        Text(name)
+            .font(.system(size: 13 * scale, weight: .semibold))
+            .foregroundStyle(.secondary)
+            .multilineTextAlignment(.trailing)
+    }
+
+    /// The speaker's name as the system's name-menu: the person in any
+    /// view, their statement — or everything they said — copied into a
+    /// note that cites its way back to the transcript.
+    private func speakerMenu(_ speaker: String, in transcript: LiquidDoc) -> some View {
+        Menu {
+            Menu("Show in") {
+                ForEach(LibraryViewRegistry.modules) { module in
+                    Button(module.name) {
+                        state.showTerm(speaker, inView: module.id, from: transcript.id)
+                    }
+                }
+            }
+            Button("Show in People") { state.showPerson(speaker) }
+            Button("Show in Authors") { state.showCitedAuthor(speaker) }
+            Divider()
+            Button("Copy to Note") {
+                state.liftStatement(paragraph, from: transcript)
+            }
+            Button("Copy All of \(speaker) to Note") {
+                state.liftAllStatements(of: speaker, from: transcript)
+            }
+        } label: {
+            speakerLabel(speaker)
+                .contentShape(Rectangle())
+        }
+        .menuIndicator(.hidden)
+        .buttonStyle(.plain)
+        .help("\(speaker) — see the person in any view, or copy what they said here (or everywhere in this transcript) into a note linked back to its source")
     }
 
     private var scale: CGFloat { isAppendix ? 0.5 : 1 }
@@ -336,4 +554,23 @@ nonisolated enum FlowBreaker {
         }
         return result
     }
+}
+
+#Preview("Transcript paragraphs") {
+    VStack(alignment: .leading, spacing: 8) {
+        ParagraphView(paragraph: LiquidDoc.Paragraph(
+            id: "p1", heading: nil,
+            text: "Frode Hegland: I think the key is that every statement should be addressable, so a reader can always follow a quote back to the moment it was spoken.",
+            speaker: "Frode Hegland"))
+        ParagraphView(paragraph: LiquidDoc.Paragraph(
+            id: "p2", heading: nil,
+            text: "Mark Anderson: Agreed — and the speaker names need to be real people in the system, not just strings.",
+            speaker: "Mark Anderson"))
+        ParagraphView(paragraph: LiquidDoc.Paragraph(
+            id: "p3", heading: nil,
+            text: "A plain paragraph without a speaker, for comparison."))
+    }
+    .padding(20)
+    .frame(width: 640)
+    .environment(AppState())
 }

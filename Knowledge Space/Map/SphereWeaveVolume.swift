@@ -104,7 +104,7 @@ struct SphereWeaveSpaceView: View {
         // name and a dictionary key.
         var seenIDs = Set<String>()
         let docs = state.weaveDocuments.suffix(500).filter {
-            seenIDs.insert($0.id).inserted
+            !$0.isDigest && seenIDs.insert($0.id).inserted
         }
         var seenPeople = Set<String>()
         var people: [String] = []

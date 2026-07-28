@@ -184,6 +184,12 @@ extension AppState {
             // The photo was removed from the card — its file goes too.
             try? FileManager.default.removeItem(at: oldPhoto)
         }
+        // The card travels under a name a fresh device can spot among
+        // iCloud placeholders — "<id>.card.liquid.json" — so a phone
+        // just given the folder downloads identity first and adopts it
+        // without asking. The same JSON either way; only the name says
+        // what it is before the bytes arrive.
+        let cardURL = Self.cardFileURL(id: id, in: folderURL)
         let doc = LiquidDoc(format: LiquidDoc.knownFormat,
                             id: id,
                             title: name,
@@ -193,17 +199,49 @@ extension AppState {
                             links: [],
                             wraps: nil,
                             documentType: IdentityCard.documentType,
-                            fileURL: existing?.fileURL
-                                ?? folderURL.appendingPathComponent(id)
-                                    .appendingPathExtension(LiquidDoc.fileExtension))
+                            fileURL: cardURL)
         do {
             try doc.jsonData().write(to: doc.fileURL, options: .atomic)
         } catch {
             showNote("Could not write your card: \(error.localizedDescription)")
             return
         }
+        // A card saved before the naming convention moves to it.
+        if let existing, existing.fileURL != cardURL {
+            try? FileManager.default.removeItem(at: existing.fileURL)
+        }
         authorName = name
         index.rescan()
+    }
+
+    /// Where a card lives: named so the file declares itself a card.
+    static func cardFileURL(id: String, in folder: URL) -> URL {
+        folder.appendingPathComponent("\(id).card")
+            .appendingPathExtension(LiquidDoc.fileExtension)
+    }
+
+    /// A note the phone marked `journal` files itself under Journal —
+    /// the kind travels in the document, the filing stays this Mac's.
+    /// Called after each scan; already-filed notes are left alone.
+    func fileJournalNotes() {
+        for entry in index.timeline
+        where entry.doc.documentType == LiquidDoc.DocumentType.journal.rawValue
+            && folder(for: entry.doc) == nil {
+            fileDocument(entry.doc, under: "Journal")
+        }
+    }
+
+    /// Cards written before the "<id>.card.liquid.json" convention take
+    /// the new name quietly, so every device can spot them unread.
+    /// Called after each scan; does nothing once the names are right.
+    func tidyCardFileNames() {
+        guard let folderURL = index.folderURL else { return }
+        for cardDoc in cards {
+            let wanted = Self.cardFileURL(id: cardDoc.id, in: folderURL)
+            guard cardDoc.fileURL != wanted,
+                  !cardDoc.fileURL.lastPathComponent.contains(".card.") else { continue }
+            try? FileManager.default.moveItem(at: cardDoc.fileURL, to: wanted)
+        }
     }
 
     // MARK: - List filtering

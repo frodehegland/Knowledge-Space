@@ -10,12 +10,28 @@ import SwiftUI
 /// free-floating window, and the map itself an immersive space whose
 /// cards hang anywhere in the room — backed by the same `.liquid.json`
 /// files.
+#if os(macOS)
+/// Catches files handed to the app itself — an email dropped on the
+/// Dock icon, or an .eml opened with Knowledge Space — and turns each
+/// into a document. ContentView points `state` here on appearance.
+final class MailOpenDelegate: NSObject, NSApplicationDelegate {
+    @MainActor static weak var state: AppState?
+
+    func application(_ application: NSApplication, open urls: [URL]) {
+        Task { @MainActor in
+            Self.state?.handleEmailFiles(urls)
+        }
+    }
+}
+#endif
+
 @main
 struct KnowledgeSpaceApp: App {
     #if os(visionOS)
     @State private var mapState = AuthorMapState()
     #else
     @State private var state = AppState()
+    @NSApplicationDelegateAdaptor(MailOpenDelegate.self) private var mailOpenDelegate
     #endif
 
     var body: some Scene {
@@ -111,6 +127,12 @@ struct KnowledgeSpaceApp: App {
             // Old-name documents (.origamitext) come home by conversion —
             // the same JSON, renamed to .liquid.json in the library folder.
             CommandGroup(after: .newItem) {
+                // A meeting's words become a transcript document: every
+                // statement addressable, every speaker known to People.
+                Button("Import Transcript…") {
+                    state.importTranscripts()
+                }
+                .disabled(state.index.folderURL == nil)
                 Button("Convert Old Documents…") {
                     state.importLegacyDocuments()
                 }

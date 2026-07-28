@@ -31,6 +31,10 @@ nonisolated enum PDFVisualMeta {
         let record: BibTeXRecord
         let annotations: [Annotation]
 
+        /// The title rescued when the record itself carries none: a
+        /// loose read of the citation text, or the PDF's own metadata.
+        let fallbackTitle: String?
+
         struct Annotation: Sendable {
             let text: String
             let locator: String?
@@ -40,6 +44,12 @@ nonisolated enum PDFVisualMeta {
             let text = record.fields["abstract"]?
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             return text?.isEmpty == false ? text : nil
+        }
+
+        /// The work's title as best the PDF tells it — never empty
+        /// unless the PDF truly names itself nowhere.
+        var resolvedTitle: String? {
+            record.title.isEmpty ? fallbackTitle : record.title
         }
     }
 
@@ -83,7 +93,41 @@ nonisolated enum PDFVisualMeta {
         else { return nil }
         let citation = String(block[citationStart.upperBound..<citationEnd.lowerBound])
         guard let record = BibTeXRecord.records(in: citation).first else { return nil }
-        return Harvest(record: record, annotations: annotations(in: block))
+        // PDF text extraction can mangle the record enough that the
+        // strict parser loses the title field; the work should still
+        // wear its name, not its file's.
+        var fallbackTitle: String?
+        if record.title.isEmpty {
+            fallbackTitle = looseTitle(in: citation)
+                ?? (pdf.documentAttributes?[PDFDocumentAttribute.titleAttribute] as? String)
+                    .flatMap {
+                        let trimmed = $0.trimmingCharacters(in: .whitespacesAndNewlines)
+                        return trimmed.isEmpty ? nil : trimmed
+                    }
+        }
+        return Harvest(record: record, annotations: annotations(in: block),
+                       fallbackTitle: fallbackTitle)
+    }
+
+    /// A tolerant read of `title = {…}` for citations the strict
+    /// parser lost to PDF extraction (fields broken across lines,
+    /// stray characters): nested braces honored, whitespace collapsed.
+    private static func looseTitle(in citation: String) -> String? {
+        guard let match = citation.range(of: #"(?<![a-zA-Z])title\s*=\s*\{"#,
+                                         options: [.regularExpression, .caseInsensitive])
+        else { return nil }
+        var depth = 1
+        var index = match.upperBound
+        var value = ""
+        while index < citation.endIndex, depth > 0 {
+            let character = citation[index]
+            if character == "{" { depth += 1 }
+            if character == "}" { depth -= 1 }
+            if depth > 0 { value.append(character) }
+            index = citation.index(after: index)
+        }
+        let title = value.split(whereSeparator: \.isWhitespace).joined(separator: " ")
+        return title.isEmpty ? nil : title
     }
 
     /// Reader's margin, read generically per the Visual-Meta approach
@@ -275,7 +319,7 @@ extension AppState {
             var doc = LiquidDoc(
                 format: LiquidDoc.knownFormat,
                 id: docID,
-                title: record.title.isEmpty ? find.name : record.title,
+                title: find.harvest.resolvedTitle ?? find.name,
                 author: authorName,
                 created: .now,
                 body: paragraphs,
@@ -397,6 +441,42 @@ extension AppState {
         }
     }
 
+    /// Re-reads one shelved source from its PDF — the ctrl-click's
+    /// Re-Process, for a work whose first scan came up short (a file
+    /// name standing where the title should be, a missing abstract).
+    func reprocessSource(_ doc: LiquidDoc) {
+        guard let pdf = sourcePDFURL(for: doc) else {
+            showNote("No PDF within reach for “\(doc.title)” — is the Reader Library folder granted in Settings ▸ Library?")
+            return
+        }
+        guard !readerScanRunning else { return }
+        readerScanRunning = true
+        Task {
+            // The PDF read is the slow part — off the main actor.
+            let harvest = await Task.detached(priority: .userInitiated) {
+                PDFVisualMeta.harvest(inPDFAt: pdf)
+            }.value
+            readerScanRunning = false
+            guard let harvest else {
+                showNote("No Visual-Meta found in “\(pdf.lastPathComponent)”.")
+                return
+            }
+            let result = applyOneReharvest(docID: doc.id, harvest: harvest)
+            if result.refreshed || result.annotations > 0 {
+                index.rescan()
+                var parts: [String] = []
+                if result.refreshed { parts.append("record refreshed") }
+                if result.annotations > 0 {
+                    parts.append("\(result.annotations) annotation\(result.annotations == 1 ? "" : "s") added")
+                }
+                showNote("“\(harvest.resolvedTitle ?? doc.title)”: "
+                    + parts.joined(separator: ", ") + ".")
+            } else {
+                showNote("“\(doc.title)” already matches its PDF.")
+            }
+        }
+    }
+
     /// One source refreshed from its PDF's harvest; the caller rescans.
     private func applyOneReharvest(docID: String,
                                    harvest: PDFVisualMeta.Harvest) -> (refreshed: Bool, annotations: Int) {
@@ -422,9 +502,11 @@ extension AppState {
                 doc.references = [LiquidDoc.Reference(id: record.key, bibtex: fresh)]
                 changed = true
             }
-            // The work's own title takes over from a file's name.
-            if !record.title.isEmpty, doc.title != record.title {
-                doc.title = record.title
+            // The work's own title takes over from a file's name —
+            // the record's where it parses, otherwise the loose read
+            // or the PDF's metadata the harvest rescued.
+            if let title = item.harvest.resolvedTitle, doc.title != title {
+                doc.title = title
                 changed = true
             }
             var body = doc.body ?? []

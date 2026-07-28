@@ -144,6 +144,16 @@ struct ContentView: View {
         .onChange(of: columnVisibility) {
             if columnVisibility != .all { columnVisibility = .all }
         }
+        #if os(macOS)
+        // An email dropped anywhere on the window becomes a document:
+        // a message dragged straight from Mail, or an .eml file.
+        .onDrop(of: AppState.emailDropTypes, isTargeted: nil) { providers in
+            state.handleEmailProviders(providers)
+        }
+        // The Dock icon's drops arrive through the app delegate, which
+        // needs the library to hand them to.
+        .onAppear { MailOpenDelegate.state = state }
+        #endif
         .fileImporter(isPresented: $showingFolderPicker,
                       allowedContentTypes: [.folder]) { result in
             if case .success(let url) = result {
@@ -167,6 +177,12 @@ struct ContentView: View {
             if !scanning {
                 state.libraryUpkeep()
                 state.readerLibraryUpkeep()
+                // Cards from before the "<id>.card.liquid.json" naming
+                // move to it, so fresh devices can spot them unread.
+                state.tidyCardFileNames()
+                // Journal notes captured on the phone file themselves
+                // under Journal here.
+                state.fileJournalNotes()
             }
         }
         .task { state.libraryUpkeep() }
@@ -287,8 +303,10 @@ struct ContentView: View {
         case .timeline: timelineHeader
         case .place: listHeader("Places")
         case .people: listHeader("People")
+        case .transcripts: listHeader("Transcripts")
         case .draftLetters: listHeader("Draft Letters")
-        case .action(let action): listHeader(action.displayName)
+        case .digests: listHeader("Digests")
+        case .action(let action): listHeader(action.placeName)
         default: EmptyView()
         }
     }
@@ -347,7 +365,9 @@ struct ContentView: View {
             }
             .padding(.horizontal, 8)
             .padding(.vertical, 6)
-            .background(RoundedRectangle(cornerRadius: 7).fill(.background))
+            // The entry box is wide, so it wears the page grey rather
+            // than standing as a white band; the border alone marks it.
+            .background(RoundedRectangle(cornerRadius: 7).fill(AppGreys.page))
             .overlay(RoundedRectangle(cornerRadius: 7).strokeBorder(.quaternary))
             Button {
                 state.newNote()
@@ -634,6 +654,10 @@ struct ContentView: View {
             DocumentListView(grouping: .place)
         } else if state.sidebarSelection == .people {
             PeopleListView()
+        } else if state.sidebarSelection == .transcripts {
+            DocumentListView(transcriptsOnly: true)
+        } else if state.sidebarSelection == .digests {
+            DocumentListView(digestsOnly: true)
         } else if state.sidebarSelection == .draftLetters {
             DocumentListView(draftLettersOnly: true)
         } else if case .action(let action)? = state.sidebarSelection {
@@ -653,6 +677,9 @@ struct ContentView: View {
             || doc.documentType == LiquidDoc.DocumentType.letter.rawValue
             || doc.documentType == LiquidDoc.DocumentType.quote.rawValue
             || doc.documentType == LiquidDoc.DocumentType.annotation.rawValue
+            // The phone's kinds are notes in other clothes.
+            || doc.documentType == LiquidDoc.DocumentType.journal.rawValue
+            || doc.documentType == LiquidDoc.DocumentType.inspiration.rawValue
     }
 
     /// A note — or a letter, a note in every way — is its own writing
@@ -888,6 +915,10 @@ struct DocumentRow: View {
 
     private var isRetracted: Bool { state.index.retractedIDs.contains(entry.id) }
 
+    /// A meeting answers to its day: a transcript's row wears the
+    /// date as its title, wherever it is listed.
+    private var isTranscript: Bool { DocumentListView.isTranscript(entry.doc) }
+
     /// The row's words when the list is the page ("In the list"): the
     /// body itself, its first twenty words — rules and the metadata
     /// blocks skipped — with an ellipsis where more follows. An empty
@@ -914,13 +945,13 @@ struct DocumentRow: View {
             // words — no separate title line — in the body's type (New
             // York, the system serif), the window's black.
             if state.notesOpenInList {
-                Text(bodyOpening)
+                Text(isTranscript ? entry.doc.listedDateText : bodyOpening)
                     // Bold until read; opening the note ends the bolding.
                     .fontWeight(state.isUnread(entry.doc) ? .bold : .regular)
                     .font(.system(size: state.listTextSize, design: .serif))
                     .lineLimit(3)
             } else {
-                Text(entry.doc.title)
+                Text(isTranscript ? entry.doc.listedDateText : entry.doc.title)
                     .font(.headline)
                     // Bold until read; opening the note ends the bolding.
                     .fontWeight(state.isUnread(entry.doc) ? .bold : .regular)

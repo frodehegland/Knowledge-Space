@@ -67,6 +67,9 @@ struct OrigamiNotesApp: App {
         WindowGroup {
             NotesHomeView()
                 .environment(model)
+                // Fetch the AI key blob at launch (the Author way), so
+                // the Inspiration scan's book lookup has its key ready.
+                .task { AIKeyProvider.shared.start() }
         }
     }
 }
@@ -107,6 +110,11 @@ final class NotesModel {
     /// user adopts their card from the folder. Cards are made and edited
     /// on the larger screens; the phone only reads them.
     private(set) var cards: [LiquidDoc] = []
+
+    /// The folder's sources, kept so a scanned book already on the
+    /// shelf is cited, not doubled. The scan fills this; Inspiration
+    /// appends what it mints.
+    var sources: [LiquidDoc] = []
 
     var authorName: String {
         get { UserDefaults.standard.string(forKey: Self.authorKey) ?? "" }
@@ -173,61 +181,164 @@ final class NotesModel {
         let author = authorName
         let cardType = IdentityCard.documentType
         Task.detached(priority: .userInitiated) {
-            let (foundNotes, foundCards) = Self.scan(folder: folderURL, author: author,
-                                                     cardType: cardType)
+            // Identity first, and fast: on iOS, iCloud files stand
+            // under their real names but dataless — every read blocks
+            // while it downloads. A full folder can take minutes; the
+            // card files, named "<id>.card.liquid.json", are spotted
+            // without reading anything else and fetched alone.
+            let earlyCards = Self.readCardFiles(folder: folderURL)
+            await MainActor.run {
+                let model = NotesModel.shared
+                if !earlyCards.isEmpty {
+                    model.cards = earlyCards
+                    log.info("rescan: identity pass found \(earlyCards.count) card(s)")
+                    if model.authorName.isEmpty, earlyCards.count == 1,
+                       let card = earlyCards.first {
+                        model.adopt(card: card)
+                    }
+                }
+            }
+            let result = Self.scan(folder: folderURL, author: author, cardType: cardType)
             await MainActor.run {
                 // Through the singleton, not a captured self — rescan's
                 // first call is inside init, before self can travel.
                 let model = NotesModel.shared
-                model.notes = foundNotes
-                model.cards = foundCards
+                model.notes = result.notes
+                model.cards = result.cards.isEmpty ? earlyCards : result.cards
+                model.sources = result.sources
+                log.info("rescan: \(result.notes.count) notes, \(result.cards.count) cards, \(result.sources.count) sources, \(result.pendingDownloads) downloading in \(folderURL.path)")
+                // The folder is the source of identity: one card, no
+                // name yet — that card is the user's, adopted without
+                // asking. More than one waits for their word.
+                let cards = model.cards
+                if model.authorName.isEmpty, cards.count == 1,
+                   let card = cards.first {
+                    model.adopt(card: card)
+                } else if model.authorName.isEmpty, cards.isEmpty {
+                    // The card may still be on its way from iCloud —
+                    // look again shortly instead of asking the user.
+                    model.scheduleCardRescan()
+                }
+                // Files still coming from iCloud: look again as they
+                // land, so the list fills in instead of stalling.
+                if result.pendingDownloads > 0 {
+                    model.scheduleDownloadRescan()
+                }
             }
         }
     }
 
-    private nonisolated static func scan(folder folderURL: URL, author: String,
-                                         cardType: String) -> ([LiquidDoc], [LiquidDoc]) {
-        // Documents made elsewhere may exist here only as hidden
-        // ".<name>.icloud" placeholders, and asking iCloud for the
-        // folder alone does not reliably fetch its contents — ask for
-        // each by its real name, so the next rescan (foregrounding,
-        // pull-to-refresh) finds what has landed.
-        try? FileManager.default.startDownloadingUbiquitousItem(at: folderURL)
-        if let placeholders = FileManager.default.enumerator(
-            at: folderURL, includingPropertiesForKeys: nil,
-            options: [.skipsPackageDescendants]) {
-            for case let url as URL in placeholders
-            where url.pathExtension.lowercased() == "icloud" {
-                var name = url.lastPathComponent
-                if name.hasPrefix(".") { name.removeFirst() }
-                name = String(name.dropLast(".icloud".count))
-                guard !name.isEmpty else { continue }
-                let real = url.deletingLastPathComponent().appendingPathComponent(name)
-                try? FileManager.default.startDownloadingUbiquitousItem(at: real)
-            }
+    /// Re-runs the scan while iCloud files are still downloading —
+    /// every 3 seconds, capped, so the notes list fills in as they
+    /// arrive rather than waiting on the whole folder at once.
+    private var downloadRescanAttempts = 0
+    private var downloadRescanTask: Task<Void, Never>?
+    func scheduleDownloadRescan() {
+        guard downloadRescanTask == nil, downloadRescanAttempts < 40 else { return }
+        downloadRescanAttempts += 1
+        downloadRescanTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(3))
+            guard let self, !Task.isCancelled else { return }
+            self.downloadRescanTask = nil
+            self.rescan()
         }
-        let keys: [URLResourceKey] = [.isRegularFileKey]
+    }
+
+    /// The identity pass: only files named "<id>.card.liquid.json" are
+    /// read — the name is visible without downloading, so who the user
+    /// is arrives ahead of the whole folder.
+    private nonisolated static func readCardFiles(folder folderURL: URL) -> [LiquidDoc] {
+        guard let enumerator = FileManager.default.enumerator(
+            at: folderURL, includingPropertiesForKeys: [.isRegularFileKey],
+            options: [.skipsHiddenFiles, .skipsPackageDescendants]) else { return [] }
+        var cards: [LiquidDoc] = []
+        while let url = enumerator.nextObject() as? URL {
+            guard url.lastPathComponent.lowercased().hasSuffix(".card.liquid.json"),
+                  let data = try? Data(contentsOf: url),
+                  let doc = try? LiquidDoc.decode(data: data, fileURL: url),
+                  doc.documentType == IdentityCard.documentType
+            else { continue }
+            cards.append(doc)
+        }
+        return cards.sorted {
+            $0.author.localizedCaseInsensitiveCompare($1.author) == .orderedAscending
+        }
+    }
+
+    /// Looks again for the identity card while none has landed: every
+    /// two seconds, up to a minute — a fresh phone's folder is all
+    /// placeholders at first, and the card is requested by name.
+    private var cardRescanAttempts = 0
+    private var cardRescanTask: Task<Void, Never>?
+    func scheduleCardRescan() {
+        guard cardRescanTask == nil, cardRescanAttempts < 30 else { return }
+        cardRescanAttempts += 1
+        cardRescanTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(2))
+            guard let self, !Task.isCancelled else { return }
+            self.cardRescanTask = nil
+            self.rescan()
+        }
+    }
+
+    /// A scan's yield: what could be read now, and whether any files
+    /// are still downloading — so the caller knows to look again.
+    private struct ScanResult {
+        var notes: [LiquidDoc] = []
+        var cards: [LiquidDoc] = []
+        var sources: [LiquidDoc] = []
+        var pendingDownloads = 0
+    }
+
+    private nonisolated static func scan(folder folderURL: URL, author: String,
+                                         cardType: String) -> ScanResult {
+        try? FileManager.default.startDownloadingUbiquitousItem(at: folderURL)
+        // On iOS an iCloud document stands under its real name but may
+        // be *dataless* — reading it blocks until it downloads. So the
+        // scan never reads blind: it asks each file's download status,
+        // reads only what is already here, and requests the rest,
+        // reporting how many are still coming so the caller retries.
+        let keys: [URLResourceKey] = [.isRegularFileKey,
+                                      .ubiquitousItemDownloadingStatusKey]
         let enumerator = FileManager.default.enumerator(
             at: folderURL, includingPropertiesForKeys: keys,
             options: [.skipsHiddenFiles, .skipsPackageDescendants])
-        var foundNotes: [LiquidDoc] = []
-        var foundCards: [LiquidDoc] = []
+        var result = ScanResult()
         while let url = enumerator?.nextObject() as? URL {
-            guard LiquidDoc.isDocumentFile(url),
-                  let data = try? Data(contentsOf: url),
+            guard LiquidDoc.isDocumentFile(url) else { continue }
+            let status = (try? url.resourceValues(
+                forKeys: [.ubiquitousItemDownloadingStatusKey]))?
+                .ubiquitousItemDownloadingStatus
+            // Not yet here: request it and move on — never block.
+            if let status, status != .current {
+                try? FileManager.default.startDownloadingUbiquitousItem(at: url)
+                result.pendingDownloads += 1
+                continue
+            }
+            guard let data = try? Data(contentsOf: url),
                   let doc = try? LiquidDoc.decode(data: data, fileURL: url)
             else { continue }
             if doc.documentType == cardType {
-                foundCards.append(doc)
-            } else if doc.documentType == LiquidDoc.DocumentType.note.rawValue,
+                result.cards.append(doc)
+            } else if doc.documentType == LiquidDoc.DocumentType.source.rawValue {
+                // The shelf, read so a scanned book is cited once.
+                result.sources.append(doc)
+            } else if [LiquidDoc.DocumentType.note.rawValue,
+                       LiquidDoc.DocumentType.journal.rawValue,
+                       LiquidDoc.DocumentType.inspiration.rawValue]
+                        .contains(doc.documentType ?? ""),
                       isOwn(doc, author: author) {
-                foundNotes.append(doc)
+                // The phone's own capture kinds — a plain note, a
+                // journal entry, an inspiration — all belong in its
+                // list; the shelf kinds and others' notes stay out.
+                result.notes.append(doc)
             }
         }
-        return (foundNotes.sorted { $0.listedDate > $1.listedDate },
-                foundCards.sorted {
-                    $0.author.localizedCaseInsensitiveCompare($1.author) == .orderedAscending
-                })
+        result.notes.sort { $0.listedDate > $1.listedDate }
+        result.cards.sort {
+            $0.author.localizedCaseInsensitiveCompare($1.author) == .orderedAscending
+        }
+        return result
     }
 
     // MARK: The card
@@ -262,7 +373,8 @@ final class NotesModel {
     /// carries the standing in the file — every device lists it there —
     /// and, having a standing, is no draft.
     func createNote(title: String = "Untitled", bodyText: String = "",
-                    created: Date = .now, asToDo: Bool = false) -> LiquidDoc? {
+                    created: Date = .now, asToDo: Bool = false,
+                    kind: LiquidDoc.DocumentType = .note) -> LiquidDoc? {
         guard let folderURL else {
             lastError = "No community folder is open. Choose the folder first."
             return nil
@@ -292,9 +404,11 @@ final class NotesModel {
                             body: body,
                             links: LiquidDoc.detectedLinks(in: body),
                             wraps: nil,
-                            draft: !asToDo,
+                            // A standing or a kind of its own is a
+                            // decision made — such a note is no draft.
+                            draft: !asToDo && kind == .note,
                             action: asToDo ? LiquidDoc.Action.toDo.rawValue : nil,
-                            documentType: LiquidDoc.DocumentType.note.rawValue,
+                            documentType: kind.rawValue,
                             location: currentPlace,
                             fileURL: folderURL.appendingPathComponent(id)
                                 .appendingPathExtension(LiquidDoc.fileExtension))
@@ -313,18 +427,21 @@ final class NotesModel {
 
     /// The edited note, rewritten in place. Identity, creation instant,
     /// and place stay as captured; title and body are the user's.
-    func save(_ doc: LiquidDoc, title: String, bodyText: String) {
+    func save(_ doc: LiquidDoc, title: String, bodyText: String,
+              kind: String? = nil) {
         let trimmedTitle = title.trimmingCharacters(in: .whitespaces)
         let body = LiquidDoc.parseBody(from: bodyText)
-        // Title, body, and the links the body implies are the phone's
-        // to change — nothing else. Copy-and-mutate carries every other
-        // field through, so a standing or attention set on the Mac
-        // survives an edit made here.
+        // Title, body, the links the body implies, and — when the
+        // editor changed it — the kind are the phone's to change;
+        // nothing else. Copy-and-mutate carries every other field
+        // through, so a standing or attention set on the Mac survives
+        // an edit made here.
         var updated = doc
         updated.title = trimmedTitle.isEmpty ? "Untitled" : trimmedTitle
         updated.body = body
         updated.links = LiquidDoc.detectedLinks(in: body)
         updated.wraps = nil
+        if let kind { updated.documentType = kind }
         do {
             try updated.jsonData().write(to: updated.fileURL, options: .atomic)
         } catch {
@@ -415,7 +532,6 @@ struct NotesHomeView: View {
     @State private var choosingCard = false
     @State private var writingNote = false
     @State private var capturingVoice = false
-    @State private var settingUp = false
     @State private var namingPlaces = false
 
     var body: some View {
@@ -458,11 +574,13 @@ struct NotesHomeView: View {
                     Spacer()
 
                     Button {
-                        settingUp = true
+                        // Set Up is just the shared folder now — the
+                        // card adopts itself, places name themselves.
+                        choosingFolder = true
                     } label: {
                         Image(systemName: "gearshape")
                     }
-                    .accessibilityLabel("Set Up")
+                    .accessibilityLabel("Choose Shared Folder")
 
                     Spacer()
 
@@ -475,13 +593,6 @@ struct NotesHomeView: View {
                 .padding(.vertical, 12)
                 .background(.bar)
             }
-        }
-        .confirmationDialog("Set Up", isPresented: $settingUp) {
-            Button("Choose Shared Folder…") { choosingFolder = true }
-            Button("Your Card…") { choosingCard = true }
-            Button("My Places…") { namingPlaces = true }
-        } message: {
-            Text("Pick the folder your community shares, or choose your card from it — your public identity lives in the shared folder. Notes carry its name as their author.")
         }
         .fileImporter(isPresented: $choosingFolder, allowedContentTypes: [.folder]) { result in
             if case .success(let url) = result {
@@ -540,11 +651,13 @@ struct NotesHomeView: View {
     }
 
     /// Identity is never asked for as a name — and never typed in here
-    /// at all. With the folder open, the user adopts their card from
-    /// it; when the folder holds no cards yet, the same alert explains
-    /// that the card is made on the Mac and arrives with the sync.
+    /// at all. With the folder open: one card adopts itself (the scan
+    /// does it), several ask which is yours, and none yet means the
+    /// card is still syncing — the scan keeps looking, so no alert
+    /// nags about it.
     private func askForIdentityIfNeeded() {
-        guard model.folderURL != nil, model.authorName.isEmpty else { return }
+        guard model.folderURL != nil, model.authorName.isEmpty,
+              model.cards.count > 1 else { return }
         choosingCard = true
     }
 
@@ -614,8 +727,12 @@ struct NotesHomeView: View {
     /// then carry only the place; the day is said once, in the heading.
     private var notesByDay: [(day: Date, notes: [LiquidDoc])] {
         let calendar = Calendar.current
+        // The phone is the near end: only the last seven days show, so
+        // the list stays what is at hand rather than the whole history.
+        let cutoff = calendar.startOfDay(
+            for: Date.now.addingTimeInterval(-7 * 24 * 60 * 60))
         var groups: [(day: Date, notes: [LiquidDoc])] = []
-        for doc in model.notes {
+        for doc in model.notes where doc.listedDate >= cutoff {
             let day = calendar.startOfDay(for: doc.listedDate)
             if groups.last?.day == day {
                 groups[groups.count - 1].notes.append(doc)
@@ -659,11 +776,29 @@ struct NewNoteView: View {
     @Environment(NotesModel.self) private var model
     @Environment(\.dismiss) private var dismiss
 
+    /// What the note is born as: a plain note, a To Do standing, a
+    /// journal entry, or an inspiration — a reference caught in the
+    /// wild, which may be scanned in with the camera.
+    private enum NoteKind: String, CaseIterable {
+        case note = "Note"
+        case toDo = "To Do"
+        case journal = "Journal"
+        // "Scan" in the picker; the kind it makes is still inspiration.
+        case inspiration = "Scan"
+    }
+
     @State private var text = ""
-    /// Checked, the note is born a To Do — the standing travels in the
-    /// file, so it lists under To Do on every device.
-    @State private var isToDo = false
+    @State private var kind: NoteKind = .note
+    @State private var scanning = false
+    /// The progress indicator's words while a scan is being read —
+    /// nil when idle.
+    @State private var scanStage: String?
+    /// What the scan found, awaiting the user's word: Done cites the
+    /// found book; the No Source dialog offers Add as Image.
+    @State private var pendingScan: ScanAnalysis?
     @FocusState private var writing: Bool
+
+    private var foundBook: InspirationScanner.BookMatch? { pendingScan?.book }
 
     var body: some View {
         NavigationStack {
@@ -675,7 +810,47 @@ struct NewNoteView: View {
                     .background(Color(.secondarySystemBackground))
                     .clipShape(RoundedRectangle(cornerRadius: 12))
                     .focused($writing)
-                Toggle("To Do", isOn: $isToDo)
+                // The note's kind, chosen at its foot.
+                Picker("Kind", selection: $kind) {
+                    ForEach(NoteKind.allCases, id: \.self) { kind in
+                        Text(kind.rawValue)
+                    }
+                }
+                .pickerStyle(.segmented)
+                // Choosing Scan opens the camera straight away — one
+                // tap to capture, not two.
+                .onChange(of: kind) {
+                    if kind == .inspiration, pendingScan == nil, scanStage == nil {
+                        writing = false
+                        scanning = true
+                    }
+                }
+                if kind == .inspiration {
+                    if let foundBook {
+                        // The book, as a citation card — this is the
+                        // record; Done files it on the shelf with its
+                        // BibTeX and cites it. The text field above is
+                        // for your own note, if any.
+                        foundBookCard(foundBook)
+                    } else if let pendingScan, pendingScan.book == nil {
+                        // The scan found no book: the choice stands here
+                        // in the sheet — a popup kept losing the race
+                        // with the camera's dismissal.
+                        noSourcePanel(pendingScan)
+                    }
+                    // The camera path: a page, a poster, a whiteboard —
+                    // read on-device, placed if a book claims it, kept
+                    // regardless.
+                    Button {
+                        scanning = true
+                    } label: {
+                        Label(pendingScan == nil ? "Scan" : "Scan Again",
+                              systemImage: "camera.viewfinder")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(scanStage != nil)
+                }
             }
             .padding()
             .toolbar {
@@ -684,14 +859,145 @@ struct NewNoteView: View {
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Done") { save() }
-                        .disabled(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                        // A found book is content in itself, so Done
+                        // stands even with no typed words.
+                        .disabled((text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                                   && foundBook == nil)
+                                  || scanStage != nil)
+                }
+            }
+            // The scan's progress, over everything: reading, searching,
+            // asking — the user always sees the machinery at work.
+            .overlay {
+                if let scanStage {
+                    VStack(spacing: 12) {
+                        ProgressView()
+                        Text(scanStage)
+                            .font(.callout)
+                    }
+                    .padding(24)
+                    .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16))
                 }
             }
         }
-        .task { writing = true }
+        // The keyboard stands ready the moment the sheet does. Focus set
+        // during the sheet's present animation is dropped, and a single
+        // delayed try can miss a slow present — so it is asserted twice,
+        // and only while nothing else (a scan) holds the view.
+        .task {
+            for delay in [350, 750] {
+                try? await Task.sleep(for: .milliseconds(delay))
+                if scanStage == nil, pendingScan == nil { writing = true }
+            }
+        }
+        .fullScreenCover(isPresented: $scanning) {
+            CameraCapture { photo in
+                scanning = false
+                guard let photo else {
+                    log.info("scan: camera returned no photo")
+                    return
+                }
+                log.info("scan: photo captured, starting analysis")
+                // The keyboard steps aside so the progress overlay and
+                // the result panel present cleanly.
+                writing = false
+                // MainActor-pinned: the state these writes drive is the
+                // view's own, and an unpinned Task's writes may not be
+                // observed — the result panel never appeared.
+                Task { @MainActor in
+                    // Let the camera cover finish dismissing before the
+                    // overlay presents — a state change mid-dismissal
+                    // is dropped by the presentation.
+                    try? await Task.sleep(for: .milliseconds(350))
+                    let analysis = await model.analyzeScan(photo) { scanStage = $0 }
+                    scanStage = nil
+                    pendingScan = analysis
+                    // A found book shows as a citation card; the text
+                    // field stays the reader's own note. No book shows
+                    // the inline choice below the picker.
+                    log.info("scan: analysis applied, book=\(analysis.book != nil), panel should show")
+                }
+            }
+            .ignoresSafeArea()
+        }
+    }
+
+    /// The found book as a citation card — the BibTeX-style listing the
+    /// scan resolved to. Done files it on the shelf and cites it.
+    @ViewBuilder private func foundBookCard(_ book: InspirationScanner.BookMatch) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Label("Book Found", systemImage: "book.closed")
+                .font(.subheadline.weight(.semibold))
+            Text(book.title)
+                .font(.body.weight(.medium))
+            if !book.authors.isEmpty {
+                Text(book.authors.joined(separator: ", "))
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+            let line = [book.publisher, book.year].compactMap { $0 }.joined(separator: " · ")
+            if !line.isEmpty {
+                Text(line).font(.footnote).foregroundStyle(.secondary)
+            }
+            if let isbn = book.isbn {
+                Text("ISBN \(isbn)").font(.caption).foregroundStyle(.tertiary)
+            }
+            Text("Done adds it to the Library with its citation, and cites it from this note.")
+                .font(.caption)
+                .foregroundStyle(.tertiary)
+                .padding(.top, 2)
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color(.secondarySystemBackground),
+                    in: RoundedRectangle(cornerRadius: 12))
+    }
+
+    /// The no-book outcome, shown in the sheet: what was read, and the
+    /// two ways forward — keep it as an image note, or drop the scan.
+    @ViewBuilder private func noSourcePanel(_ scan: ScanAnalysis) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Label("No Source Found", systemImage: "questionmark.circle")
+                .font(.subheadline.weight(.semibold))
+            // The real reason, in plain words — a refusal or a
+            // rate-limit reads as itself, not a blank miss.
+            Text(scan.diagnostic
+                 ?? (scan.isTextFirst
+                     ? "The text didn't match a book on Google Books."
+                     : "The photo is mostly image."))
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+            if let guess = scan.guess {
+                Text("The on-device model's guess, unverified: \(guess)")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+            HStack {
+                Button("Add as Image") {
+                    model.adoptScanAsImage(scan, comment: text)
+                    pendingScan = nil
+                    dismiss()
+                }
+                .buttonStyle(.borderedProminent)
+                Button("Discard Scan") { pendingScan = nil }
+                    .buttonStyle(.bordered)
+            }
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color(.secondarySystemBackground),
+                    in: RoundedRectangle(cornerRadius: 12))
     }
 
     private func save() {
+        // A scan whose book was found: file the book on the shelf with
+        // its BibTeX and cite it — content in itself, so this stands
+        // even with no typed words.
+        if kind == .inspiration, let pendingScan, pendingScan.book != nil {
+            model.adoptScanAsSource(pendingScan, comment: text)
+            dismiss()
+            return
+        }
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
             dismiss()
@@ -700,8 +1006,20 @@ struct NewNoteView: View {
         let parsed = TranscriptParser.note(from: trimmed)
         // The reason for a failure is in model.lastError, shown by the
         // home view.
-        _ = model.createNote(title: parsed.title, bodyText: parsed.bodyText,
-                             asToDo: isToDo)
+        switch kind {
+        case .note:
+            _ = model.createNote(title: parsed.title, bodyText: parsed.bodyText)
+        case .toDo:
+            _ = model.createNote(title: parsed.title, bodyText: parsed.bodyText,
+                                 asToDo: true)
+        case .journal:
+            _ = model.createNote(title: parsed.title, bodyText: parsed.bodyText,
+                                 kind: .journal)
+        case .inspiration:
+            // Saved without a scan: the words alone are the inspiration.
+            _ = model.createNote(title: parsed.title, bodyText: parsed.bodyText,
+                                 kind: .inspiration)
+        }
         dismiss()
     }
 }
@@ -715,8 +1033,27 @@ struct NoteEditorView: View {
     @Environment(NotesModel.self) private var model
     let docID: String
 
+    /// The categories an existing note can be moved between — the ones
+    /// the sidebar keeps their own place for. Raw values are the
+    /// documentType tokens; the Mac files a journal note under Journal
+    /// when it sees the change.
+    private enum EditKind: String, CaseIterable {
+        case note = "note", journal = "journal", inspiration = "inspiration"
+        var label: String {
+            switch self {
+            case .note: "Note"
+            case .journal: "Journal"
+            case .inspiration: "Inspiration"
+            }
+        }
+        init(documentType: String?) {
+            self = EditKind(rawValue: documentType ?? "note") ?? .note
+        }
+    }
+
     @State private var title = ""
     @State private var bodyText = ""
+    @State private var kind: EditKind = .note
     @State private var loaded = false
     @State private var isVoiceNote = false
     /// Reading until the reader says Edit — the deliberate step keeps a
@@ -751,6 +1088,17 @@ struct NoteEditorView: View {
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
+                    // The note's category, changeable while editing —
+                    // choosing Journal here files it under Journal on
+                    // the Mac.
+                    if isEditing {
+                        Picker("Category", selection: $kind) {
+                            ForEach(EditKind.allCases, id: \.self) { kind in
+                                Text(kind.label)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+                    }
                 }
                 .padding()
             } else {
@@ -776,6 +1124,7 @@ struct NoteEditorView: View {
                                                        bodyText: doc.bodyEditingText)
             title = doc.title == "Untitled" ? "" : doc.title
             bodyText = doc.bodyEditingText
+            kind = EditKind(documentType: doc.documentType)
         }
         .onDisappear {
             if isEditing { saveIfNeeded() }
@@ -793,6 +1142,6 @@ struct NoteEditorView: View {
         // A voice note's title stays derived — the first four words of
         // whatever the body now says.
         let savedTitle = isVoiceNote ? TranscriptParser.title(for: bodyText) : title
-        model.save(doc, title: savedTitle, bodyText: bodyText)
+        model.save(doc, title: savedTitle, bodyText: bodyText, kind: kind.rawValue)
     }
 }

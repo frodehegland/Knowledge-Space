@@ -542,8 +542,42 @@ private struct LibrarySettingsView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
+            Section {
+                LabeledContent("Digest Folder") {
+                    Text(state.digestSourceURL?.path ?? "Not set")
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .foregroundStyle(.secondary)
+                }
+                Button("Choose Folder to Digest…") { chooseDigestSource() }
+                Button(digestButtonLabel) { state.scanDigestSource() }
+                    .disabled(state.digestSourceURL == nil || state.digestScanRunning)
+            } footer: {
+                Text("Any folder of your own documents — Documents itself, or narrower. Each readable file (PDF, text, Markdown, RTF, HTML, Word) becomes a digest note: a summary by the on-device model where it can read the words, with Open Original always a click away. Digests live in the community folder's Digest folder and appear only in the sidebar's Digest section. The originals are read, never moved or changed; nothing leaves the Mac.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
         }
         .formStyle(.grouped)
+    }
+
+    /// The Digest button wears its own progress while it works.
+    private var digestButtonLabel: String {
+        if let progress = state.digestProgress {
+            return "Digesting \(progress.done + 1) of \(progress.total)…"
+        }
+        return "Digest Now"
+    }
+
+    private func chooseDigestSource() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.message = "Choose the folder of documents to digest — your Documents folder, or any other."
+        panel.prompt = "Grant"
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        state.chooseDigestSource(url)
     }
 
     private func chooseReaderLibrary() {

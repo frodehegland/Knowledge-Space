@@ -356,7 +356,7 @@ final class AuthorMapState {
     /// annotations the Reader import mints by the hundred), newest
     /// first when the folder holds more than the map can carry.
     private var mapDocuments: [LiquidDoc] {
-        var writing = scannedDocs.filter { !$0.isLibraryKind }
+        var writing = scannedDocs.filter { !$0.isLibraryKind && !$0.isDigest }
         // A folder of nothing but shelves still deserves a map.
         if writing.isEmpty { writing = scannedDocs }
         guard writing.count > Self.mapDocumentCap else { return writing }

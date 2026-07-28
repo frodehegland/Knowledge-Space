@@ -57,13 +57,27 @@ struct LibrarySidebarView: View {
                             .listItemTint(SidebarCatalog.iconTint)
                             .tag(place.item)
                             #if os(macOS)
-                            // Ctrl-click a filing folder of the user's own
-                            // making to remove the category; its notes stay.
                             .contextMenu {
-                                if case .filedFolder(let folder) = place.item,
-                                   state.canRemoveFilingFolder(folder) {
-                                    Button("Remove Folder…", role: .destructive) {
-                                        state.removeFilingFolder(folder)
+                                // A standing's place starts a note with
+                                // that standing — New To Do, New Question.
+                                if case .action(let action) = place.item {
+                                    Button("New \(action.displayName)") {
+                                        state.newNote(action: action)
+                                    }
+                                }
+                                // A filed folder's place starts a note
+                                // filed there — New Journal, and so on —
+                                // and offers to remove a folder of the
+                                // user's own making; its notes stay.
+                                if case .filedFolder(let folder) = place.item {
+                                    Button("New \(folder)") {
+                                        state.newNote(filedUnder: folder)
+                                    }
+                                    if state.canRemoveFilingFolder(folder) {
+                                        Divider()
+                                        Button("Remove Folder…", role: .destructive) {
+                                            state.removeFilingFolder(folder)
+                                        }
                                     }
                                 }
                             }
@@ -155,9 +169,9 @@ struct LibrarySidebarView: View {
             EditViewsSheet()
         }
         .navigationTitle("Knowledge Space")
-        // A slim spine, but never so slim the app's own name truncates:
-        // the minimum holds "Knowledge Space" whole at its headline size.
-        .navigationSplitViewColumnWidth(min: 160, ideal: 170)
+        // A slim spine, but never slimmer than 200 points — room for
+        // the app's own name and the longest section entries whole.
+        .navigationSplitViewColumnWidth(min: 200, ideal: 210)
     }
 }
 

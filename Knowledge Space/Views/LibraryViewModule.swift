@@ -12,7 +12,9 @@ enum SidebarItem: Hashable {
     case timeline     // every note, by time, latest on top
     case place        // the same notes, grouped by country and town
     case people       // the same notes, grouped by author
+    case transcripts  // meetings' words, every statement attributed
     case draftLetters // letters still being written
+    case digests      // the granted documents folder, distilled
     case action(LiquidDoc.Action)  // notes by standing: To Do, Done…
     case sourceShelf(SourceShelf)  // the Library: sources, authors, quotes
     case filedFolder(String)  // one filing folder, straight from the sidebar
@@ -47,6 +49,7 @@ enum SidebarCatalog {
         // with the other views.
         SidebarPlace(name: "Map", systemImage: "map", item: .view("places")),
         SidebarPlace(name: "People", systemImage: "person.2", item: .people),
+        SidebarPlace(name: "Transcripts", systemImage: "text.bubble", item: .transcripts),
         SidebarPlace(name: "Draft Letters", systemImage: "envelope.open", item: .draftLetters),
     ]
 
@@ -63,6 +66,14 @@ enum SidebarCatalog {
         ]
     }
 
+    /// The Digest: a different set of data — the user's own documents
+    /// folder distilled — so it stands as its own section, and its
+    /// notes appear nowhere else.
+    static let digest: [SidebarPlace] = [
+        SidebarPlace(name: "Digests", systemImage: "doc.text.magnifyingglass",
+                     item: .digests),
+    ]
+
     /// The note column's standard files, each button's word beside the
     /// folder it files under. The sidebar's Filed section mirrors this.
     static let standardFiles: [(label: String, folder: String)] =
@@ -72,7 +83,7 @@ enum SidebarCatalog {
     /// the lifecycle axis, orthogonal to filing, read from the notes
     /// themselves.
     static let actions: [SidebarPlace] = LiquidDoc.Action.allCases.map {
-        SidebarPlace(name: $0.displayName, systemImage: icon(for: $0), item: .action($0))
+        SidebarPlace(name: $0.placeName, systemImage: icon(for: $0), item: .action($0))
     }
 
     static func icon(for action: LiquidDoc.Action) -> String {
@@ -81,6 +92,7 @@ enum SidebarCatalog {
         case .inProgress: "clock"
         case .done: "checkmark.circle"
         case .cancelled: "xmark.circle"
+        case .question: "questionmark.circle"
         }
     }
 
@@ -118,6 +130,7 @@ enum SidebarCatalog {
                          articlesLabel: String = "Articles") -> [(title: String, places: [SidebarPlace])] {
         [("", top), ("Actions", actions),
          ("Library", shelves(articlesLabel: articlesLabel)),
+         ("Digest", digest),
          ("Filed", filed(filedFolders)), ("Views", views)]
     }
 }
@@ -249,6 +262,11 @@ struct DocumentListView: View {
     var inboxOnly = false
     /// The Draft Letters list: letters still being written.
     var draftLettersOnly = false
+    /// The Transcripts list: every meeting's words, newest meeting first.
+    var transcriptsOnly = false
+    /// The Digest list: the granted folder's distillations — kept out
+    /// of every other list, this one reads the index directly.
+    var digestsOnly = false
     /// Narrows the list to notes with one action standing.
     var action: LiquidDoc.Action? = nil
 
@@ -287,6 +305,19 @@ struct DocumentListView: View {
                     && state.isDraft($0.doc)
             }
         }
+        if transcriptsOnly {
+            return state.filteredEntries.filter { Self.isTranscript($0.doc) }
+        }
+        if digestsOnly {
+            // Digests are excluded from listedEntries (and so from
+            // every other list); their own place reads the index.
+            let entries = state.index.timeline.reversed().filter { $0.doc.isDigest }
+            guard !state.searchText.isEmpty else { return Array(entries) }
+            return entries.filter {
+                $0.doc.title.localizedCaseInsensitiveContains(state.searchText)
+                    || $0.doc.bodyEditingText.localizedCaseInsensitiveContains(state.searchText)
+            }
+        }
         guard inboxOnly else { return state.filteredEntries }
         // The Inbox is only what still awaits a verdict: nothing filed,
         // no action standing set. A letter being written lives under
@@ -310,6 +341,15 @@ struct DocumentListView: View {
                         .caseInsensitiveCompare($0) == .orderedSame
                 }
         }
+    }
+
+    /// A transcript is a document declared `transcript`, or — for
+    /// documents from before the type existed — one whose body carries
+    /// at least two distinct speaker attributions. Digital Letters'
+    /// predicate, word for word.
+    static func isTranscript(_ doc: LiquidDoc) -> Bool {
+        if doc.documentType == LiquidDoc.DocumentType.transcript.rawValue { return true }
+        return Set((doc.body ?? []).compactMap(\.speaker)).count >= 2
     }
 
     /// The list's selection. "In the list", the expanded note is its
@@ -388,6 +428,14 @@ struct DocumentListView: View {
                                 }
                             }
                             .tag(entry.id)
+                            // An open document is not a selectable row:
+                            // without this, clicking — or selecting
+                            // text in — an expanded reading page makes
+                            // the List paint its accent over the whole
+                            // open document. (A note's editor eats the
+                            // clicks; a read-only page lets them fall
+                            // through to the row.)
+                            .selectionDisabled(isExpanded(entry))
                             .listRowSeparator(.hidden)
                             // A folder's rows keep the Filed list's
                             // put-it-back.
@@ -396,6 +444,11 @@ struct DocumentListView: View {
                                     Button("Unfile") { state.unfile(entry.doc) }
                                 }
                                 #if os(macOS)
+                                if entry.doc.isDigest {
+                                    Button("Open Original") {
+                                        state.openDigestOriginal(entry.doc)
+                                    }
+                                }
                                 Button("Rename File…") {
                                     state.renameFile(of: entry.doc)
                                 }
@@ -707,11 +760,16 @@ struct PeopleListView: View {
     /// The record being edited, presented as the person form.
     @State private var editingListing: PersonListing?
 
-    /// The listings, alphabetical from AppState, narrowed by the search
-    /// field on name, alias, or affiliation.
+    /// The listings, alphabetical from AppState: Show in People's
+    /// one-person narrowing first, then the search field on name,
+    /// alias, or affiliation.
     private var people: [PersonListing] {
-        guard !state.searchText.isEmpty else { return state.peopleListings }
-        return state.peopleListings.filter { listing in
+        var listings = state.peopleListings
+        if let name = state.peopleFilterName {
+            listings = listings.filter { $0.person.answersTo(name) }
+        }
+        guard !state.searchText.isEmpty else { return listings }
+        return listings.filter { listing in
             listing.person.displayName.localizedCaseInsensitiveContains(state.searchText)
                 || listing.person.affiliation.localizedCaseInsensitiveContains(state.searchText)
                 || (listing.person.aliases ?? []).contains {
@@ -734,6 +792,19 @@ struct PeopleListView: View {
 
     var body: some View {
         List(selection: selection) {
+            // Narrowed to one person by Show in People: say so, and
+            // offer the whole list back.
+            if state.peopleFilterName != nil {
+                Button {
+                    state.peopleFilterName = nil
+                } label: {
+                    Label("Show All People", systemImage: "chevron.left")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+                .listRowSeparator(.hidden)
+            }
             ForEach(people) { listing in
                 // Clicking a person fills the next column with the
                 // notes that name them, their contact details above.

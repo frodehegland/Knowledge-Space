@@ -1,0 +1,8 @@
+# Secrets: API keys embedded in the built app, never in source control.
+
+# Xcode / macOS noise
+.DS_Store
+xcuserdata/
+*.xcuserstate
+build/
+DerivedData/

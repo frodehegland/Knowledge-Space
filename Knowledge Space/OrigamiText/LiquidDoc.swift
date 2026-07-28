@@ -131,7 +131,15 @@ nonisolated struct LiquidDoc: Identifiable, Hashable, Sendable {
         // quote lifts a source's words into a document of its own; an
         // annotation anchors a comment to a place in one. All three
         // live in the Library section, not the correspondence lists.
-        case letter, note, book, rfc, personal, project, meeting, transcript, extract, article, external, source, quote, annotation
+        // A digest is the distillation of a file outside the library —
+        // the user's own documents folder read into notes, each
+        // pointing home to its original.
+        // A journal note is the day's own writing — the phone marks it
+        // at capture, and the Mac files it under Journal on arrival.
+        // An inspiration is a reference caught in the wild: a scanned
+        // page, a photographed passage — a quote once its book is
+        // found, this kind while it stands on its own.
+        case letter, note, book, rfc, personal, project, meeting, transcript, extract, article, external, source, quote, annotation, digest, journal, inspiration
 
         var displayName: String {
             switch self {
@@ -149,6 +157,9 @@ nonisolated struct LiquidDoc: Identifiable, Hashable, Sendable {
             case .source: "Source"
             case .quote: "Quote"
             case .annotation: "Annotation"
+            case .digest: "Digest"
+            case .journal: "Journal"
+            case .inspiration: "Inspiration"
             }
         }
     }
@@ -170,6 +181,9 @@ nonisolated struct LiquidDoc: Identifiable, Hashable, Sendable {
         case inProgress = "in progress"
         case done = "done"
         case cancelled = "cancelled"
+        // A question the author records for themselves — a standing
+        // like the others: set on the note, gathered in its own place.
+        case question = "question"
 
         var displayName: String {
             switch self {
@@ -177,7 +191,14 @@ nonisolated struct LiquidDoc: Identifiable, Hashable, Sendable {
             case .inProgress: "In Progress"
             case .done: "Done"
             case .cancelled: "Cancelled"
+            case .question: "Question"
             }
+        }
+
+        /// The sidebar place's word for the gathering: states keep
+        /// their names; questions collect in the plural.
+        var placeName: String {
+            self == .question ? "Questions" : displayName
         }
     }
 

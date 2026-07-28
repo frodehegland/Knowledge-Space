@@ -396,11 +396,18 @@ struct SourcesView: View {
     let shelf: SourceShelf
 
     @State private var selectedSourceID: String?
-    @State private var selectedAuthor: String?
     @State private var addingBibTeX = false
     @State private var search = ""
     /// A cited author on their way into the contacts, via ctrl-click.
     @State private var newPerson: Person?
+
+    /// The Authors shelf's open author — held by the app, not the
+    /// view, so Show in Authors lands selected regardless of whether
+    /// this view was rebuilt or merely handed a different shelf.
+    private var selectedAuthor: String? {
+        get { state.selectedShelfAuthor }
+        nonmutating set { state.selectedShelfAuthor = newValue }
+    }
 
     private struct ShelfEntry: Identifiable {
         let doc: LiquidDoc
@@ -430,8 +437,12 @@ struct SourcesView: View {
         case .articles: entries = entries.filter { $0.record?.shelvesAsBook != true }
         case .authors:
             if let selectedAuthor {
+                // By ear, not by letter: the name may arrive in a
+                // transcript's or a menu's spelling.
                 entries = entries.filter {
-                    $0.record?.individualAuthors.contains(selectedAuthor) == true
+                    $0.record?.individualAuthors.contains {
+                        $0.caseInsensitiveCompare(selectedAuthor) == .orderedSame
+                    } == true
                 }
             }
         case .all, .quotes: break
@@ -504,18 +515,7 @@ struct SourcesView: View {
         .sheet(isPresented: $addingBibTeX) {
             AddBibTeXSheet()
         }
-        // A cited name sent to the Authors shelf arrives selected.
-        .onAppear { consumePendingAuthor() }
-        .onChange(of: state.pendingCitedAuthor) { consumePendingAuthor() }
         .greyColumnAppearance()
-    }
-
-    private func consumePendingAuthor() {
-        guard shelf == .authors, let name = state.pendingCitedAuthor else { return }
-        state.pendingCitedAuthor = nil
-        selectedAuthor = citedAuthors.first {
-            $0.name.caseInsensitiveCompare(name) == .orderedSame
-        }?.name ?? name
     }
 
     /// The Analyze New button wears its own progress while it works.
@@ -682,6 +682,16 @@ struct SourcesView: View {
         .background(selectedSourceID == entry.doc.id
                         ? AnyShapeStyle(.selection) : AnyShapeStyle(.clear),
                     in: RoundedRectangle(cornerRadius: 6))
+        #if os(macOS)
+        // A work whose first scan came up short — a file name standing
+        // for the title, say — is re-read from its PDF on ctrl-click.
+        .contextMenu {
+            Button("Re-Process") {
+                state.reprocessSource(entry.doc)
+            }
+            .disabled(state.readerScanRunning)
+        }
+        #endif
     }
 
     private var authorList: some View {
@@ -963,6 +973,7 @@ private struct SourcePageView: View {
             }
             if isName {
                 Divider()
+                Button("Show in People") { state.showPerson(concept.name) }
                 Button("Show in Authors") { state.showCitedAuthor(concept.name) }
                 #if os(macOS)
                 if state.people.person(named: concept.name) == nil {

@@ -130,10 +130,17 @@ final class AppState {
     // MARK: - View-module state (see LibraryViewModule.swift)
 
     /// The sidebar place being shown: the document library, or a view module.
-    var sidebarSelection: SidebarItem? = .library
+    var sidebarSelection: SidebarItem? = .library {
+        // Navigating anywhere lifts the People list's one-person
+        // narrowing; Show in People re-narrows after it navigates.
+        didSet { peopleFilterName = nil }
+    }
     /// The person picked in the People list — their mentions fill the
     /// reading column while no document is open.
     var selectedPersonID: String?
+    /// Set by Show in People: the list keeps to this one person until
+    /// Show All — or any navigation — widens it again.
+    var peopleFilterName: String?
     /// Filters the document list and the insight views' rows.
     var searchText = ""
     /// What "Show in <View>" handed over: the selected words for a
@@ -183,6 +190,7 @@ final class AppState {
     init() {
         restoreFolder()
         restoreReaderLibrary()
+        restoreDigestSource()
         placeFinder.onPlace = { [weak self] place in
             self?.currentPlace = place
         }
@@ -257,8 +265,9 @@ final class AppState {
             guard !isMuted(entry.doc.author), !isArchived(entry.doc),
                   entry.doc.documentType != IdentityCard.documentType,
                   // Sources, quotes, and annotations are the reference
-                  // shelf's — the Library section shows them.
-                  !entry.doc.isLibraryKind else { return false }
+                  // shelf's — the Library section shows them. Digests
+                  // keep to their own section the same way.
+                  !entry.doc.isLibraryKind, !entry.doc.isDigest else { return false }
             if let timelineRange, !timelineRange.contains(entry.doc.listedDate) { return false }
             return showsSuperseded || !index.supersededIDs.contains(entry.id)
         }
@@ -654,6 +663,20 @@ final class AppState {
         makeNewDocument(type: .note, landing: .library)
     }
 
+    /// A new note born with a standing — To Do, Done, a Question —
+    /// landing in that standing's place. Having a standing, it is no
+    /// draft. Ctrl-click an Action row invokes this.
+    func newNote(action: LiquidDoc.Action) {
+        makeNewDocument(type: .note, landing: .action(action), action: action)
+    }
+
+    /// A new note filed under a folder from the start — landing in that
+    /// folder's list. Filing settles it, so it is no draft. Ctrl-click
+    /// a Filed row invokes this.
+    func newNote(filedUnder folder: String) {
+        makeNewDocument(type: .note, landing: .filedFolder(folder), fileUnder: folder)
+    }
+
     /// A new letter: a note in every way, marked `letter` — Knowledge
     /// Space's internal category until Digital Letters' sending arrives.
     /// It drafts under Draft Letters, and its File button files it
@@ -662,7 +685,9 @@ final class AppState {
         makeNewDocument(type: .letter, landing: .draftLetters)
     }
 
-    private func makeNewDocument(type: LiquidDoc.DocumentType, landing: SidebarItem) {
+    private func makeNewDocument(type: LiquidDoc.DocumentType, landing: SidebarItem,
+                                 action: LiquidDoc.Action? = nil,
+                                 fileUnder: String? = nil) {
         guard let folderURL = index.folderURL else {
             showNote("Choose a library folder first — notes live there.")
             return
@@ -671,11 +696,12 @@ final class AppState {
         let id = LiquidAddress.makeID(author: authorName, created: created) { candidate in
             self.index.isIDTaken(candidate)
         }
-        // A new document starts as a draft — a note lists in the Inbox
-        // awaiting its Action or File, a letter under Draft Letters. The
-        // flag travels in the file, so other devices agree; filing
-        // clears it.
-        let doc = LiquidDoc(format: LiquidDoc.knownFormat,
+        // A plain new document starts as a draft — it lists in the Inbox
+        // awaiting its Action or File. But one born into a standing or a
+        // folder already has its verdict, so it is no draft. The flag
+        // travels in the file, so other devices agree.
+        let settled = action != nil || fileUnder != nil
+        var doc = LiquidDoc(format: LiquidDoc.knownFormat,
                             id: id,
                             title: "Untitled",
                             author: authorName,
@@ -683,11 +709,12 @@ final class AppState {
                             body: [],
                             links: [],
                             wraps: nil,
-                            draft: true,
+                            draft: !settled,
                             documentType: type.rawValue,
                             location: currentPlace,
                             fileURL: folderURL.appendingPathComponent(id)
                                 .appendingPathExtension(LiquidDoc.fileExtension))
+        if let action { doc.action = action.rawValue }
         // A laptop moves between notes — refresh the place for the next.
         placeFinder.begin()
         do {
@@ -696,6 +723,9 @@ final class AppState {
             showNote("Could not create the note: \(error.localizedDescription)")
             return
         }
+        // Filing is the reader's own, kept locally — set after the file
+        // exists so the folder map has a document to point at.
+        if let fileUnder { fileDocument(doc, under: fileUnder) }
         index.rescan()
         sidebarSelection = landing
         selectedDocID = id
@@ -759,6 +789,11 @@ final class AppState {
     /// as a security-scoped bookmark like the community folder, scanned
     /// for Visual-Meta PDFs at launch and on request (ReaderLibrary.swift).
     var readerLibraryURL: URL?
+    /// The folder the Digest distills — the user's documents, granted
+    /// in Settings ▸ Library — and its scan's standing.
+    var digestSourceURL: URL?
+    var digestScanRunning = false
+    var digestProgress: AnalysisProgress?
     /// One quiet Reader Library scan per run, once the index is read.
     var readerScanDone = false
     /// A scan already walking the Reader Library; a second waits its turn.
@@ -773,9 +808,12 @@ final class AppState {
     var sourceAnalysisProgress: AnalysisProgress?
     /// Re-scan's progress, worn by its button.
     var readerRescanProgress: AnalysisProgress?
-    /// A cited name on its way to the Authors shelf, which selects it
-    /// on arrival and clears this.
-    var pendingCitedAuthor: String?
+    /// The Authors shelf's open author. App state, not view state:
+    /// "Show in Authors" sets it directly and the shelf arrives
+    /// selected, however the view's lifecycle falls that instant —
+    /// the hand-off dance (pending value, consumed on appearance)
+    /// lost to identity-preserving shelf switches.
+    var selectedShelfAuthor: String?
 
     /// A term chosen on a source's page, opened in a view: the term
     /// becomes the window's search — filter-driven views open already
@@ -787,10 +825,24 @@ final class AppState {
         sidebarSelection = .view(viewID)
     }
 
-    /// A cited name, opened in the Library's Authors shelf.
+    /// A cited name, opened in the Library's Authors shelf — selected.
     func showCitedAuthor(_ name: String) {
-        pendingCitedAuthor = name
+        selectedShelfAuthor = name
         sidebarSelection = .sourceShelf(.authors)
+    }
+
+    /// A name opened in the People place: the list narrows to that one
+    /// person, selected, and the reading column shows their page.
+    /// Matching goes through the person record's own test, so aliases
+    /// answer too. The sidebar moves first — navigation clears the
+    /// narrowing, so the narrowing must come after.
+    func showPerson(_ name: String) {
+        sidebarSelection = .people
+        peopleFilterName = name
+        if let listing = peopleListings.first(where: { $0.person.answersTo(name) }) {
+            selectedPersonID = listing.id
+            selectedDocID = nil
+        }
     }
 
     /// True when the restored folder can be read but not written — a

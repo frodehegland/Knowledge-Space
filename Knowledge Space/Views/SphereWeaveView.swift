@@ -124,7 +124,9 @@ struct SphereWeaveView: View {
     private var sphereData: SphereData {
         SphereData.woven(
             center: center,
-            docs: state.index.timeline.suffix(500).map(\.doc),
+            // Digests keep to their own section — the weave too.
+            docs: state.index.timeline.filter { !$0.doc.isDigest }
+                .suffix(500).map(\.doc),
             people: state.libraryAuthorNames,
             backlinksTo: { state.index.backlinks[$0]?.map(\.fromID) ?? [] })
     }

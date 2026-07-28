@@ -2,6 +2,10 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<!-- Inspiration's Scan: a photographed page or scene becomes a
+	     note, read on-device. -->
+	<key>NSCameraUsageDescription</key>
+	<string>Scan a page, poster, or scene into an Inspiration note. The photo is read on this device.</string>
 	<key>UILaunchScreen</key>
 	<false/>
 </dict>
