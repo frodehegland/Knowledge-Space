@@ -15,25 +15,18 @@
 
   "action": {
     "default_title": "Send to Knowledge Space",
-    "default_icon": "images/toolbar-icon.svg"
+    "default_icon": {
+      "16": "images/toolbar-16.png",
+      "19": "images/toolbar-19.png",
+      "32": "images/toolbar-32.png",
+      "38": "images/toolbar-38.png"
+    }
   },
 
   "background": {
     "service_worker": "background.js",
     "type": "module"
   },
-
-  "content_scripts": [
-    {
-      "matches": [
-        "https://claude.ai/*",
-        "https://chatgpt.com/*",
-        "https://gemini.google.com/*"
-      ],
-      "js": ["content.js"],
-      "run_at": "document_idle"
-    }
-  ],
 
   "web_accessible_resources": [
     {
@@ -46,15 +39,11 @@
     }
   ],
 
-  "host_permissions": [
-    "https://claude.ai/*",
-    "https://chatgpt.com/*",
-    "https://gemini.google.com/*"
-  ],
-
   "permissions": [
     "nativeMessaging",
     "storage",
-    "scripting"
+    "scripting",
+    "activeTab",
+    "contextMenus"
   ]
 }

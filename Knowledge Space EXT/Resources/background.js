@@ -1,9 +1,13 @@
-// Background service worker: orchestration only. One toolbar click asks the
-// content script to extract, then hands the result to the native app over
-// native messaging — chunked, because a long conversation serialises to
-// hundreds of kilobytes and native messages have a size ceiling. Success is
-// a brief green check; failure is a loud red badge with a one-line reason,
-// because a silent partial capture is worse than no capture.
+// Background service worker: orchestration only. The user triggers a capture
+// either from the toolbar button or — more reliably in current Safari, where
+// the toolbar button can be hidden — from the right-click "Send to Knowledge
+// Space" menu. Both grant activeTab on the user's gesture, so the extractor
+// can be injected into the current tab without any pre-granted site access.
+// The extracted conversation is then handed to the native app over native
+// messaging, chunked, because a long conversation serialises to hundreds of
+// kilobytes and native messages have a size ceiling. Success is a brief green
+// check; failure is a loud red badge with a one-line reason, because a silent
+// partial capture is worse than no capture.
 
 // Safari ignores this identifier, but the API takes one; it routes to this
 // extension's SafariWebExtensionHandler regardless.
@@ -16,6 +20,16 @@ const CHUNK_SIZE = 48 * 1024;
 // Optional: where a fresh selector config is published. Left null until a
 // server exists; the bundled selectors.json is the fallback and the default.
 const SELECTOR_CONFIG_URL = null;
+
+// The sites the capture menu offers itself on. Kept in step with the
+// surfaces selectors.json knows how to read.
+const CAPTURE_SITES = [
+  "https://claude.ai/*",
+  "https://chatgpt.com/*",
+  "https://gemini.google.com/*"
+];
+
+const MENU_ID = "ks-capture";
 
 function newID() {
   return "cap-" + Date.now() + "-" + Math.random().toString(36).slice(2, 8);
@@ -60,9 +74,19 @@ async function clearBadgeSoon() {
   setTimeout(() => badge("", null, "Send to Knowledge Space"), 4000);
 }
 
-browser.action.onClicked.addListener(async (tab) => {
+// The one capture path, shared by the toolbar button and the context menu.
+// The triggering gesture grants activeTab, so we can inject the extractor on
+// demand — no declared content script, no pre-granted host permission.
+async function runCapture(tab) {
+  if (!tab || tab.id == null) return;
   await badge("…", "#8E8E93", "Capturing…");
   try {
+    // Put the extractor in the page (idempotent — it guards against a second
+    // listener), then ask it for the conversation.
+    await browser.scripting.executeScript({
+      target: { tabId: tab.id },
+      files: ["content.js"]
+    });
     const result = await browser.tabs.sendMessage(tab.id, { type: "capture" });
     if (!result || result.error) {
       throw new Error((result && result.error) || "No response from the page.");
@@ -76,7 +100,30 @@ browser.action.onClicked.addListener(async (tab) => {
   } finally {
     clearBadgeSoon();
   }
-});
+}
+
+browser.action.onClicked.addListener((tab) => runCapture(tab));
+
+// The reliable entry point: a right-click item on the supported sites. In
+// current Safari the toolbar button is often hidden, so this is how the user
+// actually reaches the capture — and the click grants activeTab.
+function createMenu() {
+  if (!browser.contextMenus) return;
+  browser.contextMenus.removeAll(() => {
+    browser.contextMenus.create({
+      id: MENU_ID,
+      title: "Send to Knowledge Space",
+      contexts: ["page", "selection"],
+      documentUrlPatterns: CAPTURE_SITES
+    });
+  });
+}
+
+if (browser.contextMenus) {
+  browser.contextMenus.onClicked.addListener((info, tab) => {
+    if (info.menuItemId === MENU_ID) runCapture(tab);
+  });
+}
 
 // Best-effort remote selector refresh: content.js prefers this over the
 // bundled copy, so broken selectors are fixed the same day, no app update.
@@ -93,5 +140,5 @@ async function refreshSelectorConfig() {
   }
 }
 
-browser.runtime.onInstalled.addListener(refreshSelectorConfig);
-browser.runtime.onStartup.addListener(refreshSelectorConfig);
+browser.runtime.onInstalled.addListener(() => { createMenu(); refreshSelectorConfig(); });
+browser.runtime.onStartup.addListener(() => { createMenu(); refreshSelectorConfig(); });

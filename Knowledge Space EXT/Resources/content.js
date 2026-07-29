@@ -8,6 +8,14 @@
 // the capture. Failures are returned loudly with the selector that missed,
 // so a markup change is a two-minute config fix, not a debugging session.
 
+// Injected on demand, and possibly more than once per page — each capture
+// gesture re-runs executeScript. Guard the whole script so it defines its
+// bindings and registers its listener exactly once; later injections are
+// no-ops that reuse the first listener. Without this, re-declaring these
+// top-level bindings on a second run would throw.
+if (!window.__ksCaptureInstalled) {
+  window.__ksCaptureInstalled = true;
+
 const EXTRACTOR_VERSION = "1.0";
 
 // A remote config (fetched by the background worker into storage.local)
@@ -233,3 +241,5 @@ browser.runtime.onMessage.addListener((message) => {
   }
   return undefined;
 });
+
+} // end run-once guard (window.__ksCaptureInstalled)
