@@ -405,6 +405,10 @@ struct ParagraphView: View {
     /// the speaker's name becomes a menu — see the person in any view,
     /// or copy their words into notes that cite their way back.
     var transcript: LiquidDoc? = nil
+    /// Whether to draw the speaker's name in the left column. False for a
+    /// paragraph continuing the turn above it, so a long turn shows its
+    /// speaker once rather than before every paragraph.
+    var showsSpeakerLabel = true
 
     private var isRule: Bool {
         let text = paragraph.displayText
@@ -459,28 +463,56 @@ struct ParagraphView: View {
         }
     }
 
-    /// The name as the column shows it, menu or not.
-    private func speakerLabel(_ name: String) -> some View {
+    /// The name as the column shows it, menu or not. A model is tinted
+    /// apart from a person, so a reader tells the two sides of an AI
+    /// conversation at a glance.
+    private func speakerLabel(_ name: String, isAgent: Bool = false) -> some View {
         Text(name)
             .font(.system(size: 13 * scale, weight: .semibold))
-            .foregroundStyle(.secondary)
+            .foregroundStyle(isAgent ? AnyShapeStyle(.tint) : AnyShapeStyle(.secondary))
             .multilineTextAlignment(.trailing)
     }
 
-    /// The speaker's name as the system's name-menu: the person in any
-    /// view, their statement — or everything they said — copied into a
-    /// note that cites its way back to the transcript.
+    /// The speaker's name and, for a generated turn, its standing beneath —
+    /// so a model's words wear "unverified" until a reader says otherwise.
+    private func speakerColumn(_ speaker: String, in transcript: LiquidDoc) -> some View {
+        VStack(alignment: .trailing, spacing: 2) {
+            speakerMenu(speaker, in: transcript)
+            if paragraph.provenance == "generated" {
+                Text(paragraph.verification == "verified" ? "verified" : "unverified")
+                    .font(.system(size: 10 * scale))
+                    .foregroundStyle(.tertiary)
+            }
+        }
+    }
+
+    /// The speaker's name as the system's name-menu. For a person: the
+    /// person in any view, and their words copied into a citing note. For
+    /// a model (an agent of this document), its recorded identity stands
+    /// in place of the People doors — a model is never a contact — and the
+    /// same copy-to-note actions carry the provenance across.
     private func speakerMenu(_ speaker: String, in transcript: LiquidDoc) -> some View {
-        Menu {
-            Menu("Show in") {
-                ForEach(LibraryViewRegistry.modules) { module in
-                    Button(module.name) {
-                        state.showTerm(speaker, inView: module.id, from: transcript.id)
+        let agent = transcript.agent(named: speaker)
+        return Menu {
+            if let agent {
+                Section("Model") {
+                    Text(agent.modelRaw ?? agent.name)
+                    if let vendor = agent.vendor { Text(vendor) }
+                    if let confidence = agent.modelConfidence, confidence != "readFromUI" {
+                        Text("model identity: \(confidence)")
                     }
                 }
+            } else {
+                Menu("Show in") {
+                    ForEach(LibraryViewRegistry.modules) { module in
+                        Button(module.name) {
+                            state.showTerm(speaker, inView: module.id, from: transcript.id)
+                        }
+                    }
+                }
+                Button("Show in People") { state.showPerson(speaker) }
+                Button("Show in Authors") { state.showCitedAuthor(speaker) }
             }
-            Button("Show in People") { state.showPerson(speaker) }
-            Button("Show in Authors") { state.showCitedAuthor(speaker) }
             Divider()
             Button("Copy to Note") {
                 state.liftStatement(paragraph, from: transcript)
@@ -489,12 +521,14 @@ struct ParagraphView: View {
                 state.liftAllStatements(of: speaker, from: transcript)
             }
         } label: {
-            speakerLabel(speaker)
+            speakerLabel(speaker, isAgent: agent != nil)
                 .contentShape(Rectangle())
         }
         .menuIndicator(.hidden)
         .buttonStyle(.plain)
-        .help("\(speaker) — see the person in any view, or copy what they said here (or everywhere in this transcript) into a note linked back to its source")
+        .help(agent == nil
+            ? "\(speaker) — see the person in any view, or copy what they said here (or everywhere in this transcript) into a note linked back to its source"
+            : "\(speaker) — a model; copy what it said here (or everywhere in this conversation) into a note that keeps its provenance and links back to the source")
     }
 
     private var scale: CGFloat { isAppendix ? 0.5 : 1 }

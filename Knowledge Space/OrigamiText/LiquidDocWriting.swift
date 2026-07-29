@@ -173,7 +173,7 @@ extension LiquidDoc {
         let doc: LiquidDoc
         init(_ doc: LiquidDoc) { self.doc = doc }
 
-        enum CodingKeys: String, CodingKey { case about, format, id, title, author, created, date, body, links, wraps, attention, aiOnBehalf, draft, action, onBehalfOf, documentType, location, concepts, layouts, connections, references }
+        enum CodingKeys: String, CodingKey { case about, format, id, title, author, created, date, body, links, wraps, attention, aiOnBehalf, draft, action, onBehalfOf, documentType, location, concepts, layouts, connections, references, aiSource, agents }
 
         func encode(to encoder: Encoder) throws {
             var container = encoder.container(keyedBy: CodingKeys.self)
@@ -232,6 +232,55 @@ extension LiquidDoc {
             if !doc.references.isEmpty {
                 try container.encode(doc.references.map(OutputReference.init), forKey: .references)
             }
+            if let aiSource = doc.aiSource {
+                try container.encode(OutputAISource(aiSource), forKey: .aiSource)
+            }
+            if !doc.agents.isEmpty {
+                try container.encode(doc.agents.map(OutputAgent.init), forKey: .agents)
+            }
+        }
+    }
+
+    private nonisolated struct OutputAISource: Encodable {
+        let source: AISource
+        init(_ source: AISource) { self.source = source }
+
+        enum CodingKeys: String, CodingKey { case surface, sourceURL, conversationID, captureMethod, extractorVersion, capturedAt, timeConfidence, fidelity, attachmentsPresent }
+
+        func encode(to encoder: Encoder) throws {
+            var container = encoder.container(keyedBy: CodingKeys.self)
+            try container.encodeIfPresent(source.surface, forKey: .surface)
+            try container.encodeIfPresent(source.sourceURL, forKey: .sourceURL)
+            try container.encodeIfPresent(source.conversationID, forKey: .conversationID)
+            try container.encodeIfPresent(source.captureMethod, forKey: .captureMethod)
+            try container.encodeIfPresent(source.extractorVersion, forKey: .extractorVersion)
+            if let capturedAt = source.capturedAt {
+                let formatter = ISO8601DateFormatter()
+                formatter.formatOptions = [.withInternetDateTime]
+                try container.encode(formatter.string(from: capturedAt), forKey: .capturedAt)
+            }
+            try container.encodeIfPresent(source.timeConfidence, forKey: .timeConfidence)
+            try container.encodeIfPresent(source.fidelity, forKey: .fidelity)
+            if source.attachmentsPresent {
+                try container.encode(true, forKey: .attachmentsPresent)
+            }
+        }
+    }
+
+    private nonisolated struct OutputAgent: Encodable {
+        let agent: Agent
+        init(_ agent: Agent) { self.agent = agent }
+
+        enum CodingKeys: String, CodingKey { case name, vendor, modelFamily, modelVersion, modelRaw, modelConfidence }
+
+        func encode(to encoder: Encoder) throws {
+            var container = encoder.container(keyedBy: CodingKeys.self)
+            try container.encode(agent.name, forKey: .name)
+            try container.encodeIfPresent(agent.vendor, forKey: .vendor)
+            try container.encodeIfPresent(agent.modelFamily, forKey: .modelFamily)
+            try container.encodeIfPresent(agent.modelVersion, forKey: .modelVersion)
+            try container.encodeIfPresent(agent.modelRaw, forKey: .modelRaw)
+            try container.encodeIfPresent(agent.modelConfidence, forKey: .modelConfidence)
         }
     }
 

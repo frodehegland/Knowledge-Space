@@ -73,6 +73,17 @@ nonisolated struct LiquidDoc: Identifiable, Hashable, Sendable {
     var mapConnections: [MapConnection] = []
     /// External citation records — see `Reference`.
     var references: [Reference] = []
+    /// Where a captured AI conversation came from and how — surface,
+    /// URL, the vendor's own conversation id, and the honest time of
+    /// capture. Absent on documents that were not captured this way.
+    var aiSource: AISource? = nil
+    /// The models that spoke in a captured AI conversation, one entry
+    /// per distinct model seen (a thread may switch models partway).
+    /// Each agent's `name` is the speaker string its turns carry, so
+    /// attribution rides on the same `speaker` field transcripts use;
+    /// these entries add the model's identity behind that name. Agents
+    /// are never made into People.
+    var agents: [Agent] = []
     var fileURL: URL          // where it was loaded from (not part of JSON)
 
     /// The instant the document is listed, sorted, and filtered by.
@@ -139,7 +150,10 @@ nonisolated struct LiquidDoc: Identifiable, Hashable, Sendable {
         // An inspiration is a reference caught in the wild: a scanned
         // page, a photographed passage — a quote once its book is
         // found, this kind while it stands on its own.
-        case letter, note, book, rfc, personal, project, meeting, transcript, extract, article, external, source, quote, annotation, digest, journal, inspiration
+        // An AI conversation captured from the web — a transcript whose
+        // other party is a model, carrying provenance so a generated claim
+        // stays marked as generated wherever its words travel.
+        case letter, note, book, rfc, personal, project, meeting, transcript, extract, article, external, source, quote, annotation, digest, journal, inspiration, aiConversation
 
         var displayName: String {
             switch self {
@@ -160,6 +174,7 @@ nonisolated struct LiquidDoc: Identifiable, Hashable, Sendable {
             case .digest: "Digest"
             case .journal: "Journal"
             case .inspiration: "Inspiration"
+            case .aiConversation: "AI Conversation"
             }
         }
     }
@@ -216,6 +231,18 @@ nonisolated struct LiquidDoc: Identifiable, Hashable, Sendable {
         /// with this field styles the name and hides the prefix, exactly as
         /// heading levels pair with # prefixes.
         var speaker: String? = nil
+        /// How these words came to be, for AI conversations: "human" for a
+        /// person's turn, "generated" for a model's. Absent on ordinary
+        /// documents. Lifted extracts inherit it, so "where did this claim
+        /// come from" stays answerable after the text has moved.
+        var provenance: String? = nil
+        /// A generated statement's standing once a person has weighed it:
+        /// "unverified" until then. Absent means the question was never
+        /// raised (an ordinary document).
+        var verification: String? = nil
+        /// For a generated turn, the id of the human paragraph that prompted
+        /// it — the question this is an answer to.
+        var elicitedBy: String? = nil
     }
 
     struct Link: Hashable, Sendable {
@@ -291,6 +318,40 @@ nonisolated struct LiquidDoc: Identifiable, Hashable, Sendable {
         let to: String
     }
 
+    /// Provenance for a captured AI conversation. Time is recorded
+    /// honestly: these sites do not expose per-turn timestamps, so
+    /// `capturedAt` is the moment of capture and `timeConfidence` names
+    /// what that instant means — a future reader must be able to tell a
+    /// real timestamp from a stand-in.
+    struct AISource: Hashable, Sendable {
+        var surface: String? = nil          // "claude.ai"
+        var sourceURL: String? = nil
+        var conversationID: String? = nil    // the vendor's own id
+        var captureMethod: String? = nil     // "domExtraction"
+        var extractorVersion: String? = nil
+        var capturedAt: Date? = nil
+        var timeConfidence: String? = nil    // "captureTime" | "perTurn"
+        var fidelity: String? = nil          // "verbatim"
+        /// The page showed attachments or artifacts this capture did not
+        /// take, so the document never silently claims completeness.
+        var attachmentsPresent: Bool = false
+    }
+
+    /// One model that spoke in a captured conversation. The model is
+    /// read from the page and recorded three ways — `modelRaw` exactly
+    /// as displayed, plus a parsed family and version — never inferred
+    /// from writing style. `name` is the speaker string its turns carry.
+    struct Agent: Hashable, Sendable {
+        var name: String
+        var vendor: String? = nil
+        var modelFamily: String? = nil
+        var modelVersion: String? = nil
+        var modelRaw: String? = nil
+        /// How the model identity was established: "readFromUI",
+        /// "conversationLevel", or "unknown".
+        var modelConfidence: String? = nil
+    }
+
     /// The self-description written into every saved document (its "about"
     /// field, first in the file), so a file found on its own explains
     /// itself in any text editor.
@@ -320,6 +381,24 @@ nonisolated struct LiquidDoc: Identifiable, Hashable, Sendable {
     }
 
     var isSidecar: Bool { wraps != nil }
+
+    /// A captured AI conversation, by its declared type.
+    var isAIConversation: Bool {
+        documentType == DocumentType.aiConversation.rawValue
+    }
+
+    /// The recorded model behind a speaker name, when that speaker is one
+    /// of this document's agents. Matching is by name, case-insensitively.
+    func agent(named name: String) -> Agent? {
+        agents.first { $0.name.caseInsensitiveCompare(name) == .orderedSame }
+    }
+
+    /// Whether a speaker name belongs to a model rather than a person —
+    /// so name-menus offer the model's identity, not "Show in People",
+    /// and import never starts a contact record for it.
+    func isAgentSpeaker(_ name: String) -> Bool {
+        agent(named: name) != nil
+    }
 
     /// An `origami/0.x` version other than the one this app was written
     /// against. Still opened, but flagged with a warning badge.
@@ -385,8 +464,15 @@ extension LiquidDoc {
                 }
                 let heading = rawParagraph.heading.map { min(max($0, 1), 3) }
                 let speaker = rawParagraph.speaker?.trimmingCharacters(in: .whitespaces)
+                func cleaned(_ value: String?) -> String? {
+                    value.map { $0.trimmingCharacters(in: .whitespaces) }
+                        .flatMap { $0.isEmpty ? nil : $0 }
+                }
                 return Paragraph(id: paragraphID, heading: heading, text: text,
-                                 speaker: (speaker?.isEmpty ?? true) ? nil : speaker)
+                                 speaker: (speaker?.isEmpty ?? true) ? nil : speaker,
+                                 provenance: cleaned(rawParagraph.provenance),
+                                 verification: cleaned(rawParagraph.verification),
+                                 elicitedBy: cleaned(rawParagraph.elicitedBy))
             }
         }
 
@@ -466,6 +552,29 @@ extension LiquidDoc {
             .map { $0.trimmingCharacters(in: .whitespaces).lowercased() }
             .flatMap { $0.isEmpty ? nil : $0 }
 
+        let aiSource: AISource? = raw.aiSource.map { rawSource in
+            AISource(surface: rawSource.surface,
+                     sourceURL: rawSource.sourceURL,
+                     conversationID: rawSource.conversationID,
+                     captureMethod: rawSource.captureMethod,
+                     extractorVersion: rawSource.extractorVersion,
+                     capturedAt: rawSource.capturedAt.flatMap(parseISO8601),
+                     timeConfidence: rawSource.timeConfidence,
+                     fidelity: rawSource.fidelity,
+                     attachmentsPresent: rawSource.attachmentsPresent ?? false)
+        }
+
+        // Tolerant, like concepts: an agent missing its name is skipped.
+        let agents: [Agent] = (raw.agents ?? []).compactMap { rawAgent in
+            guard let name = rawAgent.name?.trimmingCharacters(in: .whitespaces),
+                  !name.isEmpty else { return nil }
+            return Agent(name: name, vendor: rawAgent.vendor,
+                         modelFamily: rawAgent.modelFamily,
+                         modelVersion: rawAgent.modelVersion,
+                         modelRaw: rawAgent.modelRaw,
+                         modelConfidence: rawAgent.modelConfidence)
+        }
+
         return LiquidDoc(format: format, id: id, title: title, author: author,
                          created: created, body: body, links: links, wraps: wraps,
                          attention: attention, date: date,
@@ -479,6 +588,8 @@ extension LiquidDoc {
                          layouts: layouts,
                          mapConnections: mapConnections,
                          references: references,
+                         aiSource: aiSource,
+                         agents: agents,
                          fileURL: fileURL)
     }
 
@@ -514,6 +625,29 @@ extension LiquidDoc {
         var layouts: [RawLayout]?
         var connections: [RawConnection]?
         var references: [RawReference]?
+        var aiSource: RawAISource?
+        var agents: [RawAgent]?
+    }
+
+    private nonisolated struct RawAISource: Decodable {
+        var surface: String?
+        var sourceURL: String?
+        var conversationID: String?
+        var captureMethod: String?
+        var extractorVersion: String?
+        var capturedAt: String?
+        var timeConfidence: String?
+        var fidelity: String?
+        var attachmentsPresent: Bool?
+    }
+
+    private nonisolated struct RawAgent: Decodable {
+        var name: String?
+        var vendor: String?
+        var modelFamily: String?
+        var modelVersion: String?
+        var modelRaw: String?
+        var modelConfidence: String?
     }
 
     private nonisolated struct RawConnection: Decodable {
@@ -531,6 +665,9 @@ extension LiquidDoc {
         var heading: Int?
         var text: String?
         var speaker: String?
+        var provenance: String?
+        var verification: String?
+        var elicitedBy: String?
     }
 
     private nonisolated struct RawLink: Decodable {

@@ -172,6 +172,13 @@ final class AppState {
     /// The New Person form, summoned from File ▸ New Person or the
     /// sidebar's People row; the window presents it while this is true.
     var addingPerson = false
+    #if os(macOS)
+    /// Retains the folder watcher on the App Group inbox where the Safari
+    /// extension drops captured AI conversations, so they arrive without
+    /// the app in front. Nil until the App Group is configured and the
+    /// watch has started.
+    @ObservationIgnored var aiInboxWatcher: FolderWatcher?
+    #endif
     /// True while the words of a note open in the list are being
     /// typed — the list fades everything around the writing.
     var editingInList = false

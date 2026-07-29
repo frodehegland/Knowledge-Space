@@ -186,6 +186,12 @@ struct ContentView: View {
             }
         }
         .task { state.libraryUpkeep() }
+        #if os(macOS)
+        // The Safari extension drops captured AI conversations into a
+        // shared App Group inbox; watch it, so a capture lands in the
+        // Inbox without the app ever coming to the front.
+        .task { state.startWatchingAIInbox() }
+        #endif
         // A folder bookmarked while the app could only read needs one
         // fresh pick to write again; ask straight away.
         .task {

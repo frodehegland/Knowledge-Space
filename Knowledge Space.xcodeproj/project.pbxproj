@@ -9,13 +9,37 @@
 /* Begin PBXBuildFile section */
 		5F62B05C3013675400EEF496 /* kspgal.icon in Resources */ = {isa = PBXBuildFile; fileRef = 5F62B05B3013675400EEF496 /* kspgal.icon */; };
 		5F62B05D3013675400EEF496 /* kspgal.icon in Resources */ = {isa = PBXBuildFile; fileRef = 5F62B05B3013675400EEF496 /* kspgal.icon */; };
+		5FAFC518301A3F1000FDBED8 /* Knowledge Space EXT.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 5FAFC500301A3F1000FDBED8 /* Knowledge Space EXT.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		5FE0761E30153AD40039E5B8 /* kspgal-vision.icon in Resources */ = {isa = PBXBuildFile; fileRef = 5FE0761D30153AD40039E5B8 /* kspgal-vision.icon */; };
 /* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		5FAFC516301A3F1000FDBED8 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 000000000000000000000000 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 5FAFC4FF301A3F1000FDBED8;
+			remoteInfo = "Knowledge Space EXT";
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		5FAFC51D301A3F1000FDBED8 /* Embed Foundation Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			dstPath = "";
+			dstSubfolder = PlugIns;
+			files = (
+				5FAFC518301A3F1000FDBED8 /* Knowledge Space EXT.appex in Embed Foundation Extensions */,
+			);
+			name = "Embed Foundation Extensions";
+		};
+/* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
 		000000000000000000000120 /* Knowledge Space.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Knowledge Space.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 		5F1064A3300FE10F002C1FE1 /* Knowledge Space iOS.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Knowledge Space iOS.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 		5F62B05B3013675400EEF496 /* kspgal.icon */ = {isa = PBXFileReference; lastKnownFileType = folder.iconcomposer.icon; path = kspgal.icon; sourceTree = "<group>"; };
+		5FAFC500301A3F1000FDBED8 /* Knowledge Space EXT.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = "Knowledge Space EXT.appex"; sourceTree = BUILT_PRODUCTS_DIR; };
 		5FE0761D30153AD40039E5B8 /* kspgal-vision.icon */ = {isa = PBXFileReference; lastKnownFileType = folder.iconcomposer.icon; path = "kspgal-vision.icon"; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -32,6 +56,13 @@
 				OrigamiText/VisualMeta.swift,
 			);
 			target = 5F1064A2300FE10F002C1FE1 /* Knowledge Space iOS */;
+		};
+		5FAFC51C301A3F1000FDBED8 /* Exceptions for "Knowledge Space EXT" folder in "Knowledge Space EXT" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+			);
+			target = 5FAFC4FF301A3F1000FDBED8 /* Knowledge Space EXT */;
 		};
 		5FAFDCB530149FD100768784 /* Exceptions for "Knowledge Space" folder in "Knowledge Space" target */ = {
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
@@ -67,6 +98,18 @@
 			path = "Knowledge Space iOS";
 			sourceTree = "<group>";
 		};
+		5FAFC501301A3F1000FDBED8 /* Knowledge Space EXT */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				5FAFC51C301A3F1000FDBED8 /* Exceptions for "Knowledge Space EXT" folder in "Knowledge Space EXT" target */,
+			);
+			explicitFolders = (
+				Resources/_locales,
+				Resources/images,
+			);
+			path = "Knowledge Space EXT";
+			sourceTree = "<group>";
+		};
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -76,6 +119,11 @@
 			);
 		};
 		5F1064A0300FE10F002C1FE1 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			files = (
+			);
+		};
+		5FAFC4FD301A3F1000FDBED8 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			files = (
 			);
@@ -90,6 +138,7 @@
 				5F1064A4300FE10F002C1FE1 /* Knowledge Space iOS */,
 				5F62B05B3013675400EEF496 /* kspgal.icon */,
 				5FE0761D30153AD40039E5B8 /* kspgal-vision.icon */,
+				5FAFC501301A3F1000FDBED8 /* Knowledge Space EXT */,
 				000000000000000000000020 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -99,6 +148,7 @@
 			children = (
 				000000000000000000000120 /* Knowledge Space.app */,
 				5F1064A3300FE10F002C1FE1 /* Knowledge Space iOS.app */,
+				5FAFC500301A3F1000FDBED8 /* Knowledge Space EXT.appex */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -113,8 +163,12 @@
 				000000000000000120000000 /* Sources */,
 				000000000000000130000000 /* Frameworks */,
 				000000000000000140000000 /* Resources */,
+				5FAFC51D301A3F1000FDBED8 /* Embed Foundation Extensions */,
 			);
 			buildRules = (
+			);
+			dependencies = (
+				5FAFC517301A3F1000FDBED8 /* PBXTargetDependency */,
 			);
 			fileSystemSynchronizedGroups = (
 				000000000000000000000010 /* Knowledge Space */,
@@ -142,6 +196,24 @@
 			productReference = 5F1064A3300FE10F002C1FE1 /* Knowledge Space iOS.app */;
 			productType = "com.apple.product-type.application";
 		};
+		5FAFC4FF301A3F1000FDBED8 /* Knowledge Space EXT */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 5FAFC519301A3F1000FDBED8 /* Build configuration list for PBXNativeTarget "Knowledge Space EXT" */;
+			buildPhases = (
+				5FAFC4FC301A3F1000FDBED8 /* Sources */,
+				5FAFC4FD301A3F1000FDBED8 /* Frameworks */,
+				5FAFC4FE301A3F1000FDBED8 /* Resources */,
+			);
+			buildRules = (
+			);
+			fileSystemSynchronizedGroups = (
+				5FAFC501301A3F1000FDBED8 /* Knowledge Space EXT */,
+			);
+			name = "Knowledge Space EXT";
+			productName = "Knowledge Space EXT";
+			productReference = 5FAFC500301A3F1000FDBED8 /* Knowledge Space EXT.appex */;
+			productType = "com.apple.product-type.app-extension";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -156,6 +228,9 @@
 						CreatedOnToolsVersion = 26.3;
 					};
 					5F1064A2300FE10F002C1FE1 = {
+						CreatedOnToolsVersion = 27.0;
+					};
+					5FAFC4FF301A3F1000FDBED8 = {
 						CreatedOnToolsVersion = 27.0;
 					};
 				};
@@ -176,6 +251,7 @@
 			targets = (
 				000000000000000100000000 /* Knowledge Space */,
 				5F1064A2300FE10F002C1FE1 /* Knowledge Space iOS */,
+				5FAFC4FF301A3F1000FDBED8 /* Knowledge Space EXT */,
 			);
 		};
 /* End PBXProject section */
@@ -194,6 +270,11 @@
 				5F62B05C3013675400EEF496 /* kspgal.icon in Resources */,
 			);
 		};
+		5FAFC4FE301A3F1000FDBED8 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			files = (
+			);
+		};
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
@@ -207,7 +288,20 @@
 			files = (
 			);
 		};
+		5FAFC4FC301A3F1000FDBED8 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			files = (
+			);
+		};
 /* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		5FAFC517301A3F1000FDBED8 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 5FAFC4FF301A3F1000FDBED8 /* Knowledge Space EXT */;
+			targetProxy = 5FAFC516301A3F1000FDBED8 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
 		000000000000000011000000 /* Debug configuration for PBXProject "Knowledge Space" */ = {
@@ -349,6 +443,7 @@
 				"ASSETCATALOG_COMPILER_APPICON_NAME[sdk=xros*]" = "kspgal-vision";
 				ASSETCATALOG_COMPILER_INCLUDE_ALL_APPICON_ASSETS = YES;
 				AUTOMATION_APPLE_EVENTS = NO;
+				CODE_SIGN_ENTITLEMENTS = "Knowledge Space/Knowledge Space.entitlements";
 				"CODE_SIGN_ENTITLEMENTS[sdk=xros*]" = "KnowledgeSpace-visionOS.entitlements";
 				"CODE_SIGN_ENTITLEMENTS[sdk=xrsimulator*]" = "KnowledgeSpace-visionOS.entitlements";
 				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
@@ -418,6 +513,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = kspgal;
 				ASSETCATALOG_COMPILER_INCLUDE_ALL_APPICON_ASSETS = YES;
 				AUTOMATION_APPLE_EVENTS = NO;
+				CODE_SIGN_ENTITLEMENTS = "Knowledge Space/Knowledge Space.entitlements";
 				"CODE_SIGN_ENTITLEMENTS[sdk=xros*]" = "KnowledgeSpace-visionOS.entitlements";
 				"CODE_SIGN_ENTITLEMENTS[sdk=xrsimulator*]" = "KnowledgeSpace-visionOS.entitlements";
 				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
@@ -568,6 +664,82 @@
 			};
 			name = Release;
 		};
+		5FAFC51A301A3F1000FDBED8 /* Debug configuration for PBXNativeTarget "Knowledge Space EXT" */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = "Knowledge Space EXT/Knowledge Space EXT.entitlements";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 9Q5N4A727S;
+				ENABLE_APP_SANDBOX = YES;
+				ENABLE_HARDENED_RUNTIME = YES;
+				ENABLE_USER_SELECTED_FILES = readonly;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = "Knowledge Space EXT/Info.plist";
+				INFOPLIST_KEY_CFBundleDisplayName = "Knowledge Space EXT";
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+					"@executable_path/../../../../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 12.0;
+				MARKETING_VERSION = 1.0;
+				OTHER_LDFLAGS = (
+					"-framework",
+					SafariServices,
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = "info.futuretextlab.knowledgespace.Knowledge-Space-EXT";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				REGISTER_APP_GROUPS = YES;
+				SDKROOT = macosx;
+				SKIP_INSTALL = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+		5FAFC51B301A3F1000FDBED8 /* Release configuration for PBXNativeTarget "Knowledge Space EXT" */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = "Knowledge Space EXT/Knowledge Space EXT.entitlements";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 9Q5N4A727S;
+				ENABLE_APP_SANDBOX = YES;
+				ENABLE_HARDENED_RUNTIME = YES;
+				ENABLE_USER_SELECTED_FILES = readonly;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = "Knowledge Space EXT/Info.plist";
+				INFOPLIST_KEY_CFBundleDisplayName = "Knowledge Space EXT";
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+					"@executable_path/../../../../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 12.0;
+				MARKETING_VERSION = 1.0;
+				OTHER_LDFLAGS = (
+					"-framework",
+					SafariServices,
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = "info.futuretextlab.knowledgespace.Knowledge-Space-EXT";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				REGISTER_APP_GROUPS = YES;
+				SDKROOT = macosx;
+				SKIP_INSTALL = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -592,6 +764,14 @@
 			buildConfigurations = (
 				5F1064AB300FE10F002C1FE1 /* Debug configuration for PBXNativeTarget "Knowledge Space iOS" */,
 				5F1064AC300FE10F002C1FE1 /* Release configuration for PBXNativeTarget "Knowledge Space iOS" */,
+			);
+			defaultConfigurationName = Release;
+		};
+		5FAFC519301A3F1000FDBED8 /* Build configuration list for PBXNativeTarget "Knowledge Space EXT" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				5FAFC51A301A3F1000FDBED8 /* Debug configuration for PBXNativeTarget "Knowledge Space EXT" */,
+				5FAFC51B301A3F1000FDBED8 /* Release configuration for PBXNativeTarget "Knowledge Space EXT" */,
 			);
 			defaultConfigurationName = Release;
 		};

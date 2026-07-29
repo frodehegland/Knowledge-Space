@@ -1,0 +1,43 @@
+{
+  "version": "2026-07-29",
+  "_comment": "Selectors are DATA, not code — plain strings only, no functions. This is deliberate: when a vendor reships their frontend and selectors break, we publish a new JSON and every user is fixed that day, with no app update or review wait. If you ever want a function here, restructure it as a selector. The values below are STARTING POINTS and MUST be verified against a live page with discover.js before shipping — do not trust them blindly.",
+
+  "sites": [
+    {
+      "match": "claude.ai",
+      "vendor": "Anthropic",
+      "surface": "claude.ai",
+      "conversationIDPattern": "/chat/([0-9a-f-]{16,})",
+      "turnSelector": "[data-testid='conversation-turn'], div.font-claude-message, div[data-test-render-count]",
+      "humanTurnSelector": "[data-testid='user-message'], div[data-testid='human-turn']",
+      "assistantTurnSelector": ".font-claude-message, [data-testid='assistant-turn']",
+      "modelLabelSelector": "[data-testid='model-selector'] , button[aria-haspopup='menu'] div.truncate",
+      "conversationListSelector": "nav a[href^='/chat/']",
+      "titleSelector": "title"
+    },
+    {
+      "match": "chatgpt.com",
+      "vendor": "OpenAI",
+      "surface": "chatgpt.com",
+      "conversationIDPattern": "/c/([0-9a-f-]{16,})",
+      "turnSelector": "[data-testid^='conversation-turn']",
+      "humanTurnSelector": "[data-message-author-role='user']",
+      "assistantTurnSelector": "[data-message-author-role='assistant']",
+      "modelLabelSelector": "[data-testid='model-switcher-dropdown-button'], div.text-token-text-secondary span",
+      "conversationListSelector": "nav a[href^='/c/']",
+      "titleSelector": "title"
+    },
+    {
+      "match": "gemini.google.com",
+      "vendor": "Google",
+      "surface": "gemini.google.com",
+      "conversationIDPattern": "/app/([0-9a-z-]{10,})",
+      "turnSelector": "user-query, model-response",
+      "humanTurnSelector": "user-query",
+      "assistantTurnSelector": "model-response",
+      "modelLabelSelector": "[data-test-id='bard-mode-menu-button'], .current-mode-title",
+      "conversationListSelector": "conversations-list a",
+      "titleSelector": "title"
+    }
+  ]
+}

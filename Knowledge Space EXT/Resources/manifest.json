@@ -1,0 +1,60 @@
+{
+  "manifest_version": 3,
+  "name": "Knowledge Space Capture",
+  "version": "1.0",
+  "default_locale": "en",
+  "description": "Send an AI conversation you are reading into your Knowledge Space library, with attribution and provenance intact.",
+
+  "icons": {
+    "48": "images/icon-48.png",
+    "96": "images/icon-96.png",
+    "128": "images/icon-128.png",
+    "256": "images/icon-256.png",
+    "512": "images/icon-512.png"
+  },
+
+  "action": {
+    "default_title": "Send to Knowledge Space",
+    "default_icon": "images/toolbar-icon.svg"
+  },
+
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+
+  "content_scripts": [
+    {
+      "matches": [
+        "https://claude.ai/*",
+        "https://chatgpt.com/*",
+        "https://gemini.google.com/*"
+      ],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+
+  "web_accessible_resources": [
+    {
+      "resources": ["selectors.json"],
+      "matches": [
+        "https://claude.ai/*",
+        "https://chatgpt.com/*",
+        "https://gemini.google.com/*"
+      ]
+    }
+  ],
+
+  "host_permissions": [
+    "https://claude.ai/*",
+    "https://chatgpt.com/*",
+    "https://gemini.google.com/*"
+  ],
+
+  "permissions": [
+    "nativeMessaging",
+    "storage",
+    "scripting"
+  ]
+}
