@@ -1,5 +1,5 @@
 {
-  "version": "2026-07-29",
+  "version": "2026-07-29b",
   "_comment": "Selectors are DATA, not code — plain strings only, no functions. This is deliberate: when a vendor reships their frontend and selectors break, we publish a new JSON and every user is fixed that day, with no app update or review wait. If you ever want a function here, restructure it as a selector. The values below are STARTING POINTS and MUST be verified against a live page with discover.js before shipping — do not trust them blindly.",
 
   "sites": [
@@ -8,10 +8,10 @@
       "vendor": "Anthropic",
       "surface": "claude.ai",
       "conversationIDPattern": "/chat/([0-9a-f-]{16,})",
-      "turnSelector": "[data-testid='conversation-turn'], div.font-claude-message, div[data-test-render-count]",
-      "humanTurnSelector": "[data-testid='user-message'], div[data-testid='human-turn']",
-      "assistantTurnSelector": ".font-claude-message, [data-testid='assistant-turn']",
-      "modelLabelSelector": "[data-testid='model-selector'] , button[aria-haspopup='menu'] div.truncate",
+      "turnSelector": "[data-test-render-count]",
+      "humanTurnSelector": "[data-testid='user-message']",
+      "assistantTurnSelector": "[data-testid='action-bar-retry'], [data-testid='action-bar-read-aloud']",
+      "modelLabelSelector": "[data-testid='model-selector-dropdown']",
       "conversationListSelector": "nav a[href^='/chat/']",
       "titleSelector": "title"
     },

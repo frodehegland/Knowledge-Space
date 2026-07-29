@@ -310,6 +310,7 @@ struct ContentView: View {
         case .place: listHeader("Places")
         case .people: listHeader("People")
         case .transcripts: listHeader("Transcripts")
+        case .aiChats: listHeader("AI Chat")
         case .draftLetters: listHeader("Draft Letters")
         case .digests: listHeader("Digests")
         case .action(let action): listHeader(action.placeName)
@@ -662,6 +663,8 @@ struct ContentView: View {
             PeopleListView()
         } else if state.sidebarSelection == .transcripts {
             DocumentListView(transcriptsOnly: true)
+        } else if state.sidebarSelection == .aiChats {
+            DocumentListView(aiChatsOnly: true)
         } else if state.sidebarSelection == .digests {
             DocumentListView(digestsOnly: true)
         } else if state.sidebarSelection == .draftLetters {

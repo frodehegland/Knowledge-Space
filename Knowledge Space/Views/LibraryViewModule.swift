@@ -13,6 +13,7 @@ enum SidebarItem: Hashable {
     case place        // the same notes, grouped by country and town
     case people       // the same notes, grouped by author
     case transcripts  // meetings' words, every statement attributed
+    case aiChats      // AI conversations captured from the web
     case draftLetters // letters still being written
     case digests      // the granted documents folder, distilled
     case action(LiquidDoc.Action)  // notes by standing: To Do, Done…
@@ -63,6 +64,7 @@ enum SidebarCatalog {
             SidebarPlace(name: articlesLabel, systemImage: "doc.plaintext", item: .sourceShelf(.articles)),
             SidebarPlace(name: "Authors", systemImage: "person.text.rectangle", item: .sourceShelf(.authors)),
             SidebarPlace(name: "Quotes", systemImage: "quote.opening", item: .sourceShelf(.quotes)),
+            SidebarPlace(name: "AI Chat", systemImage: "bubble.left.and.bubble.right", item: .aiChats),
         ]
     }
 
@@ -264,6 +266,8 @@ struct DocumentListView: View {
     var draftLettersOnly = false
     /// The Transcripts list: every meeting's words, newest meeting first.
     var transcriptsOnly = false
+    /// The AI Chat list: conversations captured from the web, newest first.
+    var aiChatsOnly = false
     /// The Digest list: the granted folder's distillations — kept out
     /// of every other list, this one reads the index directly.
     var digestsOnly = false
@@ -307,6 +311,19 @@ struct DocumentListView: View {
         }
         if transcriptsOnly {
             return state.filteredEntries.filter { Self.isTranscript($0.doc) }
+        }
+        if aiChatsOnly {
+            // Captured conversations land as drafts; read the index
+            // directly so they list here whatever their draft or filing
+            // state, the way Digests do.
+            let entries = state.index.timeline.reversed().filter {
+                $0.doc.documentType == LiquidDoc.DocumentType.aiConversation.rawValue
+            }
+            guard !state.searchText.isEmpty else { return Array(entries) }
+            return entries.filter {
+                $0.doc.title.localizedCaseInsensitiveContains(state.searchText)
+                    || $0.doc.bodyEditingText.localizedCaseInsensitiveContains(state.searchText)
+            }
         }
         if digestsOnly {
             // Digests are excluded from listedEntries (and so from
@@ -497,6 +514,11 @@ struct DocumentListView: View {
                             "No Draft Letters",
                             systemImage: "envelope.open",
                             description: Text("A new letter starts here; its Letter button files it under Letters when it is done."))
+                    } else if aiChatsOnly {
+                        ContentUnavailableView(
+                            "No AI Chats",
+                            systemImage: "bubble.left.and.bubble.right",
+                            description: Text("Capture a conversation from claude.ai, ChatGPT, or Gemini with the Safari extension’s “Send to Knowledge Space” — it lands here as a draft."))
                     } else if let action {
                         ContentUnavailableView(
                             "Nothing \(action.displayName)",

@@ -43,22 +43,80 @@ function conversationID(site) {
   return match ? match[1] : null;
 }
 
-// Long threads virtualise off-screen turns; scroll to the top and wait for
-// the turn count to stop growing, or the capture silently misses the start.
-async function stabiliseTurns(site) {
-  const countTurns = () =>
-    document.querySelectorAll(site.turnSelector).length;
-  window.scrollTo({ top: 0, behavior: "auto" });
-  let last = -1;
-  let stableFor = 0;
-  for (let i = 0; i < 40 && stableFor < 3; i++) {
-    await new Promise((r) => setTimeout(r, 250));
-    window.scrollTo({ top: 0, behavior: "auto" });
-    const now = countTurns();
-    stableFor = now === last ? stableFor + 1 : 0;
-    last = now;
+// The conversation scrolls inside a nested container, not the window, and
+// only a window of turns is ever in the DOM (the rest are virtualised away).
+// Find that scroll container by walking up from a turn to the nearest
+// scrollable ancestor; fall back to the document scroller.
+function findScrollContainer(site) {
+  const seed = document.querySelector(site.turnSelector)
+    || document.querySelector(site.humanTurnSelector)
+    || document.querySelector(site.assistantTurnSelector);
+  let el = seed;
+  while (el && el !== document.body) {
+    const style = getComputedStyle(el);
+    if ((style.overflowY === "auto" || style.overflowY === "scroll")
+        && el.scrollHeight > el.clientHeight + 50) {
+      return el;
+    }
+    el = el.parentElement;
   }
-  return last;
+  return document.scrollingElement || document.documentElement;
+}
+
+// Scroll the real container from top to bottom, harvesting each turn as it
+// renders. Turns are keyed by their fixed vertical position in the thread
+// (stable whatever the current scroll), so the whole conversation is gathered
+// once and in order however long it is — virtualisation stops mattering.
+// `harvest(el)` turns a turn element into a record, or null to skip it.
+async function collectTurns(site, harvest) {
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  const container = findScrollContainer(site);
+  const isDocScroller = container === document.scrollingElement
+    || container === document.documentElement;
+  const restore = isDocScroller ? (window.scrollY || 0) : container.scrollTop;
+
+  const seen = new Map(); // rounded position -> record
+  const harvestVisible = () => {
+    const cTop = isDocScroller ? 0 : container.getBoundingClientRect().top;
+    const base = isDocScroller ? (window.scrollY || 0) : container.scrollTop;
+    for (const el of document.querySelectorAll(site.turnSelector)) {
+      const record = harvest(el);
+      if (!record) continue;
+      const pos = el.getBoundingClientRect().top - cTop + base;
+      const key = Math.round(pos);
+      if (!seen.has(key)) seen.set(key, { pos, ...record });
+    }
+  };
+
+  const setScroll = (y) => {
+    if (isDocScroller) window.scrollTo({ top: y, behavior: "auto" });
+    else container.scrollTop = y;
+  };
+  const viewport = isDocScroller ? window.innerHeight : container.clientHeight;
+  const maxScroll = () => (isDocScroller
+    ? Math.max(0, document.documentElement.scrollHeight - window.innerHeight)
+    : container.scrollHeight - container.clientHeight);
+  const step = Math.max(200, Math.floor(viewport * 0.75));
+
+  setScroll(0);
+  await sleep(450);
+  harvestVisible();
+  let y = 0;
+  let guard = 0;
+  while (y < maxScroll() && guard < 600) {
+    guard += 1;
+    y = Math.min(y + step, maxScroll());
+    setScroll(y);
+    await sleep(300);
+    harvestVisible();
+  }
+  // Settle at the very bottom so the final turns render, then restore.
+  setScroll(maxScroll());
+  await sleep(400); harvestVisible();
+  await sleep(300); harvestVisible();
+  setScroll(restore);
+
+  return Array.from(seen.values()).sort((a, b) => a.pos - b.pos);
 }
 
 // A turn's DOM becomes plain text with Markdown preserved: code fenced with
@@ -67,8 +125,15 @@ async function stabiliseTurns(site) {
 // "Something: value" is not mistaken for a speaker line downstream.
 function blockToMarkdown(node) {
   const blocks = [];
+  // Chrome that lives inside a turn but is not the message: action bars
+  // (Copy / Retry / Read aloud / Edit), toolbars, buttons, icons, and the
+  // screen-reader-only labels ("You said:" / "Claude responded:") that
+  // otherwise leak in as headings. Skipped whole, so none of it lands in
+  // the captured text.
+  const SKIP = "button, svg, [role='toolbar'], [data-testid^='action-bar'], [data-testid='wiggle-controls-actions'], .sr-only, [class*='sr-only']";
   const walk = (el) => {
     for (const child of el.children) {
+      if (child.matches && child.matches(SKIP)) continue;
       const tag = child.tagName.toLowerCase();
       if (tag === "pre") {
         const code = child.querySelector("code");
@@ -114,8 +179,15 @@ function guessLang(className) {
 function readModel(site) {
   if (!site.modelLabelSelector) return null;
   const el = document.querySelector(site.modelLabelSelector);
-  const raw = el ? el.innerText.trim() : "";
-  return raw || null;
+  if (!el) return null;
+  // The dropdown carries an icon glyph and sometimes a second line; keep
+  // only the first line and strip zero-width and private-use characters,
+  // so "Opus 5 High\n" reads as "Opus 5 High".
+  const clean = (el.innerText || "")
+    .split("\n")[0]
+    .replace(/[\u200B-\u200F\u2028\u2029\uE000-\uF8FF]/g, "")
+    .trim();
+  return clean || null;
 }
 
 // "Claude Opus 5" -> family "Claude Opus", version "5". Never inferred from
@@ -151,9 +223,6 @@ async function capture() {
     return { error: `Found no turns — the turnSelector matched nothing (selector: ${site.turnSelector}). The page's markup may have changed.` };
   }
 
-  await stabiliseTurns(site);
-  const turns = Array.from(document.querySelectorAll(site.turnSelector));
-
   const modelRaw = readModel(site);
   const { modelFamily, modelVersion } = parseModel(modelRaw);
   const agentSpeaker = {
@@ -168,26 +237,41 @@ async function capture() {
   };
   const humanSpeaker = { id: "spk-human", kind: "person", name: "You" };
 
-  const isHuman = (el) =>
-    el.matches(site.humanTurnSelector) || el.closest(site.humanTurnSelector) !== null;
-  const isAssistant = (el) =>
-    el.matches(site.assistantTurnSelector) || el.closest(site.assistantTurnSelector) !== null;
+  // A turn is classified by its role marker, which may be the turn element
+  // itself, an ancestor, or — commonly — a descendant inside the turn (e.g.
+  // Claude's user-message / action-bar live within the turn block). Checking
+  // all three directions is what lets a container-level turnSelector still be
+  // told apart into human and assistant.
+  const matchesRole = (el, selector) =>
+    el.matches(selector) ||
+    el.closest(selector) !== null ||
+    el.querySelector(selector) !== null;
+
+  // Harvest one turn element into { human, paragraphs }, or null when it is
+  // scaffolding or empty. Called for every turn that renders during the walk.
+  const harvest = (el) => {
+    const human = matchesRole(el, site.humanTurnSelector);
+    const assistant = matchesRole(el, site.assistantTurnSelector);
+    if (!human && !assistant) return null;
+    const paragraphs = blockToMarkdown(el);
+    if (paragraphs.length === 0) return null;
+    return { human, paragraphs };
+  };
+
+  // Walk the whole thread, gathering turns in order however long it is.
+  const collected = await collectTurns(site, harvest);
 
   const body = [];
   let lastHumanTurnID = null;
   let index = 0;
-  for (const turn of turns) {
-    const human = isHuman(turn);
-    const assistant = isAssistant(turn);
-    if (!human && !assistant) continue; // scaffolding between turns
+  for (const record of collected) {
     index += 1;
     const turnID = "t" + String(index).padStart(2, "0");
-    const paragraphs = blockToMarkdown(turn).map((text, i) => ({
+    const paragraphs = record.paragraphs.map((text, i) => ({
       id: "p" + (i + 1),
       text
     }));
-    if (paragraphs.length === 0) { index -= 1; continue; }
-    if (human) {
+    if (record.human) {
       body.push({ id: turnID, speaker: "spk-human", provenance: "human", paragraphs });
       lastHumanTurnID = turnID;
     } else {

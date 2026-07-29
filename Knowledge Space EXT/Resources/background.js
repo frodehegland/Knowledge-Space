@@ -74,6 +74,39 @@ async function clearBadgeSoon() {
   setTimeout(() => badge("", null, "Send to Knowledge Space"), 4000);
 }
 
+// On-page feedback: current Safari often hides the toolbar button, so the
+// badge is invisible. A brief corner toast tells the user — and us, while
+// debugging — exactly what happened, including the failure reason.
+// kind: "ok" (green), "err" (red), or "info" (grey, and it stays until the
+// next toast replaces it — used for the "Capturing…" progress note while the
+// content script walks a long thread).
+async function showToast(tabId, text, kind) {
+  try {
+    await browser.scripting.executeScript({
+      target: { tabId },
+      func: (message, k) => {
+        const id = "ks-capture-toast";
+        document.getElementById(id)?.remove();
+        const el = document.createElement("div");
+        el.id = id;
+        el.textContent = message;
+        const bg = k === "err" ? "#FF3B30" : k === "info" ? "#3A3A3C" : "#34C759";
+        Object.assign(el.style, {
+          position: "fixed", zIndex: "2147483647", top: "16px", right: "16px",
+          maxWidth: "360px", padding: "12px 16px", borderRadius: "10px",
+          font: "600 13px -apple-system, system-ui, sans-serif", color: "#fff",
+          background: bg,
+          boxShadow: "0 4px 16px rgba(0,0,0,0.25)", whiteSpace: "pre-wrap"
+        });
+        document.documentElement.appendChild(el);
+        // Info stays (progress); ok/err clear themselves.
+        if (k !== "info") setTimeout(() => el.remove(), k === "err" ? 9000 : 3500);
+      },
+      args: [text, kind]
+    });
+  } catch (_) { /* toast is best-effort */ }
+}
+
 // The one capture path, shared by the toolbar button and the context menu.
 // The triggering gesture grants activeTab, so we can inject the extractor on
 // demand — no declared content script, no pre-granted host permission.
@@ -87,15 +120,20 @@ async function runCapture(tab) {
       target: { tabId: tab.id },
       files: ["content.js"]
     });
+    // A long thread is walked top to bottom; say so, since it takes a moment.
+    await showToast(tab.id, "Capturing the whole conversation…", "info");
     const result = await browser.tabs.sendMessage(tab.id, { type: "capture" });
     if (!result || result.error) {
       throw new Error((result && result.error) || "No response from the page.");
     }
     await sendToApp(result.capture);
     await badge("✓", "#34C759", "Sent to Knowledge Space");
+    await showToast(tab.id, "Sent to Knowledge Space ✓", "ok");
   } catch (error) {
-    // Loud and specific: the reason rides on the toolbar title.
-    await badge("!", "#FF3B30", "Not captured — " + (error.message || error));
+    // Loud and specific: the reason rides on the toolbar title and a toast.
+    const reason = String(error && error.message || error);
+    await badge("!", "#FF3B30", "Not captured — " + reason);
+    await showToast(tab.id, "Not captured — " + reason, "err");
     console.error("Knowledge Space capture failed:", error);
   } finally {
     clearBadgeSoon();

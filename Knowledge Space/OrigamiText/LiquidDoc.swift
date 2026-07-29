@@ -153,7 +153,12 @@ nonisolated struct LiquidDoc: Identifiable, Hashable, Sendable {
         // An AI conversation captured from the web — a transcript whose
         // other party is a model, carrying provenance so a generated claim
         // stays marked as generated wherever its words travel.
-        case letter, note, book, rfc, personal, project, meeting, transcript, extract, article, external, source, quote, annotation, digest, journal, inspiration, aiConversation
+        case letter, note, book, rfc, personal, project, meeting, transcript, extract, article, external, source, quote, annotation, digest, journal, inspiration
+        // Explicit lowercase raw value: `decode` lowercases every
+        // documentType token, so a camelCase raw value here would never
+        // match a decoded document. This is the only multi-word kind, so
+        // it is the only one that needs saying.
+        case aiConversation = "aiconversation"
 
         var displayName: String {
             switch self {
