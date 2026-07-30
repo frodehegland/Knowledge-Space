@@ -1,9 +1,36 @@
 import SwiftUI
+import UIKit
 import CoreLocation
 import UniformTypeIdentifiers
 import os
 
 private let log = Logger(subsystem: "com.origami.notes", category: "notes")
+
+/// The keyboard subsystem boots lazily on its first use in an app
+/// session — on a physical device that first raise can lag a second or
+/// more, which is why a freshly opened note used to sit unfocused for a
+/// beat. Summoning and dismissing a throwaway field once, off-screen and
+/// within a single runloop (so no keyboard ever animates into view),
+/// warms it, so the first note the writer opens takes the keyboard at
+/// once. Idempotent: it runs a single time per launch.
+@MainActor
+private enum KeyboardPrewarmer {
+    private static var warmed = false
+
+    static func prewarm() {
+        guard !warmed else { return }
+        guard let window = UIApplication.shared.connectedScenes
+            .compactMap({ $0 as? UIWindowScene })
+            .first(where: { $0.activationState == .foregroundActive })?
+            .keyWindow else { return }
+        warmed = true
+        let field = UITextField(frame: .zero)
+        window.addSubview(field)
+        field.becomeFirstResponder()
+        field.resignFirstResponder()
+        field.removeFromSuperview()
+    }
+}
 
 /// The phone is a capture app, and the format document's capture fixture
 /// (ORIGAMI-DOCUMENT-FORMAT.md §11) is the whole of what it may write.
@@ -428,20 +455,32 @@ final class NotesModel {
     /// The edited note, rewritten in place. Identity, creation instant,
     /// and place stay as captured; title and body are the user's.
     func save(_ doc: LiquidDoc, title: String, bodyText: String,
-              kind: String? = nil) {
+              kind: String? = nil, toDo: Bool? = nil) {
         let trimmedTitle = title.trimmingCharacters(in: .whitespaces)
         let body = LiquidDoc.parseBody(from: bodyText)
         // Title, body, the links the body implies, and — when the
-        // editor changed it — the kind are the phone's to change;
-        // nothing else. Copy-and-mutate carries every other field
-        // through, so a standing or attention set on the Mac survives
-        // an edit made here.
+        // editor changed it — the kind and the To Do standing are the
+        // phone's to change; nothing else. Copy-and-mutate carries every
+        // other field through, so a standing or attention set on the Mac
+        // survives an edit made here.
         var updated = doc
         updated.title = trimmedTitle.isEmpty ? "Untitled" : trimmedTitle
         updated.body = body
         updated.links = LiquidDoc.detectedLinks(in: body)
         updated.wraps = nil
         if let kind { updated.documentType = kind }
+        // The To Do toggle owns only the To Do standing: turning it on
+        // marks the note To Do (and, being a decision, no longer a
+        // draft); turning it off clears To Do but leaves any other
+        // standing — in progress, done — the Mac may have set.
+        if let toDo {
+            if toDo {
+                updated.action = LiquidDoc.Action.toDo.rawValue
+                updated.draft = false
+            } else if updated.actionValue == .toDo {
+                updated.action = nil
+            }
+        }
         do {
             try updated.jsonData().write(to: updated.fileURL, options: .atomic)
         } catch {
@@ -602,6 +641,12 @@ struct NotesHomeView: View {
                 Task { askForIdentityIfNeeded() }
             }
         }
+        // Warm the keyboard once, after the window is up, so the first
+        // note or spoken capture raises it without the launch lag.
+        .task {
+            try? await Task.sleep(for: .milliseconds(400))
+            KeyboardPrewarmer.prewarm()
+        }
         .sheet(isPresented: $capturingVoice) {
             VoiceCaptureView()
         }
@@ -670,7 +715,8 @@ struct NotesHomeView: View {
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(doc.title)
                                     .fontWeight(.medium)
-                                    .lineLimit(2)
+                                    .lineLimit(1)
+                                    .truncationMode(.tail)
                                 if let location = doc.location {
                                     Text(location)
                                         .font(.caption)
@@ -678,6 +724,10 @@ struct NotesHomeView: View {
                                         .lineLimit(1)
                                 }
                             }
+                            // Take the full row width so the single-line
+                            // title shows as many characters as fit before
+                            // it truncates, instead of wrapping.
+                            .frame(maxWidth: .infinity, alignment: .leading)
                             // The bullet says the note has not yet left the
                             // phone: still uploading to iCloud, so the Mac
                             // cannot have it. It disappears once uploaded.
@@ -700,10 +750,16 @@ struct NotesHomeView: View {
                                 Button("Delete", role: .destructive) { model.delete(doc) }
                             }
                         }
+                        // Trim the row's side padding so the title reaches
+                        // closer to the screen edges — more characters per line.
+                        .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 12))
                     }
                 }
             }
         }
+        // Plain, edge-to-edge rows rather than inset-grouped cards, so the
+        // title uses the full screen width instead of a narrow centred card.
+        .listStyle(.plain)
         .overlay {
             if model.notes.isEmpty {
                 ContentUnavailableView(
@@ -776,12 +832,12 @@ struct NewNoteView: View {
     @Environment(NotesModel.self) private var model
     @Environment(\.dismiss) private var dismiss
 
-    /// What the note is born as: a plain note, a To Do standing, a
-    /// journal entry, or an inspiration — a reference caught in the
-    /// wild, which may be scanned in with the camera.
+    /// What the note is born as: a plain note, a journal entry, or an
+    /// inspiration — a reference caught in the wild, which may be
+    /// scanned in with the camera. Its To Do standing is a separate
+    /// axis, carried by the toggle below rather than the kind.
     private enum NoteKind: String, CaseIterable {
         case note = "Note"
-        case toDo = "To Do"
         case journal = "Journal"
         // "Scan" in the picker; the kind it makes is still inspiration.
         case inspiration = "Scan"
@@ -789,6 +845,10 @@ struct NewNoteView: View {
 
     @State private var text = ""
     @State private var kind: NoteKind = .note
+    /// Checked, the note is born a To Do — the standing travels in the
+    /// file, so it lists under To Do on every device, just as a spoken
+    /// note's To Do toggle does.
+    @State private var isToDo = false
     @State private var scanning = false
     /// The progress indicator's words while a scan is being read —
     /// nil when idle.
@@ -824,6 +884,12 @@ struct NewNoteView: View {
                         writing = false
                         scanning = true
                     }
+                }
+                // The To Do standing is its own axis — a plain note or a
+                // journal entry may be a To Do. A scan is a caught
+                // reference, not a task, so it offers no toggle.
+                if kind != .inspiration {
+                    Toggle("To Do", isOn: $isToDo)
                 }
                 if kind == .inspiration {
                     if let foundBook {
@@ -880,14 +946,24 @@ struct NewNoteView: View {
                 }
             }
         }
-        // The keyboard stands ready the moment the sheet does. Focus set
-        // during the sheet's present animation is dropped, and a single
-        // delayed try can miss a slow present — so it is asserted twice,
-        // and only while nothing else (a scan) holds the view.
+        // The keyboard stands ready the moment the sheet settles. Focus
+        // set during the sheet's present animation is dropped by UIKit,
+        // and a single delayed try can miss a slow present — so it is
+        // asserted repeatedly across the whole transition window, only
+        // while nothing else (a scan) holds the view, and only until the
+        // writer has the field, so a note already being typed is never
+        // interrupted.
         .task {
-            for delay in [350, 750] {
-                try? await Task.sleep(for: .milliseconds(delay))
-                if scanStage == nil, pendingScan == nil { writing = true }
+            // Assert focus repeatedly across the present window, catching
+            // the first moment the field can take it — the keyboard,
+            // pre-warmed at launch, then raises at once. Stop as soon as
+            // focus takes or the writer has begun, so a note already being
+            // typed is never interrupted.
+            for _ in 0..<14 {
+                try? await Task.sleep(for: .milliseconds(120))
+                guard scanStage == nil, pendingScan == nil else { continue }
+                if writing || !text.isEmpty { break }
+                writing = true
             }
         }
         .fullScreenCover(isPresented: $scanning) {
@@ -1008,13 +1084,11 @@ struct NewNoteView: View {
         // home view.
         switch kind {
         case .note:
-            _ = model.createNote(title: parsed.title, bodyText: parsed.bodyText)
-        case .toDo:
             _ = model.createNote(title: parsed.title, bodyText: parsed.bodyText,
-                                 asToDo: true)
+                                 asToDo: isToDo)
         case .journal:
             _ = model.createNote(title: parsed.title, bodyText: parsed.bodyText,
-                                 kind: .journal)
+                                 asToDo: isToDo, kind: .journal)
         case .inspiration:
             // Saved without a scan: the words alone are the inspiration.
             _ = model.createNote(title: parsed.title, bodyText: parsed.bodyText,
@@ -1054,6 +1128,10 @@ struct NoteEditorView: View {
     @State private var title = ""
     @State private var bodyText = ""
     @State private var kind: EditKind = .note
+    /// The note's To Do standing, editable here the same way the new
+    /// note and the spoken note offer it. It is a separate axis from
+    /// the category, so it rides its own toggle.
+    @State private var isToDo = false
     @State private var loaded = false
     @State private var isVoiceNote = false
     /// Reading until the reader says Edit — the deliberate step keeps a
@@ -1098,6 +1176,7 @@ struct NoteEditorView: View {
                             }
                         }
                         .pickerStyle(.segmented)
+                        Toggle("To Do", isOn: $isToDo)
                     }
                 }
                 .padding()
@@ -1125,6 +1204,7 @@ struct NoteEditorView: View {
             title = doc.title == "Untitled" ? "" : doc.title
             bodyText = doc.bodyEditingText
             kind = EditKind(documentType: doc.documentType)
+            isToDo = doc.actionValue == .toDo
         }
         .onDisappear {
             if isEditing { saveIfNeeded() }
@@ -1142,6 +1222,7 @@ struct NoteEditorView: View {
         // A voice note's title stays derived — the first four words of
         // whatever the body now says.
         let savedTitle = isVoiceNote ? TranscriptParser.title(for: bodyText) : title
-        model.save(doc, title: savedTitle, bodyText: bodyText, kind: kind.rawValue)
+        model.save(doc, title: savedTitle, bodyText: bodyText,
+                   kind: kind.rawValue, toDo: isToDo)
     }
 }
