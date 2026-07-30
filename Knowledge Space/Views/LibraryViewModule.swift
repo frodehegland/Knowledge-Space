@@ -14,6 +14,7 @@ enum SidebarItem: Hashable {
     case people       // the same notes, grouped by author
     case transcripts  // meetings' words, every statement attributed
     case aiChats      // AI conversations captured from the web
+    case notes        // only notes proper — not journals or other kinds
     case draftLetters // letters still being written
     case digests      // the granted documents folder, distilled
     case action(LiquidDoc.Action)  // notes by standing: To Do, Done…
@@ -64,6 +65,7 @@ enum SidebarCatalog {
             SidebarPlace(name: articlesLabel, systemImage: "doc.plaintext", item: .sourceShelf(.articles)),
             SidebarPlace(name: "Authors", systemImage: "person.text.rectangle", item: .sourceShelf(.authors)),
             SidebarPlace(name: "Quotes", systemImage: "quote.opening", item: .sourceShelf(.quotes)),
+            SidebarPlace(name: "Notes", systemImage: "note.text", item: .notes),
             SidebarPlace(name: "AI Chat", systemImage: "bubble.left.and.bubble.right", item: .aiChats),
         ]
     }
@@ -268,6 +270,9 @@ struct DocumentListView: View {
     var transcriptsOnly = false
     /// The AI Chat list: conversations captured from the web, newest first.
     var aiChatsOnly = false
+    /// The Notes list: notes proper only — the quick own-hand kind,
+    /// not journals, letters, sources, or any other document type.
+    var notesOnly = false
     /// The Digest list: the granted folder's distillations — kept out
     /// of every other list, this one reads the index directly.
     var digestsOnly = false
@@ -311,6 +316,13 @@ struct DocumentListView: View {
         }
         if transcriptsOnly {
             return state.filteredEntries.filter { Self.isTranscript($0.doc) }
+        }
+        if notesOnly {
+            // Notes proper: the `note` document type alone — journals,
+            // letters, and every other kind keep to their own places.
+            return state.filteredEntries.filter {
+                $0.doc.documentType == LiquidDoc.DocumentType.note.rawValue
+            }
         }
         if aiChatsOnly {
             // Captured conversations land as drafts; read the index
@@ -519,6 +531,11 @@ struct DocumentListView: View {
                             "No AI Chats",
                             systemImage: "bubble.left.and.bubble.right",
                             description: Text("Capture a conversation from claude.ai, ChatGPT, or Gemini with the Safari extension’s “Send to Knowledge Space” — it lands here as a draft."))
+                    } else if notesOnly {
+                        ContentUnavailableView(
+                            "No Notes",
+                            systemImage: "note.text",
+                            description: Text("A note is the quickest kind — ⌘N, or New Note in the sidebar — and every one you write lists here."))
                     } else if let action {
                         ContentUnavailableView(
                             "Nothing \(action.displayName)",
