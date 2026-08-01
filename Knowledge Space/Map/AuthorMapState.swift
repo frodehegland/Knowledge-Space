@@ -481,7 +481,14 @@ final class AuthorMapState {
         }
 
         let contents = KnowledgeMapDocument.folderContents(documents: mapDocuments)
-        applySavedFolderLayout(to: contents.flowDocument, folder: folder)
+        // The Journal view is a timeline: its entries carry dates, so they
+        // line up left to right by day rather than taking the reader's
+        // saved arrangement. Every other view keeps its saved positions.
+        if mapCategory == .journal {
+            applyTimelineLayout(to: contents.flowDocument, documents: mapDocuments)
+        } else {
+            applySavedFolderLayout(to: contents.flowDocument, folder: folder)
+        }
         engine.load(document: contents.flowDocument, glossary: contents.glossary)
         shownFolderDocCount = scannedDocs.count
         documentURL = nil
@@ -509,6 +516,21 @@ final class AuthorMapState {
         let ids = Set(document.nodes.map(\.identifier))
         for (id, xyz) in saved where ids.contains(id) && xyz.count == 3 {
             document.layout.set(position: NodePosition(x: xyz[0], y: xyz[1], z: xyz[2]), for: id)
+        }
+    }
+
+    /// Lays documents in a single row, left to right by date — the
+    /// earliest at the left. Computed fresh each load (never the reader's
+    /// saved arrangement), so the Journal timeline always reads in order.
+    /// 260 canvas points is the folder grid's own column gap; a little
+    /// more keeps the dated titles from touching.
+    private func applyTimelineLayout(to document: FlowDocument, documents: [LiquidDoc]) {
+        let ordered = documents.sorted { $0.listedDate < $1.listedDate }
+        let spacing = 300.0
+        let startX = -Double(ordered.count - 1) / 2 * spacing
+        for (index, doc) in ordered.enumerated() {
+            document.layout.set(position: NodePosition(x: startX + Double(index) * spacing, y: 0, z: 0),
+                                for: doc.id)
         }
     }
 
