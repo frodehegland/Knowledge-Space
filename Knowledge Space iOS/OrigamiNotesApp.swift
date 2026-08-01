@@ -455,31 +455,27 @@ final class NotesModel {
     /// The edited note, rewritten in place. Identity, creation instant,
     /// and place stay as captured; title and body are the user's.
     func save(_ doc: LiquidDoc, title: String, bodyText: String,
-              kind: String? = nil, toDo: Bool? = nil) {
+              kind: String? = nil,
+              action: LiquidDoc.Action? = nil, changesAction: Bool = false) {
         let trimmedTitle = title.trimmingCharacters(in: .whitespaces)
         let body = LiquidDoc.parseBody(from: bodyText)
         // Title, body, the links the body implies, and — when the
-        // editor changed it — the kind and the To Do standing are the
+        // editor changed them — the kind and the action standing are the
         // phone's to change; nothing else. Copy-and-mutate carries every
-        // other field through, so a standing or attention set on the Mac
-        // survives an edit made here.
+        // other field through, so an attention set on the Mac survives an
+        // edit made here.
         var updated = doc
         updated.title = trimmedTitle.isEmpty ? "Untitled" : trimmedTitle
         updated.body = body
         updated.links = LiquidDoc.detectedLinks(in: body)
         updated.wraps = nil
         if let kind { updated.documentType = kind }
-        // The To Do toggle owns only the To Do standing: turning it on
-        // marks the note To Do (and, being a decision, no longer a
-        // draft); turning it off clears To Do but leaves any other
-        // standing — in progress, done — the Mac may have set.
-        if let toDo {
-            if toDo {
-                updated.action = LiquidDoc.Action.toDo.rawValue
-                updated.draft = false
-            } else if updated.actionValue == .toDo {
-                updated.action = nil
-            }
+        // The action picker owns the whole standing: To Do, In Progress,
+        // Done, Cancelled, or none. Setting any standing is a decision,
+        // so the note is no longer a draft.
+        if changesAction {
+            updated.action = action?.rawValue
+            if action != nil { updated.draft = false }
         }
         do {
             try updated.jsonData().write(to: updated.fileURL, options: .atomic)
@@ -1112,11 +1108,13 @@ struct NoteEditorView: View {
     /// documentType tokens; the Mac files a journal note under Journal
     /// when it sees the change.
     private enum EditKind: String, CaseIterable {
-        case note = "note", journal = "journal", inspiration = "inspiration"
+        case note = "note", journal = "journal", thought = "thought",
+             inspiration = "inspiration"
         var label: String {
             switch self {
             case .note: "Note"
             case .journal: "Journal"
+            case .thought: "Thought"
             case .inspiration: "Inspiration"
             }
         }
@@ -1128,10 +1126,11 @@ struct NoteEditorView: View {
     @State private var title = ""
     @State private var bodyText = ""
     @State private var kind: EditKind = .note
-    /// The note's To Do standing, editable here the same way the new
-    /// note and the spoken note offer it. It is a separate axis from
-    /// the category, so it rides its own toggle.
-    @State private var isToDo = false
+    /// The note's action standing — To Do, In Progress, Done, Cancelled,
+    /// or none. A separate axis from the category, so it rides its own
+    /// control; the standing travels in the file and lists on every
+    /// device.
+    @State private var action: LiquidDoc.Action?
     @State private var loaded = false
     @State private var isVoiceNote = false
     /// Reading until the reader says Edit — the deliberate step keeps a
@@ -1176,7 +1175,15 @@ struct NoteEditorView: View {
                             }
                         }
                         .pickerStyle(.segmented)
-                        Toggle("To Do", isOn: $isToDo)
+                        // The action standing — its own axis. "None" clears
+                        // it; any choice marks the note and lists it there
+                        // on every device.
+                        Picker("Action", selection: $action) {
+                            Text("None").tag(LiquidDoc.Action?.none)
+                            ForEach(LiquidDoc.Action.allCases, id: \.self) { standing in
+                                Text(standing.displayName).tag(LiquidDoc.Action?.some(standing))
+                            }
+                        }
                     }
                 }
                 .padding()
@@ -1204,7 +1211,7 @@ struct NoteEditorView: View {
             title = doc.title == "Untitled" ? "" : doc.title
             bodyText = doc.bodyEditingText
             kind = EditKind(documentType: doc.documentType)
-            isToDo = doc.actionValue == .toDo
+            action = doc.actionValue
         }
         .onDisappear {
             if isEditing { saveIfNeeded() }
@@ -1223,6 +1230,6 @@ struct NoteEditorView: View {
         // whatever the body now says.
         let savedTitle = isVoiceNote ? TranscriptParser.title(for: bodyText) : title
         model.save(doc, title: savedTitle, bodyText: bodyText,
-                   kind: kind.rawValue, toDo: isToDo)
+                   kind: kind.rawValue, action: action, changesAction: true)
     }
 }

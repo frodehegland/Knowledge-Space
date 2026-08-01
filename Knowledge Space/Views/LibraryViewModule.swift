@@ -241,13 +241,31 @@ enum LibraryViewRegistry {
     ]
 
     static func module(id: String) -> LibraryViewModule? {
-        modules.first { $0.id == id }
+        #if DEBUG
+        _ = uniqueIDCheck
+        #endif
+        return modules.first { $0.id == id }
     }
 
     static func module(for item: SidebarItem?) -> LibraryViewModule? {
         guard case .view(let id)? = item else { return nil }
         return module(id: id)
     }
+
+    #if DEBUG
+    /// A module is reached by its id, so two modules sharing one leave a
+    /// view unreachable — the sidebar shows both rows, but every click on
+    /// either opens whichever the registry lists first. That is silent in
+    /// a release build and maddening to a module author, so it trips an
+    /// assertion here. Evaluated once, on first lookup.
+    private static let uniqueIDCheck: Void = {
+        let counts = Dictionary(grouping: modules.map(\.id), by: { $0 })
+        let duplicates = counts.filter { $0.value.count > 1 }.keys.sorted()
+        assert(duplicates.isEmpty,
+               "Duplicate view-module id(s): \(duplicates.joined(separator: ", ")). "
+               + "Each LibraryViewModule needs a unique id.")
+    }()
+    #endif
 }
 
 /// The library's document list, as the content column: what the modules'

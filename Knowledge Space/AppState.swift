@@ -431,11 +431,61 @@ final class AppState {
     func fileDocument(_ doc: LiquidDoc, under folder: String) {
         filedFolders[doc.id] = folder
         persistFiling()
+        syncFolderKind(for: doc, filedUnder: folder)
     }
 
     func unfile(_ doc: LiquidDoc) {
         guard filedFolders.removeValue(forKey: doc.id) != nil else { return }
         persistFiling()
+        syncFolderKind(for: doc, filedUnder: nil)
+    }
+
+    /// Filing folders that are also document kinds. Filing a plain note
+    /// into one of these raises the filing into the document's own
+    /// `documentType`, so the kind travels to every device — the Map's
+    /// Journal and Thoughts views read it. Every other folder is a plain
+    /// shelf the files never feel.
+    static let kindFolders: [String: String] = [
+        "Thoughts": LiquidDoc.DocumentType.thought.rawValue,
+        "Journal": LiquidDoc.DocumentType.journal.rawValue,
+    ]
+
+    /// The kind a filing folder names, if it names one.
+    static func kindFolder(for name: String?) -> String? {
+        guard let name else { return nil }
+        return kindFolders.first {
+            $0.key.caseInsensitiveCompare(name) == .orderedSame
+        }?.value
+    }
+
+    /// Keeps a note's kind in step with its filing. Filing a plain note
+    /// under Journal or Thoughts marks it that kind in the document
+    /// itself; a thought filed back out returns to a plain note (thought
+    /// is purely a filing kind). Journal, which a phone can set at
+    /// capture, is never stripped by refiling, and a letter or source
+    /// filed under a kind folder keeps its own kind.
+    private func syncFolderKind(for doc: LiquidDoc, filedUnder folder: String?) {
+        let note = LiquidDoc.DocumentType.note.rawValue
+        let thought = LiquidDoc.DocumentType.thought.rawValue
+        let current = doc.documentType
+        let wanted: String
+        if let target = Self.kindFolder(for: folder) {
+            guard current == note || current == nil else { return }
+            wanted = target
+        } else if current == thought {
+            wanted = note
+        } else {
+            return
+        }
+        guard wanted != current else { return }
+        var updated = doc
+        updated.documentType = wanted
+        do {
+            try updated.jsonData().write(to: updated.fileURL, options: .atomic)
+            index.rescan()
+        } catch {
+            showNote("Could not update the note's kind: \(error.localizedDescription)")
+        }
     }
 
     /// A new folder joins just above Archived, which keeps the last word.

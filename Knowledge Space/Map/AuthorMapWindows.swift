@@ -217,6 +217,13 @@ struct MapControlsView: View {
     @AppStorage("sort_reverse") private var sortReverse = false
     @AppStorage("sort_time_reverse") private var sortTimeReverse = false
 
+    // Handing a node's external file to another app: try the Reader
+    // scheme, fall back to the system share sheet. The scheme is the
+    // reader's own, editable in Settings.
+    @Environment(\.openURL) private var openURL
+    @AppStorage("readerURLScheme") private var readerURLScheme = ReaderHandoff.defaultScheme
+    @State private var shareRequest: ExternalOpenRequest?
+
     private var hasSelection: Bool { !state.engine.selection.isEmpty }
 
     private var selectedIDs: [FlowNodeIdentifier] { Array(state.engine.selection) }
@@ -251,6 +258,28 @@ struct MapControlsView: View {
                 openWindow(id: "MapControls")
             }
         }
+        // A node asked to open its external file: this window is a plain
+        // window and can host the handoff the immersive space cannot.
+        .onChange(of: state.externalOpenRequest) { _, request in
+            handleExternalOpen(request)
+        }
+        .sheet(item: $shareRequest) { request in
+            ShareSheet(url: request.url)
+        }
+    }
+
+    /// Tries the Reader scheme first; if no app answers, the file goes to
+    /// the system share sheet so it can still reach another reader.
+    private func handleExternalOpen(_ request: ExternalOpenRequest?) {
+        guard let request else { return }
+        state.externalOpenRequest = nil
+        if let schemeURL = ReaderHandoff.schemeURL(forFileAt: request.url, template: readerURLScheme) {
+            openURL(schemeURL) { accepted in
+                if !accepted { shareRequest = ExternalOpenRequest(url: request.url) }
+            }
+        } else {
+            shareRequest = ExternalOpenRequest(url: request.url)
+        }
     }
 
     private var controlsBar: some View {
@@ -259,6 +288,25 @@ struct MapControlsView: View {
                 openWindow(id: "Library")
             } label: {
                 Label("Library", systemImage: "books.vertical")
+            }
+
+            // Step back out of a document opened by drilling into a link.
+            if state.canGoBack {
+                Button {
+                    state.goBack()
+                } label: {
+                    Label("Back", systemImage: "chevron.backward")
+                }
+            }
+
+            // Write a new note into the community folder.
+            if state.folderURL != nil {
+                Button {
+                    state.prepareNewNote()
+                    openWindow(id: "MapNoteEditor")
+                } label: {
+                    Label("New Note", systemImage: "square.and.pencil")
+                }
             }
 
             if state.documentURL != nil || state.showingFolderMap {
@@ -315,6 +363,15 @@ struct MapControlsView: View {
             if !state.folderDocuments.isEmpty {
                 documentsMenu
             }
+
+            // Introduction & Settings — the panel the right-wrist bangle
+            // used to open, now reachable from the bar itself.
+            Button {
+                openWindow(id: "MapSettings")
+            } label: {
+                Label("Introduction & Settings", systemImage: "info.circle")
+            }
+            .labelStyle(.iconOnly)
 
             Button {
                 Task { @MainActor in
@@ -647,10 +704,21 @@ struct MapControlsView: View {
 
     private var documentsMenu: some View {
         Menu {
-            if !state.showingFolderMap {
-                Button("Show Folder Map") { state.showFolderMap() }
-                Divider()
+            // The library cuts — each shown alone as its own map — with
+            // the whole folder above them. (These were the left-arm menu.)
+            Button {
+                state.showFolderMap()
+            } label: {
+                Label("Whole Folder", systemImage: "square.grid.2x2")
             }
+            ForEach(MapLibraryCategory.allCases) { category in
+                Button {
+                    state.showCategory(category)
+                } label: {
+                    Label(category.title, systemImage: category.systemImage)
+                }
+            }
+            Divider()
             ForEach(state.folderDocuments) { document in
                 Button(document.title) { state.openDocument(url: document.url) }
             }
@@ -665,7 +733,7 @@ struct MapControlsView: View {
 
 // MARK: - Settings
 
-/// The Settings panel, toggled from the right-wrist bangle.
+/// The Introduction & Settings panel, opened from the control bar.
 struct MapSettingsView: View {
     @Environment(AuthorMapState.self) private var state
 
@@ -678,8 +746,28 @@ struct MapSettingsView: View {
     // The toolbar's original key — the same setting, reachable here.
     @AppStorage("onlySelectedNodesCanMove") private var onlySelectedNodesCanMove = true
 
+    // The Reader handoff: where Reader's files live, and the scheme that
+    // opens one there.
+    @AppStorage("readerURLScheme") private var readerURLScheme = ReaderHandoff.defaultScheme
+    @State private var showingReaderImporter = false
+
     var body: some View {
         TabView {
+            Tab("Introduction", systemImage: "info.circle") {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text("Knowledge Space")
+                            .font(.title2.weight(.semibold))
+                        Text(verbatim: "Your community's documents as a space you stand inside. The left wrist opens the library — Thoughts, Journal, and Articles, each shown on its own, or the whole folder — and the toolbar. This right wrist holds the introduction and settings.")
+                            .foregroundStyle(.secondary)
+                        Text(verbatim: "Double-tap a card to open it; an open card can follow a link inward or hand a wrapped PDF to your reader. The Reader library and its open-in scheme live in the Library tab.")
+                            .foregroundStyle(.secondary)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding()
+                }
+            }
+
             Tab("Appearance", systemImage: "paintbrush") {
                 Form {
                     Section("Nodes") {
@@ -695,10 +783,140 @@ struct MapSettingsView: View {
                     }
                 }
             }
+
+            Tab("Library", systemImage: "books.vertical") {
+                Form {
+                    Section("Reader Library") {
+                        LabeledContent("Folder",
+                                       value: state.readerLibraryURL?.lastPathComponent ?? "Not chosen")
+                        Button("Choose Reader Library…") { showingReaderImporter = true }
+                        Text(verbatim: "Where Reader keeps its files. A node's external file — a PDF above all — is found here when it is not in the community folder.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+                    Section("Open in Reader") {
+                        TextField("URL Scheme", text: $readerURLScheme)
+                        Text(verbatim: "How an external file is handed to Reader. <file> becomes the file's path. If no app answers the scheme, the system share sheet opens instead.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
         }
         .frame(minWidth: 480, minHeight: 380)
+        .fileImporter(isPresented: $showingReaderImporter,
+                      allowedContentTypes: [.folder],
+                      allowsMultipleSelection: false) { result in
+            if case .success(let urls) = result, let url = urls.first {
+                state.chooseReaderLibrary(url: url)
+            }
+        }
         .onAppear { state.isSettingsWindowOpen = true }
         .onDisappear { state.isSettingsWindowOpen = false }
+    }
+}
+
+// MARK: - Note editor
+
+/// Writing a note in space: title and body, its kind (Note, Journal, or
+/// Thought — the kinds the library's own views gather), and its action
+/// standing. New when the editor was opened for a fresh note, an edit
+/// when a card asked to change one. Saving writes the JSON into the
+/// community folder and the map refreshes to show it.
+struct MapNoteEditorView: View {
+    @Environment(AuthorMapState.self) private var state
+    @Environment(\.dismissWindow) private var dismissWindow
+
+    /// The note kinds this editor writes: the own-hand kinds the Map's
+    /// left-arm menu gathers. Raw values are the documentType tokens.
+    private enum NoteKind: String, CaseIterable, Identifiable {
+        case note, journal, thought
+        var id: String { rawValue }
+        var label: String {
+            switch self {
+            case .note: "Note"
+            case .journal: "Journal"
+            case .thought: "Thought"
+            }
+        }
+    }
+
+    @State private var title = ""
+    @State private var bodyText = ""
+    @State private var author = ""
+    @State private var kind: NoteKind = .note
+    @State private var action: LiquidDoc.Action?
+    @State private var loaded = false
+
+    private var isNew: Bool { state.noteBeingEdited == nil }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text(isNew ? "New Note" : "Edit Note")
+                .font(.title2.weight(.semibold))
+
+            TextField("Title", text: $title)
+                .textFieldStyle(.roundedBorder)
+
+            TextEditor(text: $bodyText)
+                .frame(minHeight: 200)
+                .padding(6)
+                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
+
+            // Only asked for when the folder has no author name yet — a
+            // note must carry one, per the format.
+            if state.authorName.trimmingCharacters(in: .whitespaces).isEmpty {
+                TextField("Your name", text: $author)
+                    .textFieldStyle(.roundedBorder)
+            }
+
+            Picker("Kind", selection: $kind) {
+                ForEach(NoteKind.allCases) { Text($0.label).tag($0) }
+            }
+            .pickerStyle(.segmented)
+
+            // The action standing — its own axis, independent of the kind.
+            Picker("Action", selection: $action) {
+                Text("None").tag(LiquidDoc.Action?.none)
+                ForEach(LiquidDoc.Action.allCases, id: \.self) { standing in
+                    Text(standing.displayName).tag(LiquidDoc.Action?.some(standing))
+                }
+            }
+
+            if let error = state.lastError {
+                Text(error)
+                    .font(.footnote)
+                    .foregroundStyle(.red)
+            }
+
+            HStack {
+                Button("Cancel") { dismissWindow(id: "MapNoteEditor") }
+                Spacer()
+                Button("Save") {
+                    if state.saveNote(title: title, bodyText: bodyText,
+                                      author: author, kind: kind.rawValue,
+                                      action: action) {
+                        dismissWindow(id: "MapNoteEditor")
+                    }
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(title.trimmingCharacters(in: .whitespaces).isEmpty
+                          && bodyText.trimmingCharacters(in: .whitespaces).isEmpty)
+            }
+        }
+        .padding(20)
+        .frame(minWidth: 440)
+        .onAppear {
+            guard !loaded else { return }
+            loaded = true
+            author = state.authorName
+            if let doc = state.noteBeingEdited {
+                title = doc.title == "Untitled" ? "" : doc.title
+                bodyText = doc.bodyEditingText
+                kind = NoteKind(rawValue: doc.documentType ?? "note") ?? .note
+                action = doc.actionValue
+            }
+        }
     }
 }
 #endif

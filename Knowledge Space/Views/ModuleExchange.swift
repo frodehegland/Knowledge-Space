@@ -138,13 +138,19 @@ enum ModuleExchange {
     /// name, and symbol its `LibraryViewModule` declares, with the file
     /// name as the fallback identity.
     private nonisolated static func wrap(source: String, fileName: String) -> ModuleArchive {
+        // Fields are read from the `LibraryViewModule(...)` initializer
+        // alone — never the whole file. A view body is full of `id:` and
+        // `systemImage:` (every ForEach, every Label), so searching from
+        // the top would pick those up instead of the module's own.
+        let declaration = source.range(of: "LibraryViewModule(")
+            .map { String(source[$0.lowerBound...]) } ?? source
         func field(_ label: String) -> String? {
             let pattern = "\(label):\\s*\"([^\"]+)\""
             guard let regex = try? NSRegularExpression(pattern: pattern),
-                  let match = regex.firstMatch(in: source,
-                                               range: NSRange(source.startIndex..., in: source)),
-                  let range = Range(match.range(at: 1), in: source) else { return nil }
-            return String(source[range])
+                  let match = regex.firstMatch(in: declaration,
+                                               range: NSRange(declaration.startIndex..., in: declaration)),
+                  let range = Range(match.range(at: 1), in: declaration) else { return nil }
+            return String(declaration[range])
         }
         let baseName = (fileName as NSString).deletingPathExtension
         return ModuleArchive(id: field("id") ?? baseName.lowercased(),

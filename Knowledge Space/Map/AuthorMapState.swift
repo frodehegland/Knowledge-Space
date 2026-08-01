@@ -18,6 +18,47 @@ struct FolderDocument: Identifiable {
     var id: String { url.path }
 }
 
+/// The left-arm menu's three cuts across the community folder. Choosing
+/// one shows only its documents as the map, the way the whole folder is
+/// shown by default.
+enum MapLibraryCategory: String, CaseIterable, Identifiable {
+    case thoughts, journal, articles
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .thoughts: "Thoughts"
+        case .journal: "Journal"
+        case .articles: "Articles"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .thoughts: "lightbulb"
+        case .journal: "book.closed"
+        case .articles: "doc.richtext"
+        }
+    }
+
+    /// Whether a document belongs in this category.
+    func matches(_ doc: LiquidDoc) -> Bool {
+        switch self {
+        case .thoughts:
+            // A note filed under Thoughts on the Mac, which raises the
+            // filing into the document as the `thought` kind so it travels
+            // here. A plain, unfiled note is not a Thought.
+            return doc.documentType == LiquidDoc.DocumentType.thought.rawValue
+        case .journal:
+            return doc.documentType == LiquidDoc.DocumentType.journal.rawValue
+        case .articles:
+            // A PDF scanned into the library: any document wrapping an
+            // external file, whatever kind the sidecar declares.
+            return doc.wraps != nil
+        }
+    }
+}
+
 /// One entry in the agent conversation shown in the panel.
 struct AgentChatEntry: Identifiable {
     enum Role {
@@ -173,14 +214,53 @@ final class AuthorMapState {
 
     private static let bookmarkKey = "knowledgeMapDocumentBookmark"
     private static let folderBookmarkKey = "knowledgeMapFolderBookmark"
+    private static let readerFolderBookmarkKey = "knowledgeMapReaderFolderBookmark"
 
     /// The community folder the picker granted, and the documents in it.
     private(set) var folderURL: URL?
     private(set) var folderDocuments: [FolderDocument] = []
 
+    /// Where a node opened to. A folder-map node stands for another
+    /// Knowledge Space document, opening in place (`.document`); the
+    /// folder itself is the root map (`.folder`).
+    enum OpenTarget: Equatable {
+        case folder
+        case document(URL)
+    }
+
+    /// The trail of maps opened by drilling into linked documents, so a
+    /// reader can step back out to where they came from. Only
+    /// `openLinkedDocument`/`goBack` touch it; opening a fresh root
+    /// (a folder, the Library) clears it.
+    private(set) var navStack: [OpenTarget] = []
+    var canGoBack: Bool { !navStack.isEmpty }
+
+    /// A pending request to open an external file in another app, watched
+    /// by the controls window (immersive spaces cannot host the handoff
+    /// sheet). Carries a fresh id each time so re-opening the same file
+    /// fires again.
+    var externalOpenRequest: ExternalOpenRequest?
+
+    /// The Reader library folder, chosen once and remembered by bookmark,
+    /// so external files a node names — PDFs above all — resolve even
+    /// when they live outside the community folder.
+    private(set) var readerLibraryURL: URL?
+    private var accessedReaderFolder: URL?
+
+    /// Address → document / file, rebuilt from each folder scan so a node
+    /// (whose identifier is its document's address) resolves to the file
+    /// on disk without re-reading anything.
+    private var docByID: [String: LiquidDoc] = [:]
+    private var urlByID: [String: URL] = [:]
+
     /// Whether the engine currently shows the folder itself as the map —
     /// every document a node, links between documents the threads.
     private(set) var showingFolderMap = false
+
+    /// The category the left-arm menu narrowed the folder map to, if any.
+    /// Nil is the whole folder. Kept across background rescans so a reader
+    /// browsing one category is not thrown back to everything.
+    private(set) var mapCategory: MapLibraryCategory?
 
     /// Bumped each time a different map loads, so the view can refit.
     private(set) var loadCount = 0
@@ -301,6 +381,7 @@ final class AuthorMapState {
 
     private func apply(_ found: FolderScan) {
         scannedDocs = found.docs
+        rebuildIndex()
         folderDocuments = found.documents.sorted {
             $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending
         }
@@ -322,7 +403,8 @@ final class AuthorMapState {
         // map is not reloaded and recentered every tick.
         if documentURL == nil || showingFolderMap {
             if !showingFolderMap || scannedDocs.count != shownFolderDocCount {
-                showFolderMap()
+                // Keep the reader's chosen category across the refresh.
+                loadFolderMap()
             }
         }
     }
@@ -356,6 +438,15 @@ final class AuthorMapState {
     /// annotations the Reader import mints by the hundred), newest
     /// first when the folder holds more than the map can carry.
     private var mapDocuments: [LiquidDoc] {
+        // A chosen category speaks for itself: show exactly its documents,
+        // shelves included (Articles are sidecars, a shelf kind), newest
+        // first past the cap.
+        if let mapCategory {
+            let matching = scannedDocs.filter(mapCategory.matches)
+            guard matching.count > Self.mapDocumentCap else { return matching }
+            return Array(matching.sorted { $0.listedDate > $1.listedDate }
+                .prefix(Self.mapDocumentCap))
+        }
         var writing = scannedDocs.filter { !$0.isLibraryKind && !$0.isDigest }
         // A folder of nothing but shelves still deserves a map.
         if writing.isEmpty { writing = scannedDocs }
@@ -364,10 +455,27 @@ final class AuthorMapState {
             .prefix(Self.mapDocumentCap))
     }
 
+    /// Shows the whole community folder as the map. The left-arm menu's
+    /// categories narrow it with `showCategory`.
+    func showFolderMap(keepingHistory: Bool = false) {
+        mapCategory = nil
+        loadFolderMap(keepingHistory: keepingHistory)
+    }
+
+    /// Shows one library category alone — the left-arm menu's Thoughts,
+    /// Journal, or Articles — as its own folder map.
+    func showCategory(_ category: MapLibraryCategory, keepingHistory: Bool = false) {
+        mapCategory = category
+        loadFolderMap(keepingHistory: keepingHistory)
+    }
+
     /// Loads the folder map into the engine: documents as nodes, links as
-    /// threads, positions from the reader's saved arrangement.
-    func showFolderMap() {
+    /// threads, positions from the reader's saved arrangement. Honors the
+    /// current `mapCategory`, so a background rescan keeps the reader in
+    /// the category they chose.
+    private func loadFolderMap(keepingHistory: Bool = false) {
         guard let folder = folderURL, !scannedDocs.isEmpty else { return }
+        if !keepingHistory { navStack.removeAll() }
         if documentURL != nil, hasUnsavedChanges {
             save()
         }
@@ -378,7 +486,7 @@ final class AuthorMapState {
         shownFolderDocCount = scannedDocs.count
         documentURL = nil
         documentFormat = nil
-        documentTitle = folder.lastPathComponent
+        documentTitle = mapCategory?.title ?? folder.lastPathComponent
         showingFolderMap = true
         hasUnsavedChanges = false
         lastError = nil
@@ -415,8 +523,11 @@ final class AuthorMapState {
         hasUnsavedChanges = false
     }
 
-    func openDocument(url: URL) {
+    func openDocument(url: URL, keepingHistory: Bool = false) {
         do {
+            // A fresh open (from the Library or the picker) starts a new
+            // trail; only drilling into a link keeps the way back.
+            if !keepingHistory { navStack.removeAll() }
             // Switching away from an edited map keeps its changes.
             if hasUnsavedChanges {
                 save()
@@ -433,6 +544,7 @@ final class AuthorMapState {
             documentFormat = format
             documentTitle = contents.title ?? url.lastPathComponent
             showingFolderMap = false
+            mapCategory = nil
             hasUnsavedChanges = false
             lastError = nil
             expandedNodes = []
@@ -449,6 +561,230 @@ final class AuthorMapState {
         }
     }
 
+    // MARK: - Linked documents (the nested knowledge environment)
+
+    /// Rebuilds the address lookups from the last folder scan. A node's
+    /// identifier is its document's address, so this is the table that
+    /// turns a node back into the file it stands for.
+    private func rebuildIndex() {
+        var docs: [String: LiquidDoc] = [:]
+        var urls: [String: URL] = [:]
+        for doc in scannedDocs {
+            docs[doc.id] = doc
+            urls[doc.id] = doc.fileURL
+        }
+        docByID = docs
+        urlByID = urls
+    }
+
+    /// The document a node stands for, resolved by address: the node's own
+    /// identifier first (folder-map document nodes), then a `documentPath`
+    /// an Author document-link node carries.
+    private func document(for node: FlowNode) -> LiquidDoc? {
+        if let doc = docByID[node.identifier] { return doc }
+        if let path = node.documentPath ?? node.glossaryEntry?.documentPath {
+            return docByID[LiquidAddress.canonical(path)]
+        }
+        return nil
+    }
+
+    /// The file a node's linked **native** document lives in, when that
+    /// document is one Knowledge Space opens in place. A sidecar wrapping
+    /// an external file is not one of these — it opens externally — and a
+    /// node standing for the document already on screen is not a link.
+    func linkedDocumentURL(for node: FlowNode) -> URL? {
+        guard let doc = document(for: node), doc.wraps == nil else { return nil }
+        return doc.fileURL == documentURL ? nil : doc.fileURL
+    }
+
+    /// The title of the native document a node links to, for its Open
+    /// command's label; `nil` when the node links nowhere native.
+    func linkedDocumentTitle(for node: FlowNode) -> String? {
+        guard linkedDocumentURL(for: node) != nil else { return nil }
+        return document(for: node)?.title
+    }
+
+    /// The external file a node names, when its document is a sidecar
+    /// wrapping one (a PDF above all). Resolved beside the sidecar first,
+    /// then in the known roots — the community folder and the Reader
+    /// library — so a wrapped file that only lives in Reader still opens.
+    func externalFileURL(for node: FlowNode) -> URL? {
+        guard let doc = document(for: node), let wraps = doc.wraps else { return nil }
+        let beside = doc.fileURL.deletingLastPathComponent()
+            .appendingPathComponent(wraps.file)
+        if FileManager.default.fileExists(atPath: beside.path) { return beside }
+        return locateInKnownRoots(named: (wraps.file as NSString).lastPathComponent)
+    }
+
+    /// Looks for a file by name in the folders Knowledge Space is allowed
+    /// to read — the open community folder and the Reader library.
+    private func locateInKnownRoots(named name: String) -> URL? {
+        for base in [folderURL, readerLibraryURL].compactMap({ $0 }) {
+            // The base itself and its PDF subfolder — the scan skips PDF/,
+            // but a file named there is still found on demand.
+            let roots = [base, base.appendingPathComponent(KnowledgeSpaceFolders.externalSubfolderName)]
+            for root in roots {
+                let candidate = root.appendingPathComponent(name)
+                if FileManager.default.fileExists(atPath: candidate.path) { return candidate }
+            }
+        }
+        return nil
+    }
+
+    /// The map the reader is looking at now, remembered before drilling in.
+    private func currentTarget() -> OpenTarget? {
+        if let url = documentURL { return .document(url) }
+        if showingFolderMap { return .folder }
+        return nil
+    }
+
+    /// Opens a node's linked native document in place, remembering where
+    /// we came from so `goBack` can return. Triggered by the Open command
+    /// inside the card — never by tapping the node itself.
+    func openLinkedDocument(_ node: FlowNode) {
+        guard let url = linkedDocumentURL(for: node) else { return }
+        if let here = currentTarget() { navStack.append(here) }
+        openDocument(url: url, keepingHistory: true)
+    }
+
+    /// Steps back out to the map we drilled in from.
+    func goBack() {
+        guard let target = navStack.popLast() else { return }
+        switch target {
+        case .folder:
+            showFolderMap(keepingHistory: true)
+        case .document(let url):
+            openDocument(url: url, keepingHistory: true)
+        }
+    }
+
+    /// Asks the controls window to hand a node's external file to another
+    /// app. Triggered by the Open-in-Reader command inside the card.
+    func requestExternalOpen(_ node: FlowNode) {
+        guard let url = externalFileURL(for: node) else { return }
+        externalOpenRequest = ExternalOpenRequest(url: url)
+    }
+
+    // MARK: - Writing notes in space
+
+    /// The note the editor is changing, or nil when it composes a new one.
+    /// Set before the editor window opens.
+    private(set) var noteBeingEdited: LiquidDoc?
+
+    /// The author name new notes carry, kept under the same default the
+    /// other apps read. The editor offers to fill it when it is blank.
+    var authorName: String {
+        get { UserDefaults.standard.string(forKey: "authorName") ?? "" }
+        set { UserDefaults.standard.set(newValue, forKey: "authorName") }
+    }
+
+    /// The kinds a card in space can be edited as — the own-hand notes,
+    /// not sources or citations, which are read here, not written.
+    private static let editableNoteKinds: Set<String> = [
+        LiquidDoc.DocumentType.note.rawValue,
+        LiquidDoc.DocumentType.journal.rawValue,
+        LiquidDoc.DocumentType.thought.rawValue,
+        LiquidDoc.DocumentType.inspiration.rawValue,
+    ]
+
+    /// The writable note a node stands for, if any — so the card can offer
+    /// Edit only where there is a note to edit.
+    func editableNote(for node: FlowNode) -> LiquidDoc? {
+        guard let doc = document(for: node) else { return nil }
+        return Self.editableNoteKinds.contains(doc.documentType ?? "note") ? doc : nil
+    }
+
+    func prepareNewNote() { noteBeingEdited = nil }
+    func prepareEditNote(_ doc: LiquidDoc) { noteBeingEdited = doc }
+
+    /// Writes a composed or edited note into the community folder and
+    /// refreshes the map. A new note mints an address per the format; an
+    /// edit keeps identity, creation, place, and every other field,
+    /// changing only the title, body, kind, and action the editor owns.
+    @discardableResult
+    func saveNote(title: String, bodyText: String, author: String,
+                  kind: String, action: LiquidDoc.Action?) -> Bool {
+        guard let folder = folderURL else {
+            lastError = "Open a community folder first — the note lives there."
+            return false
+        }
+        let trimmedAuthor = author.trimmingCharacters(in: .whitespaces)
+        if !trimmedAuthor.isEmpty { authorName = trimmedAuthor }
+        let name = trimmedAuthor.isEmpty ? "Unknown" : trimmedAuthor
+        let trimmedTitle = title.trimmingCharacters(in: .whitespaces)
+        let finalTitle = trimmedTitle.isEmpty ? "Untitled" : trimmedTitle
+        let body = LiquidDoc.parseBody(from: bodyText)
+        let links = LiquidDoc.detectedLinks(in: body)
+
+        var doc: LiquidDoc
+        if let original = noteBeingEdited {
+            doc = original
+            doc.title = finalTitle
+            doc.body = body
+            doc.links = links
+            doc.documentType = kind
+            doc.action = action?.rawValue
+        } else {
+            let created = Date.now
+            let id = LiquidAddress.makeID(author: name, created: created) { candidate in
+                self.scannedDocs.contains { $0.id == candidate }
+                    || FileManager.default.fileExists(atPath:
+                        folder.appendingPathComponent(candidate)
+                            .appendingPathExtension(LiquidDoc.fileExtension).path)
+            }
+            doc = LiquidDoc(format: LiquidDoc.knownFormat, id: id,
+                            title: finalTitle, author: name, created: created,
+                            body: body, links: links, wraps: nil,
+                            action: action?.rawValue, documentType: kind,
+                            fileURL: folder.appendingPathComponent(id)
+                                .appendingPathExtension(LiquidDoc.fileExtension))
+        }
+
+        do {
+            let accessing = folder.startAccessingSecurityScopedResource()
+            defer { if accessing { folder.stopAccessingSecurityScopedResource() } }
+            try doc.jsonData().write(to: doc.fileURL, options: .atomic)
+        } catch {
+            lastError = "Could not save the note: \(error.localizedDescription)"
+            return false
+        }
+        noteBeingEdited = nil
+        rescanFolder()
+        return true
+    }
+
+    // MARK: - Reader library
+
+    /// Points Knowledge Space at the Reader library folder and remembers
+    /// it by bookmark; its security scope stays open for the session so
+    /// the files inside stay readable.
+    func chooseReaderLibrary(url: URL) {
+        if let previous = accessedReaderFolder {
+            previous.stopAccessingSecurityScopedResource()
+            accessedReaderFolder = nil
+        }
+        if url.startAccessingSecurityScopedResource() {
+            accessedReaderFolder = url
+        }
+        readerLibraryURL = url
+        if let bookmark = try? url.bookmarkData() {
+            UserDefaults.standard.set(bookmark, forKey: Self.readerFolderBookmarkKey)
+        }
+    }
+
+    /// Reopens the Reader library folder from its bookmark, once per
+    /// session, reclaiming its security scope.
+    func restoreReaderLibrary() {
+        guard readerLibraryURL == nil,
+              let bookmark = UserDefaults.standard.data(forKey: Self.readerFolderBookmarkKey)
+        else { return }
+        var stale = false
+        if let url = try? URL(resolvingBookmarkData: bookmark, bookmarkDataIsStale: &stale) {
+            if url.startAccessingSecurityScopedResource() { accessedReaderFolder = url }
+            readerLibraryURL = url
+        }
+    }
+
     /// Whether the last session was already brought back, so the Library
     /// window reappearing later doesn't reload the map underneath.
     private var hasRestoredSession = false
@@ -457,6 +793,7 @@ final class AuthorMapState {
     func reopenLastDocument() {
         guard !hasRestoredSession else { return }
         hasRestoredSession = true
+        restoreReaderLibrary()
         if let bookmark = UserDefaults.standard.data(forKey: Self.folderBookmarkKey) {
             var stale = false
             if let url = try? URL(resolvingBookmarkData: bookmark, bookmarkDataIsStale: &stale) {

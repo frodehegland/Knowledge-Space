@@ -69,6 +69,17 @@ struct KnowledgeSpaceApp: App {
             WindowPlacement(.utilityPanel)
         }
 
+        // Writing a note in space: opened by the left-arm menu's New Note
+        // or a card's Edit, it writes the note into the community folder.
+        Window("Note", id: "MapNoteEditor") {
+            MapNoteEditorView()
+                .environment(mapState)
+        }
+        .windowResizability(.contentSize)
+        .defaultWindowPlacement { _, _ in
+            WindowPlacement(.utilityPanel)
+        }
+
         // The Map itself: cards free in the room, nothing framing them.
         ImmersiveSpace(id: "MapSpace") {
             AuthorMapSpaceView()

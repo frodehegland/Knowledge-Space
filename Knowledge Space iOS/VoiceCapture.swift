@@ -49,7 +49,12 @@ final class SpeechRecorder {
     /// Text already in the transcript when recording (re)starts —
     /// including the user's hand corrections — which a new dictation
     /// pass appends to rather than replaces.
-    private var baseText = ""
+    private var committedText = ""
+    /// The longest transcription seen for the current recognition task.
+    /// The recognizer can revise its guess downward at the end of a
+    /// segment — sometimes to almost nothing — so committing the longest
+    /// seen, not the last, keeps a finished segment from being wiped.
+    private var bestSegment = ""
 
     /// Identifies the live recognition task, so callbacks from a task
     /// that was already replaced by a restart are ignored.
@@ -108,9 +113,11 @@ final class SpeechRecorder {
         guard state != .recording else { return }
         resumeAfterInterruption = false
 
-        let existing = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
-        baseText = existing.isEmpty ? "" : existing + " "
-        transcript = baseText
+        // Whatever is on screen now — earlier segments plus any hand
+        // corrections — becomes the immutable base this pass appends to.
+        committedText = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
+        bestSegment = ""
+        transcript = committedText
 
         let session = AVAudioSession.sharedInstance()
         try session.setCategory(.record, mode: .measurement, options: .duckOthers)
@@ -143,7 +150,22 @@ final class SpeechRecorder {
                 guard let self, generation == self.taskGeneration,
                       self.state == .recording else { return }
                 if let text {
-                    self.transcript = self.baseText + text
+                    // The recognizer revises its running transcription
+                    // downward mid-task — and after ~15–20s often resets its
+                    // hypothesis to a short string. A big drop from the
+                    // longest we have seen is that reset: bank the longest as
+                    // a committed segment and start a fresh one, so nothing is
+                    // lost and the newest words still appear.
+                    if self.bestSegment.count > 40,
+                       text.count < self.bestSegment.count / 2 {
+                        self.commitSegment()
+                    }
+                    if text.count > self.bestSegment.count { self.bestSegment = text }
+                    // Show the longest seen, never the latest — displaying the
+                    // latest is what made text vanish while still recording.
+                    self.transcript = self.committedText.isEmpty
+                        ? self.bestSegment
+                        : self.committedText + " " + self.bestSegment
                     self.rapidFailures = 0
                 }
                 // The recognizer finishing on its own — a final result, the
@@ -171,8 +193,22 @@ final class SpeechRecorder {
 
     func stop() {
         guard state == .recording else { return }
+        commitSegment()
         tearDown()
         state = .idle
+    }
+
+    /// Folds the current recognition segment into the finalised text,
+    /// keeping the longest version seen rather than the recognizer's
+    /// possibly shortened last guess — so recycling the task or stopping
+    /// never loses a completed segment.
+    private func commitSegment() {
+        let segment = bestSegment.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !segment.isEmpty {
+            committedText = committedText.isEmpty ? segment : committedText + " " + segment
+        }
+        transcript = committedText
+        bestSegment = ""
     }
 
     /// Stops the engine and the task without deciding what comes next.
@@ -189,15 +225,18 @@ final class SpeechRecorder {
     }
 
     /// The recognition task ended while the user is still recording.
-    /// Genuine failures die young and repeatedly — give up after three
-    /// in a row; anything else restarts, the words kept through baseText.
+    /// The finished segment is committed first, so recycling the task
+    /// keeps every word. Genuine failures die young and repeatedly —
+    /// give up after several in a row; anything else restarts.
     private func recognitionEnded() {
         if Date().timeIntervalSince(taskStartedAt) < 1 {
             rapidFailures += 1
         } else {
             rapidFailures = 0
         }
-        guard rapidFailures < 3 else {
+        // Save what was said before doing anything else.
+        commitSegment()
+        guard rapidFailures < 6 else {
             rapidFailures = 0
             stop()
             return

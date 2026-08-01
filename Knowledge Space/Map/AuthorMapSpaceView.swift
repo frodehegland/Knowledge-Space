@@ -20,7 +20,10 @@ import RealityKit
 struct AuthorMapSpaceView: View {
     @Environment(AuthorMapState.self) private var state
     @Environment(\.openWindow) private var openWindow
-    @Environment(\.dismissWindow) private var dismissWindow
+
+    /// The forearm menus — the way into the library and settings, riding
+    /// the wrists via hand tracking.
+    @State private var armMenu = MapArmMenu()
 
     /// Drag anchors for every card the current gesture is moving.
     @State private var dragStarts: [String: NodePosition] = [:]
@@ -53,12 +56,26 @@ struct AuthorMapSpaceView: View {
             root.position = Self.anchor
             content.add(root)
             layout(root: root, attachments: attachments)
-            placeBangles(content: content, attachments: attachments)
+
+            // The forearm menus live under their own root, so the map's
+            // per-frame sweep never touches the wrist anchors. Hand
+            // tracking starts, chips are registered, and a scene-update
+            // subscription re-lays them each frame as the hands move.
+            let armRoot = Entity()
+            armRoot.name = "ArmRoot"
+            content.add(armRoot)
+            armMenu.configure(armSpecs)
+            armMenu.start(in: armRoot)
+            for id in armMenu.attachmentIDs {
+                armMenu.register(attachments.entity(for: id), id: id)
+            }
+            armMenu.updateSubscription = content.subscribe(to: SceneEvents.Update.self) { [armMenu] _ in
+                MainActor.assumeIsolated { armMenu.layout() }
+            }
         } update: { content, attachments in
             if let root = content.entities.first(where: { $0.name == Self.rootName }) {
                 layout(root: root, attachments: attachments)
             }
-            placeBangles(content: content, attachments: attachments)
         } attachments: {
             ForEach(visibleNodes, id: \.identifier) { node in
                 Attachment(id: node.identifier) {
@@ -86,17 +103,24 @@ struct AuthorMapSpaceView: View {
                         AuthorMapNodeCard(node: node,
                                           tag: state.engine.effectiveTag(of: node),
                                           isSelected: state.engine.selection.contains(node.identifier),
-                                          isExpanded: state.expandedNodes.contains(node.identifier))
+                                          isExpanded: state.expandedNodes.contains(node.identifier),
+                                          showsActions: false)
                     }
                 }
             }
-            Attachment(id: Self.leftBangleID) {
-                MapBangle(systemImage: "slider.horizontal.3", action: toggleControls)
-            }
-            Attachment(id: Self.rightBangleID) {
-                MapBangle(systemImage: "gearshape", action: toggleSettings)
+            // The forearm chips: one glass panel per command.
+            ForEach(armSpecs) { spec in
+                Attachment(id: spec.id) { ArmChip(text: spec.title) }
             }
         }
+        // A pinch on a forearm chip runs its command. Simultaneous so it
+        // never steals a tap from a node card's own gesture; it only acts
+        // on the chip entities, which carry an input target.
+        .simultaneousGesture(
+            SpatialTapGesture()
+                .targetedToAnyEntity()
+                .onEnded { armMenu.handleTap($0.entity) }
+        )
         .onAppear {
             state.pointsPerMeter = meter
             state.isMapSpaceOpen = true
@@ -110,6 +134,32 @@ struct AuthorMapSpaceView: View {
         .onChange(of: meter) {
             state.pointsPerMeter = meter
         }
+    }
+
+    // MARK: - Forearm menu
+
+    /// The chips the forearm menus carry: the left arm the way into the
+    /// library, the right arm Introduction & Settings.
+    private var armSpecs: [ArmChipSpec] {
+        var specs: [ArmChipSpec] = [
+            ArmChipSpec(id: "arm.newNote", title: "New Note", chirality: .left) {
+                state.prepareNewNote()
+                openWindow(id: "MapNoteEditor")
+            }
+        ]
+        for category in MapLibraryCategory.allCases {
+            specs.append(ArmChipSpec(id: "arm.cat.\(category.rawValue)",
+                                     title: category.title, chirality: .left) {
+                state.showCategory(category)
+            })
+        }
+        specs.append(ArmChipSpec(id: "arm.wholeFolder", title: "Whole Folder", chirality: .left) {
+            state.showFolderMap()
+        })
+        specs.append(ArmChipSpec(id: "arm.settings", title: "Intro & Settings", chirality: .right) {
+            openWindow(id: "MapSettings")
+        })
+        return specs
     }
 
     // MARK: - Nodes
@@ -197,51 +247,6 @@ struct AuthorMapSpaceView: View {
 
         for child in Array(root.children) where !kept.contains(ObjectIdentifier(child)) {
             child.removeFromParent()
-        }
-    }
-
-    // MARK: - Bangles
-
-    private static let leftBangleID = "bangle.left"
-    private static let rightBangleID = "bangle.right"
-
-    /// One bangle on the back of each wrist, worn like a watch face:
-    /// left toggles the toolbar, right toggles the settings panel.
-    private func placeBangles(content: RealityViewContent, attachments: RealityViewAttachments) {
-        let bangles: [(String, AnchoringComponent.Target.Chirality)] = [
-            (Self.leftBangleID, .left),
-            (Self.rightBangleID, .right)
-        ]
-        for (id, chirality) in bangles {
-            guard content.entities.first(where: { $0.name == "anchor:" + id }) == nil,
-                  let bangle = attachments.entity(for: id) else { continue }
-            let anchor = AnchorEntity(.hand(chirality, location: .wrist))
-            anchor.name = "anchor:" + id
-            // The wrist anchor's y points out of the back of the hand;
-            // the attachment faces +z, so lay it onto the wrist.
-            bangle.orientation = simd_quatf(angle: -.pi / 2, axis: SIMD3(1, 0, 0))
-            bangle.position = SIMD3(0, 0.02, 0)
-            anchor.addChild(bangle)
-            content.add(anchor)
-        }
-    }
-
-    private func toggleControls() {
-        if state.isControlsWindowOpen {
-            // The one sanctioned way to put the toolbar away; without
-            // this flag it reopens itself.
-            state.controlsToggledOff = true
-            dismissWindow(id: "MapControls")
-        } else {
-            openWindow(id: "MapControls")
-        }
-    }
-
-    private func toggleSettings() {
-        if state.isSettingsWindowOpen {
-            dismissWindow(id: "MapSettings")
-        } else {
-            openWindow(id: "MapSettings")
         }
     }
 
@@ -352,25 +357,6 @@ struct AuthorMapSpaceView: View {
     }
 }
 
-// MARK: - Bangle
-
-/// A bangle: a small round control worn on the wrist.
-struct MapBangle: View {
-    let systemImage: String
-    let action: () -> Void
-
-    var body: some View {
-        Button(action: action) {
-            Image(systemName: systemImage)
-                .font(.system(size: 17))
-                .frame(width: 44, height: 44)
-        }
-        .buttonStyle(.plain)
-        .glassBackgroundEffect(in: .circle)
-        .hoverEffect()
-    }
-}
-
 // MARK: - Node card
 
 struct AuthorMapNodeCard: View {
@@ -378,6 +364,12 @@ struct AuthorMapNodeCard: View {
     let tag: String
     let isSelected: Bool
     let isExpanded: Bool
+    /// The reversed twin (billboarding off) shows the same face but must
+    /// not carry live commands — only the front card opens anything.
+    var showsActions: Bool = true
+
+    @Environment(AuthorMapState.self) private var state
+    @Environment(\.openWindow) private var openWindow
 
     // Appearance settings (the Settings window's Appearance tab).
     @AppStorage("nodeBorderVisible") private var nodeBorderVisible = true
@@ -423,6 +415,13 @@ struct AuthorMapNodeCard: View {
                     .multilineTextAlignment(.leading)
                     .padding(.top, 4)
             }
+            // The card's commands: opening a linked document or an
+            // external file is done from *inside* the node, never by
+            // tapping it. Shown only when the card is open, and only
+            // when the node actually points somewhere.
+            if isExpanded && showsActions {
+                openCommands
+            }
         }
         .multilineTextAlignment(.center)
         .padding(.horizontal, 14)
@@ -445,7 +444,58 @@ struct AuthorMapNodeCard: View {
         )
         .contentShape(RoundedRectangle(cornerRadius: 14))
         .contentShape(.hoverEffect, RoundedRectangle(cornerRadius: 14))
+        // A small blue dot in the lower-left marks a node that points at an
+        // external document, so the link is visible without opening the
+        // card. Front face only — the reversed twin would mirror it.
+        .overlay(alignment: .bottomLeading) {
+            if showsActions && state.externalFileURL(for: node) != nil {
+                Circle()
+                    .fill(Color.blue)
+                    .frame(width: 8, height: 8)
+                    .padding(6)
+            }
+        }
         .opacity(node.isHidden ? 0.4 : 1)
+    }
+
+    /// The Open / Open-in-Reader commands, when the node points anywhere.
+    /// A native link opens in place (pushing onto the back-stack); a
+    /// sidecar's external file is handed to Reader.
+    @ViewBuilder private var openCommands: some View {
+        let externalFile = state.externalFileURL(for: node)
+        let nativeTitle = state.linkedDocumentTitle(for: node)
+        let editableNote = state.editableNote(for: node)
+        if externalFile != nil || nativeTitle != nil || editableNote != nil {
+            VStack(spacing: 6) {
+                if nativeTitle != nil {
+                    Button {
+                        state.openLinkedDocument(node)
+                    } label: {
+                        Label("Open", systemImage: "arrow.down.forward.square")
+                    }
+                }
+                if externalFile != nil {
+                    Button {
+                        state.requestExternalOpen(node)
+                    } label: {
+                        Label("Open in Reader", systemImage: "arrow.up.forward.app")
+                    }
+                }
+                // A note, journal, or thought can be edited in place: its
+                // title, body, kind, and action standing.
+                if let editableNote {
+                    Button {
+                        state.prepareEditNote(editableNote)
+                        openWindow(id: "MapNoteEditor")
+                    } label: {
+                        Label("Edit", systemImage: "pencil")
+                    }
+                }
+            }
+            .font(.system(size: 12, weight: .medium))
+            .buttonStyle(.bordered)
+            .padding(.top, 8)
+        }
     }
 
     private var tagColor: Color {

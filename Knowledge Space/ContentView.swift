@@ -686,6 +686,9 @@ struct ContentView: View {
     /// annotations. The document list asks too, for the in-list layout.
     static func isWritable(_ doc: LiquidDoc) -> Bool {
         doc.documentType == LiquidDoc.DocumentType.note.rawValue
+            // A thought is a note filed under Thoughts — its own writing
+            // page, like the note it began as.
+            || doc.documentType == LiquidDoc.DocumentType.thought.rawValue
             || doc.documentType == LiquidDoc.DocumentType.letter.rawValue
             || doc.documentType == LiquidDoc.DocumentType.quote.rawValue
             || doc.documentType == LiquidDoc.DocumentType.annotation.rawValue

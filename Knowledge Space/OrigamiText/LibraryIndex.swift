@@ -154,6 +154,22 @@ final class LibraryIndex {
     }
 }
 
+/// Folder conventions shared across the apps' library scans.
+nonisolated enum KnowledgeSpaceFolders {
+    /// The subfolder external `source` sidecars (one JSON per external PDF)
+    /// are kept in, so the routine library scan — and its iCloud download
+    /// requests — do not have to walk the many hundreds of them. The scan
+    /// does not descend into it; files inside are still reachable on demand
+    /// by name (the Reader handoff) or by an explicit, future browse.
+    static let externalSubfolderName = "PDF"
+
+    /// Whether the enumerator should skip descending into this directory,
+    /// matched by folder name, case-insensitively.
+    static func isExcludedScanDirectory(_ url: URL) -> Bool {
+        url.lastPathComponent.caseInsensitiveCompare(externalSubfolderName) == .orderedSame
+    }
+}
+
 nonisolated enum LibraryScanner {
     struct Result: Sendable {
         var byID: [String: IndexEntry] = [:]
@@ -180,8 +196,12 @@ nonisolated enum LibraryScanner {
         guard let enumerator = FileManager.default.enumerator(
             at: folder, includingPropertiesForKeys: nil,
             options: [.skipsPackageDescendants]) else { return }
-        for case let url as URL in enumerator
-        where url.pathExtension.lowercased() == "icloud" {
+        for case let url as URL in enumerator {
+            if KnowledgeSpaceFolders.isExcludedScanDirectory(url) {
+                enumerator.skipDescendants()
+                continue
+            }
+            guard url.pathExtension.lowercased() == "icloud" else { continue }
             // ".<name>.icloud" → "<name>", the item's logical URL.
             var name = url.lastPathComponent
             if name.hasPrefix(".") { name.removeFirst() }
@@ -202,8 +222,12 @@ nonisolated enum LibraryScanner {
             at: folder, includingPropertiesForKeys: nil,
             options: [.skipsPackageDescendants]) else { return 0 }
         var count = 0
-        for case let url as URL in enumerator
-        where url.pathExtension.lowercased() == "icloud" {
+        for case let url as URL in enumerator {
+            if KnowledgeSpaceFolders.isExcludedScanDirectory(url) {
+                enumerator.skipDescendants()
+                continue
+            }
+            guard url.pathExtension.lowercased() == "icloud" else { continue }
             var name = url.lastPathComponent
             if name.hasPrefix(".") { name.removeFirst() }
             name = String(name.dropLast(".icloud".count))
@@ -228,6 +252,10 @@ nonisolated enum LibraryScanner {
         var duplicateIDs: Set<String> = []
 
         for case let url as URL in enumerator {
+            if KnowledgeSpaceFolders.isExcludedScanDirectory(url) {
+                enumerator.skipDescendants()
+                continue
+            }
             guard LiquidDoc.isDocumentFile(url) else { continue }
             do {
                 let data = try Data(contentsOf: url)

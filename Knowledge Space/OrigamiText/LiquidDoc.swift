@@ -153,7 +153,12 @@ nonisolated struct LiquidDoc: Identifiable, Hashable, Sendable {
         // An AI conversation captured from the web — a transcript whose
         // other party is a model, carrying provenance so a generated claim
         // stays marked as generated wherever its words travel.
-        case letter, note, book, rfc, personal, project, meeting, transcript, extract, article, external, source, quote, annotation, digest, journal, inspiration
+        // A thought is a note the author filed under Thoughts: the same
+        // quick own-hand kind as a note, but with the filing raised into
+        // the document so the standing travels between devices (the Map's
+        // Thoughts view reads it). Set on macOS when a note is filed
+        // there, cleared back to note when it is filed elsewhere.
+        case letter, note, thought, book, rfc, personal, project, meeting, transcript, extract, article, external, source, quote, annotation, digest, journal, inspiration
         // Explicit lowercase raw value: `decode` lowercases every
         // documentType token, so a camelCase raw value here would never
         // match a decoded document. This is the only multi-word kind, so
@@ -164,6 +169,7 @@ nonisolated struct LiquidDoc: Identifiable, Hashable, Sendable {
             switch self {
             case .letter: "Letter"
             case .note: "Note"
+            case .thought: "Thought"
             case .book: "Book"
             case .rfc: "RFC"
             case .personal: "Personal"
