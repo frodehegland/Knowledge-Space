@@ -9,6 +9,7 @@ import FoundationModels
 /// (click to edit).
 struct NoteOptionsColumn: View {
     @Environment(AppState.self) private var state
+    @Environment(\.openURL) private var openURL
     let doc: LiquidDoc
     /// Settings ▸ Appearance can lay the controls under the note
     /// instead: the same sections, standing side by side in a bar.
@@ -34,6 +35,9 @@ struct NoteOptionsColumn: View {
                 fileSection
                 analysisSection
                 flowSection
+                if isInspiration {
+                    attributionSection
+                }
                 if doc.body != nil {
                     locationRow
                 }
@@ -64,6 +68,9 @@ struct NoteOptionsColumn: View {
                 VStack(alignment: .leading, spacing: 20) {
                     analysisSection
                     flowSection
+                    if isInspiration {
+                        attributionSection
+                    }
                     if doc.body != nil {
                         locationRow
                     }
@@ -329,6 +336,44 @@ struct NoteOptionsColumn: View {
             .buttonStyle(GreyColumnButtonStyle())
             .help("The note's Visual-Meta under its words — the appendix the file carries, or the block its own fields derive.")
         }
+    }
+
+    // MARK: Attribution
+
+    /// An inspiration is a quote caught in the wild — its author still
+    /// unknown. This asks the web who said it.
+    private var isInspiration: Bool {
+        doc.documentType == LiquidDoc.DocumentType.inspiration.rawValue
+    }
+
+    /// The quote's own words, trimmed — what the search is built from.
+    private var quoteText: String {
+        doc.bodyEditingText.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private var attributionSection: some View {
+        section("Source") {
+            Button {
+                searchForAttribution()
+            } label: {
+                Text("Who Said This?")
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .buttonStyle(GreyColumnButtonStyle())
+            .disabled(quoteText.isEmpty)
+            .help("Search the web for the quote to find who it is attributed to")
+        }
+    }
+
+    /// Opens a web search for the quote — capped so the query stays
+    /// sane — phrased to turn up its attribution.
+    private func searchForAttribution() {
+        let snippet = String(quoteText.prefix(300))
+        guard !snippet.isEmpty else { return }
+        let query = "who said the quote \"\(snippet)\""
+        guard let encoded = query.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed),
+              let url = URL(string: "https://www.google.com/search?q=\(encoded)") else { return }
+        openURL(url)
     }
 
     /// Quiet text, the location row's style — clicking runs the

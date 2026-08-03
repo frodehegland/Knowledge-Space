@@ -7,16 +7,25 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		5F62B05C3013675400EEF496 /* kspgal.icon in Resources */ = {isa = PBXBuildFile; fileRef = 5F62B05B3013675400EEF496 /* kspgal.icon */; };
 		5F62B05D3013675400EEF496 /* kspgal.icon in Resources */ = {isa = PBXBuildFile; fileRef = 5F62B05B3013675400EEF496 /* kspgal.icon */; };
 		5F79299F301E4B73003100EF /* kspgalmac.icon in Resources */ = {isa = PBXBuildFile; fileRef = 5F79299E301E4B73003100EF /* kspgalmac.icon */; };
 		5F7929A0301E4B73003100EF /* kspgalmac.icon in Resources */ = {isa = PBXBuildFile; fileRef = 5F79299E301E4B73003100EF /* kspgalmac.icon */; };
 		5F7929A2301E4B7C003100EF /* kspgalvis.icon in Resources */ = {isa = PBXBuildFile; fileRef = 5F7929A1301E4B7C003100EF /* kspgalvis.icon */; };
+		5F792CC2301FDC10003100EF /* WidgetKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 5F792CC1301FDC10003100EF /* WidgetKit.framework */; };
+		5F792CC4301FDC10003100EF /* SwiftUI.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 5F792CC3301FDC10003100EF /* SwiftUI.framework */; };
+		5F792CD1301FDC10003100EF /* Augmented LibraryExtension.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 5F792CBF301FDC10003100EF /* Augmented LibraryExtension.appex */; platformFilters = (xros, ); settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		5FAFC518301A3F1000FDBED8 /* Knowledge Space EXT.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 5FAFC500301A3F1000FDBED8 /* Knowledge Space EXT.appex */; platformFilters = (macos, ); settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		5FE0761E30153AD40039E5B8 /* kspgal-vision.icon in Resources */ = {isa = PBXBuildFile; fileRef = 5FE0761D30153AD40039E5B8 /* kspgal-vision.icon */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
+		5F792CCF301FDC10003100EF /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 000000000000000000000000 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 5F792CBE301FDC10003100EF;
+			remoteInfo = "Augmented LibraryExtension";
+		};
 		5FAFC516301A3F1000FDBED8 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
 			containerPortal = 000000000000000000000000 /* Project object */;
@@ -32,6 +41,7 @@
 			dstPath = "";
 			dstSubfolder = PlugIns;
 			files = (
+				5F792CD1301FDC10003100EF /* Augmented LibraryExtension.appex in Embed Foundation Extensions */,
 				5FAFC518301A3F1000FDBED8 /* Knowledge Space EXT.appex in Embed Foundation Extensions */,
 			);
 			name = "Embed Foundation Extensions";
@@ -44,6 +54,9 @@
 		5F62B05B3013675400EEF496 /* kspgal.icon */ = {isa = PBXFileReference; lastKnownFileType = folder.iconcomposer.icon; path = kspgal.icon; sourceTree = "<group>"; };
 		5F79299E301E4B73003100EF /* kspgalmac.icon */ = {isa = PBXFileReference; lastKnownFileType = folder.iconcomposer.icon; path = kspgalmac.icon; sourceTree = "<group>"; };
 		5F7929A1301E4B7C003100EF /* kspgalvis.icon */ = {isa = PBXFileReference; lastKnownFileType = folder.iconcomposer.icon; path = kspgalvis.icon; sourceTree = "<group>"; };
+		5F792CBF301FDC10003100EF /* Augmented LibraryExtension.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = "Augmented LibraryExtension.appex"; sourceTree = BUILT_PRODUCTS_DIR; };
+		5F792CC1301FDC10003100EF /* WidgetKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = WidgetKit.framework; path = System/Library/Frameworks/WidgetKit.framework; sourceTree = SDKROOT; };
+		5F792CC3301FDC10003100EF /* SwiftUI.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = SwiftUI.framework; path = System/Library/Frameworks/SwiftUI.framework; sourceTree = SDKROOT; };
 		5FAFC500301A3F1000FDBED8 /* Knowledge Space EXT.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = "Knowledge Space EXT.appex"; sourceTree = BUILT_PRODUCTS_DIR; };
 		5FE0761D30153AD40039E5B8 /* kspgal-vision.icon */ = {isa = PBXFileReference; lastKnownFileType = folder.iconcomposer.icon; path = "kspgal-vision.icon"; sourceTree = "<group>"; };
 /* End PBXFileReference section */
@@ -61,6 +74,20 @@
 				OrigamiText/VisualMeta.swift,
 			);
 			target = 5F1064A2300FE10F002C1FE1 /* Knowledge Space iOS */;
+		};
+		5F792CD5301FDC10003100EF /* Exceptions for "Augmented Library" folder in "Augmented LibraryExtension" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+			);
+			target = 5F792CBE301FDC10003100EF /* Augmented LibraryExtension */;
+		};
+		5F792CDF301FF0D2003100EF /* Exceptions for "Knowledge Space" folder in "Augmented LibraryExtension" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				WidgetShared.swift,
+			);
+			target = 5F792CBE301FDC10003100EF /* Augmented LibraryExtension */;
 		};
 		5FAFC51C301A3F1000FDBED8 /* Exceptions for "Knowledge Space EXT" folder in "Knowledge Space EXT" target */ = {
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
@@ -80,6 +107,7 @@
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
 				"Knowledge-Space-iOS-Info.plist",
+				kspgalmac.icon,
 			);
 			target = 5F1064A2300FE10F002C1FE1 /* Knowledge Space iOS */;
 		};
@@ -91,6 +119,7 @@
 			exceptions = (
 				5FAFDCB530149FD100768784 /* Exceptions for "Knowledge Space" folder in "Knowledge Space" target */,
 				5F1064B4300FE151002C1FE1 /* Exceptions for "Knowledge Space" folder in "Knowledge Space iOS" target */,
+				5F792CDF301FF0D2003100EF /* Exceptions for "Knowledge Space" folder in "Augmented LibraryExtension" target */,
 			);
 			path = "Knowledge Space";
 			sourceTree = "<group>";
@@ -101,6 +130,14 @@
 				5FC011CD3012B0EB00DF2EBD /* Exceptions for "Knowledge Space iOS" folder in "Knowledge Space iOS" target */,
 			);
 			path = "Knowledge Space iOS";
+			sourceTree = "<group>";
+		};
+		5F792CC5301FDC10003100EF /* Augmented Library */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				5F792CD5301FDC10003100EF /* Exceptions for "Augmented Library" folder in "Augmented LibraryExtension" target */,
+			);
+			path = "Augmented Library";
 			sourceTree = "<group>";
 		};
 		5FAFC501301A3F1000FDBED8 /* Knowledge Space EXT */ = {
@@ -128,6 +165,13 @@
 			files = (
 			);
 		};
+		5F792CBC301FDC10003100EF /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			files = (
+				5F792CC4301FDC10003100EF /* SwiftUI.framework in Frameworks */,
+				5F792CC2301FDC10003100EF /* WidgetKit.framework in Frameworks */,
+			);
+		};
 		5FAFC4FD301A3F1000FDBED8 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			files = (
@@ -146,6 +190,8 @@
 				5FAFC501301A3F1000FDBED8 /* Knowledge Space EXT */,
 				5F79299E301E4B73003100EF /* kspgalmac.icon */,
 				5F7929A1301E4B7C003100EF /* kspgalvis.icon */,
+				5F792CC5301FDC10003100EF /* Augmented Library */,
+				5F792CC0301FDC10003100EF /* Frameworks */,
 				000000000000000000000020 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -156,8 +202,18 @@
 				000000000000000000000120 /* Knowledge Space.app */,
 				5F1064A3300FE10F002C1FE1 /* Knowledge Space iOS.app */,
 				5FAFC500301A3F1000FDBED8 /* Knowledge Space EXT.appex */,
+				5F792CBF301FDC10003100EF /* Augmented LibraryExtension.appex */,
 			);
 			name = Products;
+			sourceTree = "<group>";
+		};
+		5F792CC0301FDC10003100EF /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+				5F792CC1301FDC10003100EF /* WidgetKit.framework */,
+				5F792CC3301FDC10003100EF /* SwiftUI.framework */,
+			);
+			name = Frameworks;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -176,6 +232,7 @@
 			);
 			dependencies = (
 				5FAFC517301A3F1000FDBED8 /* PBXTargetDependency */,
+				5F792CD0301FDC10003100EF /* PBXTargetDependency */,
 			);
 			fileSystemSynchronizedGroups = (
 				000000000000000000000010 /* Knowledge Space */,
@@ -202,6 +259,24 @@
 			productName = "Knowledge Space iOS";
 			productReference = 5F1064A3300FE10F002C1FE1 /* Knowledge Space iOS.app */;
 			productType = "com.apple.product-type.application";
+		};
+		5F792CBE301FDC10003100EF /* Augmented LibraryExtension */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 5F792CD2301FDC10003100EF /* Build configuration list for PBXNativeTarget "Augmented LibraryExtension" */;
+			buildPhases = (
+				5F792CBB301FDC10003100EF /* Sources */,
+				5F792CBC301FDC10003100EF /* Frameworks */,
+				5F792CBD301FDC10003100EF /* Resources */,
+			);
+			buildRules = (
+			);
+			fileSystemSynchronizedGroups = (
+				5F792CC5301FDC10003100EF /* Augmented Library */,
+			);
+			name = "Augmented LibraryExtension";
+			productName = "Augmented LibraryExtension";
+			productReference = 5F792CBF301FDC10003100EF /* Augmented LibraryExtension.appex */;
+			productType = "com.apple.product-type.app-extension";
 		};
 		5FAFC4FF301A3F1000FDBED8 /* Knowledge Space EXT */ = {
 			isa = PBXNativeTarget;
@@ -237,6 +312,9 @@
 					5F1064A2300FE10F002C1FE1 = {
 						CreatedOnToolsVersion = 27.0;
 					};
+					5F792CBE301FDC10003100EF = {
+						CreatedOnToolsVersion = 27.0;
+					};
 					5FAFC4FF301A3F1000FDBED8 = {
 						CreatedOnToolsVersion = 27.0;
 					};
@@ -259,6 +337,7 @@
 				000000000000000100000000 /* Knowledge Space */,
 				5F1064A2300FE10F002C1FE1 /* Knowledge Space iOS */,
 				5FAFC4FF301A3F1000FDBED8 /* Knowledge Space EXT */,
+				5F792CBE301FDC10003100EF /* Augmented LibraryExtension */,
 			);
 		};
 /* End PBXProject section */
@@ -277,7 +356,11 @@
 			isa = PBXResourcesBuildPhase;
 			files = (
 				5F79299F301E4B73003100EF /* kspgalmac.icon in Resources */,
-				5F62B05C3013675400EEF496 /* kspgal.icon in Resources */,
+			);
+		};
+		5F792CBD301FDC10003100EF /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			files = (
 			);
 		};
 		5FAFC4FE301A3F1000FDBED8 /* Resources */ = {
@@ -298,6 +381,11 @@
 			files = (
 			);
 		};
+		5F792CBB301FDC10003100EF /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			files = (
+			);
+		};
 		5FAFC4FC301A3F1000FDBED8 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			files = (
@@ -306,6 +394,14 @@
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
+		5F792CD0301FDC10003100EF /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			platformFilters = (
+				xros,
+			);
+			target = 5F792CBE301FDC10003100EF /* Augmented LibraryExtension */;
+			targetProxy = 5F792CCF301FDC10003100EF /* PBXContainerItemProxy */;
+		};
 		5FAFC517301A3F1000FDBED8 /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
 			platformFilters = (
@@ -509,7 +605,7 @@
 				RUNTIME_EXCEPTION_DISABLE_LIBRARY_VALIDATION = NO;
 				SDKROOT = auto;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
-				SUPPORTED_PLATFORMS = "macosx xros xrsimulator";
+				SUPPORTED_PLATFORMS = macosx;
 				SUPPORTS_MACCATALYST = NO;
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
 				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
@@ -581,7 +677,7 @@
 				RUNTIME_EXCEPTION_DISABLE_LIBRARY_VALIDATION = NO;
 				SDKROOT = auto;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
-				SUPPORTED_PLATFORMS = "macosx xros xrsimulator";
+				SUPPORTED_PLATFORMS = macosx;
 				SUPPORTS_MACCATALYST = NO;
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
 				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
@@ -595,8 +691,8 @@
 		5F1064AB300FE10F002C1FE1 /* Debug configuration for PBXNativeTarget "Knowledge Space iOS" */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
-				ASSETCATALOG_COMPILER_APPICON_NAME = kspgalvis;
-				"ASSETCATALOG_COMPILER_APPICON_NAME[sdk=iphoneos*]" = kspgalvis;
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				"ASSETCATALOG_COMPILER_APPICON_NAME[sdk=iphoneos*]" = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				ASSETCATALOG_COMPILER_INCLUDE_ALL_APPICON_ASSETS = YES;
 				CODE_SIGN_STYLE = Automatic;
@@ -640,8 +736,8 @@
 		5F1064AC300FE10F002C1FE1 /* Release configuration for PBXNativeTarget "Knowledge Space iOS" */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
-				ASSETCATALOG_COMPILER_APPICON_NAME = kspgalvis;
-				"ASSETCATALOG_COMPILER_APPICON_NAME[sdk=iphoneos*]" = kspgalvis;
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				"ASSETCATALOG_COMPILER_APPICON_NAME[sdk=iphoneos*]" = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				ASSETCATALOG_COMPILER_INCLUDE_ALL_APPICON_ASSETS = YES;
 				CODE_SIGN_STYLE = Automatic;
@@ -679,6 +775,71 @@
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
+				VALIDATE_PRODUCT = YES;
+			};
+			name = Release;
+		};
+		5F792CD3301FDC10003100EF /* Debug configuration for PBXNativeTarget "Augmented LibraryExtension" */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				ASSETCATALOG_COMPILER_WIDGET_BACKGROUND_COLOR_NAME = WidgetBackground;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 9Q5N4A727S;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = "Augmented Library/Info.plist";
+				INFOPLIST_KEY_CFBundleDisplayName = "Augmented Library";
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "info.futuretextlab.knowledgespace.Augmented-Library";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = xros;
+				SKIP_INSTALL = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SUPPORTED_PLATFORMS = "xros xrsimulator";
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 7;
+			};
+			name = Debug;
+		};
+		5F792CD4301FDC10003100EF /* Release configuration for PBXNativeTarget "Augmented LibraryExtension" */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				ASSETCATALOG_COMPILER_WIDGET_BACKGROUND_COLOR_NAME = WidgetBackground;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 9Q5N4A727S;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = "Augmented Library/Info.plist";
+				INFOPLIST_KEY_CFBundleDisplayName = "Augmented Library";
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "info.futuretextlab.knowledgespace.Augmented-Library";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = xros;
+				SKIP_INSTALL = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SUPPORTED_PLATFORMS = "xros xrsimulator";
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 7;
 				VALIDATE_PRODUCT = YES;
 			};
 			name = Release;
@@ -783,6 +944,14 @@
 			buildConfigurations = (
 				5F1064AB300FE10F002C1FE1 /* Debug configuration for PBXNativeTarget "Knowledge Space iOS" */,
 				5F1064AC300FE10F002C1FE1 /* Release configuration for PBXNativeTarget "Knowledge Space iOS" */,
+			);
+			defaultConfigurationName = Release;
+		};
+		5F792CD2301FDC10003100EF /* Build configuration list for PBXNativeTarget "Augmented LibraryExtension" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				5F792CD3301FDC10003100EF /* Debug configuration for PBXNativeTarget "Augmented LibraryExtension" */,
+				5F792CD4301FDC10003100EF /* Release configuration for PBXNativeTarget "Augmented LibraryExtension" */,
 			);
 			defaultConfigurationName = Release;
 		};

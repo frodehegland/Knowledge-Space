@@ -52,7 +52,21 @@ private struct AppearanceSettingsView: View {
             } header: {
                 Text("Appearance")
             } footer: {
-                Text("Gentle is the design's quiet greys — soft columns, grey buttons, an off-white page. High Contrast is black text on white throughout, the buttons outlined.")
+                Text("Gentle is the design's quiet greys — soft columns, grey buttons, an off-white page. Darker keeps the same design a shade deeper throughout. Warm and Cool are tinted — a soft ivory or a cool slate — and bring their own dark mode, following the system between a light and a dark shade. High Contrast is black text on white throughout, the buttons outlined.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Section {
+                Picker("Sidebar", selection: $state.sidebarLayout) {
+                    ForEach(SidebarLayout.allCases) { layout in
+                        Text(layout.label).tag(layout)
+                    }
+                }
+                .pickerStyle(.inline)
+            } header: {
+                Text("Sidebar")
+            } footer: {
+                Text("Small is the pared-down column — the head, Actions, and Views. Full carries the whole catalog: Library, Digest, Filed, and Transcripts and Draft Letters at the top.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -87,10 +101,11 @@ private struct AppearanceSettingsView: View {
                 Stepper(value: $state.listTextSize, in: 10...20, step: 1) {
                     Text("List text size: \(Int(state.listTextSize)) pt")
                 }
+                Toggle("Dim the list while writing", isOn: $state.dimsListWhileEditing)
             } header: {
                 Text("Notes List")
             } footer: {
-                Text("The size of the list's rows in the In-the-list layout — the title and the body's first words, set in New York, the body's own type.")
+                Text("The size of the list's rows in the In-the-list layout — the title and the body's first words, set in New York, the body's own type. Dimming fades the other rows to grey while a note is being written, so the open one stands out — off by default.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -554,6 +569,18 @@ private struct LibrarySettingsView: View {
                     .disabled(state.digestSourceURL == nil || state.digestScanRunning)
             } footer: {
                 Text("Any folder of your own documents — Documents itself, or narrower. Each readable file (PDF, text, Markdown, RTF, HTML, Word) becomes a digest note: a summary by the on-device model where it can read the words, with Open Original always a click away. Digests live in the community folder's Digest folder and appear only in the sidebar's Digest section. The originals are read, never moved or changed; nothing leaves the Mac.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Section {
+                Button("Delete All Archived…", role: .destructive) {
+                    state.deleteAllArchived()
+                }
+                .disabled(state.archivedCount == 0)
+            } header: {
+                Text("Archive")
+            } footer: {
+                Text("Filing a note under Archived hides it without removing it. This empties the Archive: all \(state.archivedCount) currently archived move to the Trash — recoverable there, but gone from the shared folder for everyone who syncs it.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

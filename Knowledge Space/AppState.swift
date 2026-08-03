@@ -79,6 +79,12 @@ final class AppState {
     var theme: AppTheme = AppTheme.current {
         didSet { UserDefaults.standard.set(theme.rawValue, forKey: AppTheme.key) }
     }
+    /// How much of the sidebar shows — Small (the pared-down default) or
+    /// Full — chosen in Settings ▸ Appearance; the column rebuilds when
+    /// it changes.
+    var sidebarLayout: SidebarLayout = SidebarLayout.current {
+        didSet { UserDefaults.standard.set(sidebarLayout.rawValue, forKey: SidebarLayout.key) }
+    }
     /// Whether the window currently stands as the two-column "In the
     /// list" arrangement: documents open in the list itself and no
     /// third pane exists. A module's canvas, the People place, and
@@ -99,6 +105,16 @@ final class AppState {
         return stored == 0 ? 14 : stored
     }() {
         didSet { UserDefaults.standard.set(listTextSize, forKey: "listTextSize") }
+    }
+
+    /// Whether the list dims while a note is being written in it — the
+    /// other rows receding to 0.3 so the open note stands out. Off by
+    /// default; chosen in Settings ▸ Appearance.
+    var dimsListWhileEditing: Bool =
+        UserDefaults.standard.bool(forKey: "dimsListWhileEditing") {
+        didSet {
+            UserDefaults.standard.set(dimsListWhileEditing, forKey: "dimsListWhileEditing")
+        }
     }
 
     /// What the Library's articles shelf calls itself — "Articles" or
@@ -447,6 +463,7 @@ final class AppState {
     /// shelf the files never feel.
     static let kindFolders: [String: String] = [
         "Thoughts": LiquidDoc.DocumentType.thought.rawValue,
+        "Inspirations": LiquidDoc.DocumentType.inspiration.rawValue,
         "Journal": LiquidDoc.DocumentType.journal.rawValue,
     ]
 
@@ -587,6 +604,57 @@ final class AppState {
         if selectedDocID == doc.id { selectedDocID = nil }
         index.rescan()
         showNote("“\(doc.title)” moved to the Trash.")
+    }
+
+    /// How many notes are filed under Archived and still on disk —
+    /// what "Delete All Archived…" would move to the Trash.
+    var archivedCount: Int {
+        archivedDocumentIDs.filter { index.allByID[$0] != nil }.count
+    }
+
+    /// Empties the Archive in one go: every note filed under Archived
+    /// moves to the Trash. As destructive as a single delete but many
+    /// at once, so it is asked about with its count; the Trash keeps
+    /// the words. Only the files that trash cleanly leave their filing.
+    func deleteAllArchived() {
+        let ids = archivedDocumentIDs
+        let resolvable = ids.filter { index.allByID[$0] != nil }
+        guard !resolvable.isEmpty else {
+            showNote("Nothing is archived.")
+            return
+        }
+        let alert = NSAlert()
+        let noun = resolvable.count == 1 ? "item" : "items"
+        alert.messageText = "Delete all \(resolvable.count) archived \(noun)?"
+        alert.informativeText = "They move to the Trash and leave the shared folder — for everyone who syncs it. This cannot be undone from within the app."
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "Delete")
+        alert.addButton(withTitle: "Cancel")
+        alert.buttons.first?.hasDestructiveAction = true
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        var trashedIDs: [String] = []
+        var firstError: String?
+        for id in ids {
+            guard let url = index.allByID[id]?.doc.fileURL else { continue }
+            do {
+                try FileManager.default.trashItem(at: url, resultingItemURL: nil)
+                trashedIDs.append(id)
+            } catch {
+                if firstError == nil { firstError = error.localizedDescription }
+            }
+        }
+        for id in trashedIDs { filedFolders.removeValue(forKey: id) }
+        if !trashedIDs.isEmpty { persistFiling() }
+        if let selected = selectedDocID, trashedIDs.contains(selected) {
+            selectedDocID = nil
+        }
+        index.rescan()
+        if let firstError {
+            showNote("Moved \(trashedIDs.count) to the Trash; some could not be deleted: \(firstError)")
+        } else {
+            let done = trashedIDs.count == 1 ? "item" : "items"
+            showNote("Moved \(trashedIDs.count) archived \(done) to the Trash.")
+        }
     }
 
     // MARK: - Renaming files
@@ -840,6 +908,41 @@ final class AppState {
     func isMuted(_ author: String) -> Bool {
         let trimmed = author.trimmingCharacters(in: .whitespaces)
         return mutedAuthors.contains { $0.caseInsensitiveCompare(trimmed) == .orderedSame }
+    }
+
+    /// People the reader raised to the top of the People list — held by
+    /// listing id, this laptop's own choice.
+    var highlightedPeople: Set<String> =
+        Set(UserDefaults.standard.stringArray(forKey: "highlightedPeople") ?? []) {
+        didSet {
+            UserDefaults.standard.set(Array(highlightedPeople), forKey: "highlightedPeople")
+        }
+    }
+
+    /// People held out of the People list without deleting them — the
+    /// record and card stay; the row is simply not shown.
+    var hiddenPeople: Set<String> =
+        Set(UserDefaults.standard.stringArray(forKey: "hiddenPeople") ?? []) {
+        didSet {
+            UserDefaults.standard.set(Array(hiddenPeople), forKey: "hiddenPeople")
+        }
+    }
+
+    func toggleHighlightedPerson(_ id: String) {
+        if highlightedPeople.contains(id) {
+            highlightedPeople.remove(id)
+        } else {
+            highlightedPeople.insert(id)
+        }
+    }
+
+    func setPersonHidden(_ hidden: Bool, _ id: String) {
+        if hidden {
+            hiddenPeople.insert(id)
+            if selectedPersonID == id { selectedPersonID = nil }
+        } else {
+            hiddenPeople.remove(id)
+        }
     }
 
     /// The folder where Reader keeps its PDFs, once granted — remembered

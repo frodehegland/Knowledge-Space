@@ -86,9 +86,65 @@ private nonisolated enum CaptureContract {
 /// shows an author — a note is always its author's own. Letters and the
 /// library's views are deliberately absent; the phone captures, the
 /// larger screens weave.
+/// The app's appearance, chosen from the gear — the same set Knowledge
+/// Space offers on the Mac. Gentle, Darker, and High Contrast are fixed
+/// light; Warm and Cool are tinted and bring their own dark mode,
+/// following the system between a light and a dark shade.
+enum NotesTheme: String, CaseIterable, Identifiable {
+    case gentle, darker, warm, cool, highContrast
+
+    var id: String { rawValue }
+    static let key = "appearanceTheme"
+
+    var label: String {
+        switch self {
+        case .gentle: "Gentle"
+        case .darker: "Darker"
+        case .warm: "Warm"
+        case .cool: "Cool"
+        case .highContrast: "High Contrast"
+        }
+    }
+
+    /// Warm and Cool follow the system (nil); the rest hold a light design.
+    var enforcedScheme: ColorScheme? {
+        switch self {
+        case .warm, .cool: nil
+        default: .light
+        }
+    }
+
+    /// The background the theme paints behind the app. Warm and Cool
+    /// adapt to the system's light or dark appearance.
+    var background: Color {
+        switch self {
+        case .gentle: Color(uiColor: .systemGroupedBackground)
+        case .darker: Color(white: 0.86)
+        case .highContrast: .white
+        case .warm: .themeAdaptive(
+            light: Color(red: 220 / 255, green: 215 / 255, blue: 206 / 255),
+            dark: Color(red: 45 / 255, green: 42 / 255, blue: 38 / 255))
+        case .cool: .themeAdaptive(
+            light: Color(red: 199 / 255, green: 204 / 255, blue: 210 / 255),
+            dark: Color(red: 35 / 255, green: 40 / 255, blue: 49 / 255))
+        }
+    }
+}
+
+extension Color {
+    /// A color that resolves to `light` or `dark` per the system's
+    /// appearance — the tinted themes' way of bringing dark mode.
+    static func themeAdaptive(light: Color, dark: Color) -> Color {
+        Color(uiColor: UIColor { $0.userInterfaceStyle == .dark
+            ? UIColor(dark) : UIColor(light) })
+    }
+}
+
 @main
 struct OrigamiNotesApp: App {
     @State private var model = NotesModel.shared
+    @AppStorage(NotesTheme.key) private var themeRaw = NotesTheme.gentle.rawValue
+    private var theme: NotesTheme { NotesTheme(rawValue: themeRaw) ?? .cool }
 
     var body: some Scene {
         WindowGroup {
@@ -97,6 +153,9 @@ struct OrigamiNotesApp: App {
                 // Fetch the AI key blob at launch (the Author way), so
                 // the Inspiration scan's book lookup has its key ready.
                 .task { AIKeyProvider.shared.start() }
+                // The chosen theme sets the app's scheme: light for the
+                // fixed designs, the system's own for Warm and Cool.
+                .preferredColorScheme(theme.enforcedScheme)
         }
     }
 }
@@ -568,6 +627,35 @@ struct NotesHomeView: View {
     @State private var writingNote = false
     @State private var capturingVoice = false
     @State private var namingPlaces = false
+    @AppStorage(NotesTheme.key) private var themeRaw = NotesTheme.gentle.rawValue
+    private var theme: NotesTheme { NotesTheme(rawValue: themeRaw) ?? .cool }
+    /// Which slice of the notes the list shows — chosen by the tabs
+    /// above it.
+    @State private var tab: NotesTab = .notes
+
+    /// The tabs over the list: everything, one action standing, or the
+    /// journal kind.
+    enum NotesTab: String, CaseIterable, Identifiable {
+        case notes, toDo, inProgress, journal
+        var id: String { rawValue }
+        var label: String {
+            switch self {
+            case .notes: "Notes"
+            case .toDo: "To Do"
+            case .inProgress: "In Progress"
+            case .journal: "Journal"
+            }
+        }
+        /// Whether a note belongs in this tab.
+        func matches(_ doc: LiquidDoc) -> Bool {
+            switch self {
+            case .notes: true
+            case .toDo: doc.actionValue == .toDo
+            case .inProgress: doc.actionValue == .inProgress
+            case .journal: doc.documentType == LiquidDoc.DocumentType.journal.rawValue
+            }
+        }
+    }
 
     var body: some View {
         NavigationStack {
@@ -608,14 +696,23 @@ struct NotesHomeView: View {
 
                     Spacer()
 
-                    Button {
-                        // Set Up is just the shared folder now — the
-                        // card adopts itself, places name themselves.
-                        choosingFolder = true
+                    Menu {
+                        Button {
+                            // Set Up is just the shared folder now — the
+                            // card adopts itself, places name themselves.
+                            choosingFolder = true
+                        } label: {
+                            Label("Choose Shared Folder…", systemImage: "folder")
+                        }
+                        Picker("Appearance", selection: $themeRaw) {
+                            ForEach(NotesTheme.allCases) { option in
+                                Text(option.label).tag(option.rawValue)
+                            }
+                        }
                     } label: {
                         Image(systemName: "gearshape")
                     }
-                    .accessibilityLabel("Choose Shared Folder")
+                    .accessibilityLabel("Settings")
 
                     Spacer()
 
@@ -624,9 +721,13 @@ struct NotesHomeView: View {
                         .labelStyle(.iconOnly)
                 }
                 .font(.title2)
+                // Quiet grey icons rather than the accent blue, lifting
+                // to a lighter grey in dark mode.
+                .tint(Color(uiColor: .secondaryLabel))
                 .padding(.horizontal, 44)
                 .padding(.vertical, 12)
-                .background(.bar)
+                // The toolbar wears the theme's background, like the list.
+                .background(theme.background.ignoresSafeArea(edges: .bottom))
             }
         }
         .fileImporter(isPresented: $choosingFolder, allowedContentTypes: [.folder]) { result in
@@ -703,6 +804,24 @@ struct NotesHomeView: View {
     }
 
     private var notesList: some View {
+        VStack(spacing: 0) {
+            // The tabs over the list: all notes, the two working
+            // standings, or the journal.
+            Picker("View", selection: $tab) {
+                ForEach(NotesTab.allCases) { option in
+                    Text(option.label).tag(option)
+                }
+            }
+            .pickerStyle(.segmented)
+            .padding(.horizontal, 12)
+            .padding(.top, 4)
+            .padding(.bottom, 8)
+            list
+        }
+        .background(theme.background.ignoresSafeArea())
+    }
+
+    private var list: some View {
         List {
             ForEach(notesByDay, id: \.day) { group in
                 Section(heading(for: group.day)) {
@@ -749,6 +868,10 @@ struct NotesHomeView: View {
                         // Trim the row's side padding so the title reaches
                         // closer to the screen edges — more characters per line.
                         .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 12))
+                        // Clear the row's own cell fill so the theme's
+                        // background shows through the whole list, not just
+                        // the section gaps.
+                        .listRowBackground(Color.clear)
                     }
                 }
             }
@@ -757,14 +880,19 @@ struct NotesHomeView: View {
         // title uses the full screen width instead of a narrow centred card.
         .listStyle(.plain)
         .overlay {
-            if model.notes.isEmpty {
+            if notesByDay.isEmpty {
                 ContentUnavailableView(
-                    "No Notes Yet",
+                    tab == .notes ? "No Notes Yet" : "Nothing in \(tab.label)",
                     systemImage: "note.text",
-                    description: Text("Make a note — it carries the moment and the place, and travels with the folder."))
+                    description: Text(tab == .notes
+                        ? "Make a note — it carries the moment and the place, and travels with the folder."
+                        : "No note here yet — give a note this standing or kind and it lists here."))
             }
         }
         .refreshable { model.rescan() }
+        // The list is transparent so the tabbed container's theme
+        // background shows through.
+        .scrollContentBackground(.hidden)
     }
 
     /// "Today" for today's notes; any other day by its full date.
@@ -784,7 +912,11 @@ struct NotesHomeView: View {
         let cutoff = calendar.startOfDay(
             for: Date.now.addingTimeInterval(-7 * 24 * 60 * 60))
         var groups: [(day: Date, notes: [LiquidDoc])] = []
-        for doc in model.notes where doc.listedDate >= cutoff {
+        for doc in model.notes {
+            // Notes keeps to the last seven days; the filtered tabs
+            // (To Do, In Progress, Journal) show every match, however old.
+            if tab == .notes, doc.listedDate < cutoff { continue }
+            guard tab.matches(doc) else { continue }
             let day = calendar.startOfDay(for: doc.listedDate)
             if groups.last?.day == day {
                 groups[groups.count - 1].notes.append(doc)
@@ -853,6 +985,8 @@ struct NewNoteView: View {
     /// found book; the No Source dialog offers Add as Image.
     @State private var pendingScan: ScanAnalysis?
     @FocusState private var writing: Bool
+    @AppStorage(NotesTheme.key) private var themeRaw = NotesTheme.gentle.rawValue
+    private var theme: NotesTheme { NotesTheme(rawValue: themeRaw) ?? .cool }
 
     private var foundBook: InspirationScanner.BookMatch? { pendingScan?.book }
 
@@ -863,7 +997,8 @@ struct NewNoteView: View {
                     .font(.body)
                     .scrollContentBackground(.hidden)
                     .padding(8)
-                    .background(Color(.secondarySystemBackground))
+                    // The note's writing surface wears the theme.
+                    .background(theme.background)
                     .clipShape(RoundedRectangle(cornerRadius: 12))
                     .focused($writing)
                 // The note's kind, chosen at its foot.
@@ -915,6 +1050,7 @@ struct NewNoteView: View {
                 }
             }
             .padding()
+            .background(theme.background.ignoresSafeArea())
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
@@ -1137,6 +1273,8 @@ struct NoteEditorView: View {
     /// casually opened note from silently rewriting its file, so the
     /// Mac's always-editable page and the phone rarely collide.
     @State private var isEditing = false
+    @AppStorage(NotesTheme.key) private var themeRaw = NotesTheme.gentle.rawValue
+    private var theme: NotesTheme { NotesTheme(rawValue: themeRaw) ?? .cool }
 
     private var doc: LiquidDoc? { model.note(id: docID) }
     private var isEditable: Bool { doc.map { model.isOwn($0) } ?? false }
@@ -1192,6 +1330,10 @@ struct NoteEditorView: View {
                                        description: Text("This note is no longer in the folder."))
             }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        // The note reads on the theme's background — tinted for Warm and
+        // Cool, dark with them when the system is dark.
+        .background(theme.background.ignoresSafeArea())
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             if isEditable {

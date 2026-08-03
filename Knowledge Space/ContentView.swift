@@ -86,12 +86,10 @@ struct ContentView: View {
                 } detail: {
                     if case .sourceShelf(let shelf) = state.sidebarSelection {
                         SourcesView(shelf: shelf)
-                            .environment(\.colorScheme, .light)
                     } else {
                         contentPane
                             .scrollContentBackground(.hidden)
                             .background(AppGreys.page)
-                            .environment(\.colorScheme, .light)
                             #if os(macOS)
                             .safeAreaInset(edge: .bottom, spacing: 0) { findBar }
                             .safeAreaInset(edge: .top, spacing: 0) {
@@ -116,7 +114,6 @@ struct ContentView: View {
                         // whatever the system appearance.
                         .scrollContentBackground(.hidden)
                         .background(AppGreys.page)
-                        .environment(\.colorScheme, .light)
                         // The list is a spine, not a page: it keeps to a
                         // modest width so the words get the room.
                         .navigationSplitViewColumnWidth(min: 150, ideal: 225, max: 340)
@@ -420,7 +417,6 @@ struct ContentView: View {
                 .frame(maxWidth: 800)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .background(AppGreys.page)
-                .environment(\.colorScheme, .light)
         } else if let doc = state.selectedDoc {
             if Self.isWritable(doc) {
                 NoteWritingView(doc: doc, measure: 800, centersContent: true)
@@ -927,6 +923,18 @@ struct DocumentRow: View {
     /// A quiet trailing note — the grouping tab's own indication: the
     /// day under Time, the town under Place.
     var detail: String? = nil
+    /// The folder the note is filed under, shown as a pill before the
+    /// note in the Action lists — click it to open that folder. Nil
+    /// where no pill belongs.
+    var filingFolder: String? = nil
+    /// The note's action standing, shown as a pill before the note in
+    /// the folder lists — click it to open that Action list. Nil where
+    /// no pill belongs.
+    var actionPill: LiquidDoc.Action? = nil
+    /// A longer preview: the Files views give the note's opening words
+    /// room to fill both of the row's two lines, about double the
+    /// standard preview.
+    var expandedPreview: Bool = false
 
     private var isRetracted: Bool { state.index.retractedIDs.contains(entry.id) }
 
@@ -950,12 +958,54 @@ struct DocumentRow: View {
             .joined(separator: " ")
             .split(whereSeparator: \.isWhitespace)
         guard !words.isEmpty else { return entry.doc.title }
-        let opening = words.prefix(20).joined(separator: " ")
-        return words.count > 20 ? opening + "…" : opening
+        // The Files views take twice the words, so the preview can fill
+        // both lines rather than trailing off after one.
+        let cap = expandedPreview ? 40 : 20
+        let opening = words.prefix(cap).joined(separator: " ")
+        return words.count > cap ? opening + "…" : opening
     }
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 6) {
+            // In the Action lists, a pill before the note says which
+            // folder it is filed under; clicking it opens that folder.
+            if let filingFolder {
+                Button {
+                    state.sidebarSelection = .filedFolder(filingFolder)
+                    state.selectedDocID = nil
+                } label: {
+                    Text(filingFolder)
+                        .font(.caption2.weight(.medium))
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 7)
+                        .padding(.vertical, 2)
+                        .background(.quaternary, in: Capsule())
+                }
+                .buttonStyle(.plain)
+                .help("Show \(filingFolder)")
+                .fixedSize()
+            }
+            // In the folder lists, a pill before the note says its
+            // action standing; clicking it opens that Action list.
+            if let actionPill {
+                Button {
+                    state.sidebarSelection = .action(actionPill)
+                    state.selectedDocID = nil
+                } label: {
+                    HStack(spacing: 3) {
+                        Image(systemName: SidebarCatalog.icon(for: actionPill))
+                        Text(actionPill.displayName)
+                    }
+                    .font(.caption2.weight(.medium))
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 2)
+                    .background(.quaternary, in: Capsule())
+                }
+                .buttonStyle(.plain)
+                .help("Show \(actionPill.displayName)")
+                .fixedSize()
+            }
             // With the list as the page, a row is the note's own first
             // words — no separate title line — in the body's type (New
             // York, the system serif), the window's black.
@@ -963,8 +1013,11 @@ struct DocumentRow: View {
                 Text(isTranscript ? entry.doc.listedDateText : bodyOpening)
                     // Bold until read; opening the note ends the bolding.
                     .fontWeight(state.isUnread(entry.doc) ? .bold : .regular)
-                    .font(.system(size: state.listTextSize, design: .serif))
-                    .lineLimit(3)
+                    // Tight leading draws the note's own two lines a
+                    // little closer; the row padding sets the notes apart.
+                    .font(.system(size: state.listTextSize, design: .serif).leading(.tight))
+                    // At most two lines, an ellipsis where more follows.
+                    .lineLimit(2)
             } else {
                 Text(isTranscript ? entry.doc.listedDateText : entry.doc.title)
                     .font(.headline)
@@ -994,7 +1047,8 @@ struct DocumentRow: View {
             }
         }
         .opacity(isRetracted ? 0.5 : 1)
-        .padding(.vertical, 2)
+        // A bit more room between notes than within one.
+        .padding(.vertical, 5)
     }
 }
 

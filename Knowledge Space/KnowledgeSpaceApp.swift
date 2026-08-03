@@ -41,8 +41,19 @@ struct KnowledgeSpaceApp: App {
         WindowGroup(id: "Library") {
             MapLibraryView()
                 .environment(mapState)
+                .modifier(KSWidgetDeepLink())
         }
         .defaultSize(width: 520, height: 640)
+
+        // The window a widget opens into: a tall framed list of To Do or
+        // Journal — the seed of an Augmented Library-style browser.
+        WindowGroup(id: "KSList", for: String.self) { $raw in
+            if let raw, let kind = KSWidget.ListKind(rawValue: raw) {
+                KSListingView(kind: kind)
+                    .environment(mapState)
+            }
+        }
+        .defaultSize(width: 420, height: 720)
 
         // The control bar — a single-instance window (reopening brings
         // the existing one forward), moved independently of the map.
@@ -74,6 +85,15 @@ struct KnowledgeSpaceApp: App {
         Window("Note", id: "MapNoteEditor") {
             MapNoteEditorView()
                 .environment(mapState)
+        }
+        .windowResizability(.contentSize)
+        .defaultWindowPlacement { _, _ in
+            WindowPlacement(.utilityPanel)
+        }
+
+        // Prototype: extend a flat portrait into a 3D spatial scene.
+        Window("Portrait 3D", id: "PortraitPrototype") {
+            PortraitSpatialView()
         }
         .windowResizability(.contentSize)
         .defaultWindowPlacement { _, _ in
@@ -115,13 +135,13 @@ struct KnowledgeSpaceApp: App {
                 // AppGreys.text); secondary and quieter styles keep
                 // their own greys.
                 .foregroundStyle(AppGreys.text)
-                // The design is a fixed light design: one scheme for
-                // the whole window, so every divider line — sidebar
-                // edge, section rules, the options column's — resolves
-                // to the same separator grey, whatever the system
-                // appearance. (The columns force this individually
-                // too; this catches everything between them.)
-                .environment(\.colorScheme, .light)
+                // The theme sets the window's scheme: the light designs
+                // (Gentle, Darker, High Contrast) pin it to light, so
+                // every divider resolves to the same separator grey
+                // whatever the system appearance; Warm and Cool bring
+                // their own dark mode and follow the system. Reading
+                // `state.theme` re-evaluates this when the theme changes.
+                .preferredColorScheme(state.theme.enforcedScheme)
         }
         // ⌘N is a new note — the core act — displacing New Window.
         .commands {
@@ -154,7 +174,25 @@ struct KnowledgeSpaceApp: App {
         Settings {
             SettingsView()
                 .environment(state)
+                .foregroundStyle(AppGreys.text)
+                .preferredColorScheme(state.theme.enforcedScheme)
         }
         #endif
     }
 }
+
+#if os(visionOS)
+/// Turns a widget's tap — a `knowledgespace://list/<kind>` URL — into an
+/// open listing window. Applied to the Library window, which is the
+/// scene the system delivers the widget's URL to.
+private struct KSWidgetDeepLink: ViewModifier {
+    @Environment(\.openWindow) private var openWindow
+
+    func body(content: Content) -> some View {
+        content.onOpenURL { url in
+            guard let kind = KSWidget.ListKind.from(url: url) else { return }
+            openWindow(id: "KSList", value: kind.rawValue)
+        }
+    }
+}
+#endif

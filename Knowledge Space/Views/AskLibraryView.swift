@@ -149,7 +149,6 @@ struct AskLibraryView: View {
         .padding(24)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(AppGreys.page)
-        .environment(\.colorScheme, .light)
     }
 
     private func ask() {

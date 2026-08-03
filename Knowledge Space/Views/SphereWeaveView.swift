@@ -61,7 +61,6 @@ struct SphereWeaveView: View {
             #endif
         }
         .background(AppGreys.page)
-        .environment(\.colorScheme, .light)
         .onAppear {
             // Arrive centered on something: a Show-in term, the open
             // document — or, given nothing, the word the whole field

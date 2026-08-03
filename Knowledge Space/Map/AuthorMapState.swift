@@ -10,6 +10,7 @@
 #if os(visionOS)
 import SwiftUI
 import Observation
+import WidgetKit
 
 /// One document in the open community folder, listed by its own title.
 struct FolderDocument: Identifiable {
@@ -382,6 +383,7 @@ final class AuthorMapState {
     private func apply(_ found: FolderScan) {
         scannedDocs = found.docs
         rebuildIndex()
+        publishWidgetSnapshots()
         folderDocuments = found.documents.sorted {
             $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending
         }
@@ -407,6 +409,38 @@ final class AuthorMapState {
                 loadFolderMap()
             }
         }
+    }
+
+    // MARK: - Widget snapshots
+
+    /// Notes checked To Do, newest first — what the To Do widget and the
+    /// listing window show.
+    var toDoDocuments: [LiquidDoc] {
+        scannedDocs.filter { $0.actionValue == .toDo }
+            .sorted { $0.listedDate > $1.listedDate }
+    }
+
+    /// Journal notes, newest first.
+    var journalDocuments: [LiquidDoc] {
+        scannedDocs.filter { $0.documentType == LiquidDoc.DocumentType.journal.rawValue }
+            .sorted { $0.listedDate > $1.listedDate }
+    }
+
+    /// After each scan, hands the widgets a fresh snapshot of the To Do
+    /// and Journal lists through the shared App Group, then asks WidgetKit
+    /// to redraw. The top fifteen of each — a glance, not the archive.
+    private func publishWidgetSnapshots() {
+        func items(_ docs: [LiquidDoc]) -> [KSWidget.Item] {
+            docs.prefix(15).map {
+                KSWidget.Item(id: $0.id,
+                              title: $0.title,
+                              subtitle: $0.location ?? "",
+                              dateText: $0.listedDateText)
+            }
+        }
+        KSWidget.write(items(toDoDocuments), for: .toDo)
+        KSWidget.write(items(journalDocuments), for: .journal)
+        WidgetCenter.shared.reloadAllTimelines()
     }
 
     /// The document count the folder map last loaded with; a download

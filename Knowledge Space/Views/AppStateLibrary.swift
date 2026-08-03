@@ -103,6 +103,21 @@ extension AppState {
             .sorted { $0.author.localizedCaseInsensitiveCompare($1.author) == .orderedAscending }
     }
 
+    /// Deleting a person removes their record and portrait; this trashes
+    /// their identity-card document too — the card the row was built
+    /// from, and any card whose author answers to them — so they do not
+    /// return from the folder on the next scan. The caller rescans.
+    @discardableResult
+    func deleteIdentityCards(for listing: PersonListing) -> Int {
+        let targets = cards.filter { card in
+            card.id == listing.cardDocID || listing.person.answersTo(card.author)
+        }
+        for card in targets {
+            try? FileManager.default.trashItem(at: card.fileURL, resultingItemURL: nil)
+        }
+        return targets.count
+    }
+
     /// The People place's rows: every contact record in the directory
     /// (People.json, shared with Digital Letters), then every identity
     /// card the directory does not answer for — so a person is one row

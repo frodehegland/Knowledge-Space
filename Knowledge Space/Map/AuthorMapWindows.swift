@@ -373,6 +373,14 @@ struct MapControlsView: View {
             }
             .labelStyle(.iconOnly)
 
+            // Prototype: extend a flat portrait into a 3D spatial scene.
+            Button {
+                openWindow(id: "PortraitPrototype")
+            } label: {
+                Label("Portrait 3D", systemImage: "cube.transparent")
+            }
+            .labelStyle(.iconOnly)
+
             Button {
                 Task { @MainActor in
                     if state.isMapSpaceOpen {

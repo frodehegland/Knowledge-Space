@@ -35,6 +35,30 @@ struct SidebarPlace: Identifiable {
     var id: SidebarItem { item }
 }
 
+/// How much of the sidebar shows: Small is the pared-down default —
+/// the head of the column, Actions, and Views — while Full carries the
+/// whole catalog, Library and Digest and Filed and all. Chosen in
+/// Settings ▸ Appearance, persisted like the theme.
+enum SidebarLayout: String, CaseIterable, Identifiable {
+    case small
+    case full
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .small: "Small"
+        case .full: "Full"
+        }
+    }
+
+    static let key = "sidebarLayout"
+
+    static var current: SidebarLayout {
+        SidebarLayout(rawValue: UserDefaults.standard.string(forKey: key) ?? "") ?? .small
+    }
+}
+
 enum SidebarCatalog {
     /// The grey every sidebar icon wears — place rows and action rows
     /// alike, so the column reads as one set.
@@ -54,6 +78,15 @@ enum SidebarCatalog {
         SidebarPlace(name: "Transcripts", systemImage: "text.bubble", item: .transcripts),
         SidebarPlace(name: "Draft Letters", systemImage: "envelope.open", item: .draftLetters),
     ]
+
+    /// The Small layout's head, in this order: Inbox, Timeline, People
+    /// (the contacts list — photos and all), and the Map. Every filing
+    /// folder lists below under Files; New closes the head. Places,
+    /// Transcripts, and Draft Letters are set aside for now.
+    static var smallTop: [SidebarPlace] {
+        let order: [SidebarItem] = [.library, .timeline, .people, .view("places")]
+        return order.compactMap { item in top.first { $0.item == item } }
+    }
 
     /// The Library: the reference shelf — sources whole and by kind,
     /// the cited authors, and the quotes standing on the works. The
@@ -81,7 +114,8 @@ enum SidebarCatalog {
     /// The note column's standard files, each button's word beside the
     /// folder it files under. The sidebar's Filed section mirrors this.
     static let standardFiles: [(label: String, folder: String)] =
-        [("Thought", "Thoughts"), ("Journal", "Journal"), ("Note", "Notes")]
+        [("Thought", "Thoughts"), ("Inspiration", "Inspirations"),
+         ("Journal", "Journal"), ("Note", "Notes")]
 
     /// The Action section: the note's standing, one place per state —
     /// the lifecycle axis, orthogonal to filing, read from the notes
@@ -122,6 +156,7 @@ enum SidebarCatalog {
     private static func filedIcon(for folder: String) -> String {
         switch folder {
         case "Thoughts": return "lightbulb"
+        case "Inspirations": return "quote.bubble"
         case "Journal": return "book.closed"
         case "Notes": return "note.text"
         case "Letters": return "envelope"
@@ -131,11 +166,28 @@ enum SidebarCatalog {
     }
 
     static func sections(filedFolders: [String],
-                         articlesLabel: String = "Articles") -> [(title: String, places: [SidebarPlace])] {
-        [("", top), ("Actions", actions),
-         ("Library", shelves(articlesLabel: articlesLabel)),
-         ("Digest", digest),
-         ("Filed", filed(filedFolders)), ("Views", views)]
+                         articlesLabel: String = "Articles",
+                         layout: SidebarLayout = .small) -> [(title: String, places: [SidebarPlace])] {
+        switch layout {
+        case .full:
+            return [("", top), ("Actions", actions),
+                    ("Library", shelves(articlesLabel: articlesLabel)),
+                    ("Digest", digest),
+                    ("Filed", filed(filedFolders)), ("Views", views)]
+        case .small:
+            // The pared-down default: the head of the column, then
+            // every filing folder under Files — Thoughts, Inspirations,
+            // Journal, Notes, Letters, the user's own (Work, Personal…),
+            // Archived last — then Actions and Views. Library and Digest
+            // set aside.
+            var result: [(title: String, places: [SidebarPlace])] = [("", smallTop)]
+            if !filedFolders.isEmpty {
+                result.append(("Files", filed(filedFolders)))
+            }
+            result.append(("Actions", actions))
+            result.append(("Views", views))
+            return result
+        }
     }
 }
 
@@ -321,10 +373,25 @@ struct DocumentListView: View {
             // A folder's list reads straight from the filings, so it
             // shows every note filed there — however the library lists
             // treat the note otherwise.
-            return state.filedFolders
+            let filedIDs = state.filedFolders
                 .filter { $0.value.caseInsensitiveCompare(filedUnder) == .orderedSame }
-                .compactMap { state.index.allByID[$0.key] }
-                .sorted { $0.doc.listedDate > $1.doc.listedDate }
+                .map(\.key)
+            var seen = Set(filedIDs)
+            var entries = filedIDs.compactMap { state.index.allByID[$0] }
+            // A kind folder — Thoughts, Inspirations, Journal — also
+            // gathers every note whose own documentType is that kind,
+            // so a note marked Inspiration lists here even when the
+            // filing lives only in the file (set on the phone, or by a
+            // kind the note carries between devices). Archived notes
+            // keep out; the timeline already excludes them.
+            if let kind = AppState.kindFolder(for: filedUnder) {
+                for entry in state.index.timeline
+                where entry.doc.documentType == kind && !seen.contains(entry.id) {
+                    entries.append(entry)
+                    seen.insert(entry.id)
+                }
+            }
+            return entries.sorted { $0.doc.listedDate > $1.doc.listedDate }
         }
         if draftLettersOnly {
             return state.filteredEntries.filter {
@@ -445,27 +512,36 @@ struct DocumentListView: View {
                                         // as a column beside the words.
                                         HStack(alignment: .top, spacing: 4) {
                                             closeToggle
+                                            // A note writes; every other
+                                            // kind — a transcript, a
+                                            // source — reads. Both carry
+                                            // the Show Column button, so
+                                            // the controls reach a read
+                                            // document as well.
                                             if ContentView.isWritable(entry.doc) {
                                                 NoteWritingView(doc: entry.doc, inline: true)
                                                     .id(entry.doc.id)
                                                     .padding(.vertical, 6)
-                                                if !inFullScreen {
-                                                    columnToggle
-                                                }
                                             } else {
                                                 DocumentReaderView(doc: entry.doc, inline: true)
                                                     .id(entry.doc.id)
                                                     .padding(.vertical, 6)
                                             }
+                                            if !inFullScreen {
+                                                columnToggle
+                                            }
                                         }
                                         openNoteRule
                                     }
                                 } else {
-                                    DocumentRow(entry: entry, detail: detail(for: entry.doc))
+                                    DocumentRow(entry: entry, detail: detail(for: entry.doc),
+                                                filingFolder: actionListFiling(for: entry.doc),
+                                                actionPill: folderListAction(for: entry.doc),
+                                                expandedPreview: filedUnder != nil)
                                         // While a note's words are being
                                         // typed, the rest of the list
                                         // recedes.
-                                        .opacity(state.editingInList ? 0.3 : 1)
+                                        .opacity(state.dimsListWhileEditing && state.editingInList ? 0.3 : 1)
                                         // Closed rows share the open
                                         // note's left margin, so the
                                         // reveal triangle sits in the
@@ -513,7 +589,7 @@ struct DocumentListView: View {
                         // recede with the rows while one is written in.
                         Text(group.label)
                             .foregroundStyle(.tertiary)
-                            .opacity(state.editingInList ? 0.3 : 1)
+                            .opacity(state.dimsListWhileEditing && state.editingInList ? 0.3 : 1)
                     }
                 }
                 if state.index.isScanning {
@@ -586,7 +662,7 @@ struct DocumentListView: View {
         // every control has its room and the note keeps its shape.
         .overlay(alignment: .topTrailing) {
             if controlsRevealed, !inFullScreen,
-               let doc = state.selectedDoc, ContentView.isWritable(doc) {
+               let doc = state.selectedDoc {
                 NoteOptionsColumn(doc: doc)
                     .frame(maxHeight: .infinity)
                     .clipShape(UnevenRoundedRectangle(
@@ -777,6 +853,23 @@ struct DocumentListView: View {
         grouping == .place ? town(of: doc) : nil
     }
 
+    /// The Action lists (To Do, In Progress, Done…) wear a pill saying
+    /// which folder each note is filed under; every other list leaves
+    /// it off. Nil when this is not an Action list, or the note is
+    /// filed nowhere.
+    private func actionListFiling(for doc: LiquidDoc) -> String? {
+        guard action != nil else { return nil }
+        return state.folder(for: doc)
+    }
+
+    /// The folder lists wear a pill saying each note's action standing —
+    /// To Do, Done… — clicking it opens that Action list. Nil when this
+    /// is not a folder list, or the note has no standing.
+    private func folderListAction(for doc: LiquidDoc) -> LiquidDoc.Action? {
+        guard filedUnder != nil else { return nil }
+        return doc.actionValue
+    }
+
     /// "Wimbledon, London, United Kingdom" → "United Kingdom". A bare
     /// place like "Ytrebygda" answers only once its one-time search has
     /// been confirmed by the reader.
@@ -816,6 +909,15 @@ struct PeopleListView: View {
     @Environment(AppState.self) private var state
     /// The record being edited, presented as the person form.
     @State private var editingListing: PersonListing?
+    /// The record a ctrl-click asked to delete, held for the
+    /// confirmation dialog.
+    @State private var deletingListing: PersonListing?
+    /// Bumped after a delete so the list rebuilds from the freshly
+    /// pruned directory.
+    @State private var reloadToken = UUID()
+    /// Whether the hidden people are being shown for now — off until the
+    /// reader asks to see them, so they can be brought back.
+    @State private var showingHidden = false
 
     /// The listings, alphabetical from AppState: Show in People's
     /// one-person narrowing first, then the search field on name,
@@ -833,6 +935,29 @@ struct PeopleListView: View {
                     $0.localizedCaseInsensitiveContains(state.searchText)
                 }
         }
+    }
+
+    /// The rows shown: hidden people kept out unless the reader is
+    /// showing them for now.
+    private var visiblePeople: [PersonListing] {
+        people.filter { showingHidden || !state.hiddenPeople.contains($0.id) }
+    }
+
+    /// The highlighted people, in the same alphabetical order — they
+    /// stand at the top of the list under no heading.
+    private var highlightedPeople: [PersonListing] {
+        visiblePeople.filter { state.highlightedPeople.contains($0.id) }
+    }
+
+    /// Everyone else, below the highlighted and their divider.
+    private var regularPeople: [PersonListing] {
+        visiblePeople.filter { !state.highlightedPeople.contains($0.id) }
+    }
+
+    /// How many people are hidden right now — what the reveal at the
+    /// foot offers to bring back.
+    private var hiddenCount: Int {
+        people.filter { state.hiddenPeople.contains($0.id) }.count
     }
 
     /// Selecting a person also puts down any open document, so their
@@ -862,21 +987,36 @@ struct PeopleListView: View {
                 .buttonStyle(.plain)
                 .listRowSeparator(.hidden)
             }
-            ForEach(people) { listing in
-                // Clicking a person fills the next column with the
-                // notes that name them, their contact details above.
-                personRow(listing)
-                    .tag(listing.id)
+            // The highlighted stand first, under no heading, a divider
+            // closing the group.
+            ForEach(highlightedPeople) { listing in
+                personListRow(listing)
+            }
+            if !highlightedPeople.isEmpty, !regularPeople.isEmpty {
+                Divider()
                     .listRowSeparator(.hidden)
-                    #if os(macOS)
-                    .contextMenu {
-                        Button("Edit Person…") {
-                            editingListing = listing
-                        }
-                    }
-                    #endif
+            }
+            ForEach(regularPeople) { listing in
+                personListRow(listing)
+            }
+            // The way back for hidden people: a quiet reveal at the foot.
+            if hiddenCount > 0 {
+                Button {
+                    showingHidden.toggle()
+                } label: {
+                    Label(showingHidden ? "Hide Hidden People"
+                                        : "Show \(hiddenCount) Hidden",
+                          systemImage: showingHidden ? "eye.slash" : "eye")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+                .listRowSeparator(.hidden)
             }
         }
+        // A fresh id after each delete reloads the list from the pruned
+        // directory.
+        .id(reloadToken)
         .overlay {
             if people.isEmpty, state.index.folderURL != nil,
                !state.index.isScanning {
@@ -888,13 +1028,69 @@ struct PeopleListView: View {
         }
         #if os(macOS)
         .sheet(item: $editingListing) { listing in
-            PersonFormView(person: listing.person, heading: "Edit Person") { updated in
+            PersonFormView(person: listing.person, heading: "Edit Record") { updated in
                 state.people.upsert(updated)
                 state.publishPortraits()
                 state.index.rescan()
             }
         }
+        .confirmationDialog(
+            "Delete \(deletingListing?.person.displayName ?? "Person")?",
+            isPresented: Binding(get: { deletingListing != nil },
+                                 set: { if !$0 { deletingListing = nil } }),
+            presenting: deletingListing
+        ) { listing in
+            Button("Delete", role: .destructive) { delete(listing) }
+        } message: { _ in
+            Text("The record, its portrait, and the person's identity card move to the Trash. Their other notes and documents stay in the library.")
+        }
         #endif
+    }
+
+    #if os(macOS)
+    /// Removes the person entirely: their directory record, their
+    /// portrait, and their identity-card document — so they do not
+    /// return from the folder on the next scan. Clears the reading
+    /// column if their card was open there.
+    private func delete(_ listing: PersonListing) {
+        state.portraits.removeImages(for: listing.person.localID)
+        state.people.remove(listing.person)
+        state.deleteIdentityCards(for: listing)
+        if state.selectedPersonID == listing.id { state.selectedPersonID = nil }
+        state.publishPortraits()
+        state.index.rescan()
+        // Rebuild the list so the removed person is gone at once.
+        reloadToken = UUID()
+    }
+    #endif
+
+    /// One row of the list: the person, tagged for selection, dimmed
+    /// while shown among the hidden, with the full ctrl-click menu.
+    private func personListRow(_ listing: PersonListing) -> some View {
+        let isHidden = state.hiddenPeople.contains(listing.id)
+        return personRow(listing)
+            .opacity(isHidden ? 0.5 : 1)
+            .tag(listing.id)
+            .listRowSeparator(.hidden)
+            #if os(macOS)
+            .contextMenu {
+                Button(state.highlightedPeople.contains(listing.id)
+                       ? "Unhighlight" : "Highlight") {
+                    state.toggleHighlightedPerson(listing.id)
+                }
+                if isHidden {
+                    Button("Unhide") { state.setPersonHidden(false, listing.id) }
+                } else {
+                    Button("Hide") { state.setPersonHidden(true, listing.id) }
+                }
+                Divider()
+                Button("Edit Record…") { editingListing = listing }
+                Divider()
+                Button("Delete Person…", role: .destructive) {
+                    deletingListing = listing
+                }
+            }
+            #endif
     }
 
     private func personRow(_ listing: PersonListing) -> some View {

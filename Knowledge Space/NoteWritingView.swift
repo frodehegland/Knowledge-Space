@@ -165,7 +165,6 @@ struct NoteWritingView: View {
         }
         // The writing page stands on the design's page grey.
         .background(AppGreys.page)
-        .environment(\.colorScheme, .light)
     }
 
     /// The empty page's invitation, gone with the first words.
