@@ -92,6 +92,36 @@ final class LibraryIndex {
         mentions = filteredMentions
     }
 
+    /// Places a freshly-created document into the index at once, so the
+    /// editor and lists can resolve it before the next background scan
+    /// lands — a new note opens into writing instantly rather than after
+    /// a full rescan. The scan then reconciles; this only bridges the gap.
+    func insert(_ doc: LiquidDoc) {
+        let entry = IndexEntry(doc: doc)
+        allByID[doc.id] = entry
+        // The timeline sorts ascending by listed date, so a new note —
+        // the latest — belongs at the end.
+        fullTimeline.append(entry)
+        applyArchiveFilter()
+    }
+
+    /// Replaces a document already in the index with an edited copy, at
+    /// once — so a metadata change made in the reader's column (a
+    /// standing set, a note filed, Important toggled) shows the instant
+    /// it is written, rather than after the next background scan of the
+    /// whole folder. The scan then reconciles (backlinks, duplicates,
+    /// timeline order); this only bridges the gap. A document the index
+    /// has not seen yet is inserted.
+    func update(_ doc: LiquidDoc) {
+        guard allByID[doc.id] != nil else { insert(doc); return }
+        let entry = IndexEntry(doc: doc)
+        allByID[doc.id] = entry
+        if let position = fullTimeline.firstIndex(where: { $0.id == doc.id }) {
+            fullTimeline[position] = entry
+        }
+        applyArchiveFilter()
+    }
+
     func setFolder(_ url: URL) {
         folderURL = url
         #if os(macOS)

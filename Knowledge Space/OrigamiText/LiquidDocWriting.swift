@@ -173,7 +173,7 @@ extension LiquidDoc {
         let doc: LiquidDoc
         init(_ doc: LiquidDoc) { self.doc = doc }
 
-        enum CodingKeys: String, CodingKey { case about, format, id, title, author, created, date, body, links, wraps, attention, aiOnBehalf, draft, action, onBehalfOf, documentType, location, concepts, layouts, connections, references, aiSource, agents }
+        enum CodingKeys: String, CodingKey { case about, format, id, title, author, created, date, body, links, wraps, attention, aiOnBehalf, draft, action, important, onBehalfOf, documentType, location, concepts, layouts, connections, references, aiSource, agents }
 
         func encode(to encoder: Encoder) throws {
             var container = encoder.container(keyedBy: CodingKeys.self)
@@ -210,6 +210,9 @@ extension LiquidDoc {
             }
             if let action = doc.action {
                 try container.encode(action, forKey: .action)
+            }
+            if doc.important {
+                try container.encode(true, forKey: .important)
             }
             if let onBehalfOf = doc.onBehalfOf {
                 try container.encode(onBehalfOf, forKey: .onBehalfOf)

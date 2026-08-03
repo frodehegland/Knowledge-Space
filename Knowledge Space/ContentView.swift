@@ -312,6 +312,7 @@ struct ContentView: View {
         case .draftLetters: listHeader("Draft Letters")
         case .digests: listHeader("Digests")
         case .action(let action): listHeader(action.placeName)
+        case .importantToDo: listHeader("To Do")
         default: EmptyView()
         }
     }
@@ -500,7 +501,8 @@ struct ContentView: View {
     private var peekPlacesList: some View {
         List {
             ForEach(SidebarCatalog.sections(filedFolders: state.sidebarFiledFolders,
-                                            articlesLabel: state.articlesShelfLabel),
+                                            articlesLabel: state.articlesShelfLabel,
+                                            importantToDo: state.hasImportantToDo),
                     id: \.title) { section in
                 Section(section.title) {
                     ForEach(state.shownPlaces(of: section.places)) { place in
@@ -670,6 +672,8 @@ struct ContentView: View {
             DocumentListView(draftLettersOnly: true)
         } else if case .action(let action)? = state.sidebarSelection {
             DocumentListView(action: action)
+        } else if state.sidebarSelection == .importantToDo {
+            DocumentListView(importantToDoOnly: true)
         } else {
             // The Inbox: the reader's notes plus anything unread.
             DocumentListView(inboxOnly: true)
@@ -967,6 +971,14 @@ struct DocumentRow: View {
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 6) {
+            // A note marked Important wears a small orange bullet ahead
+            // of everything else in its row.
+            if entry.doc.important {
+                Image(systemName: "circle.fill")
+                    .font(.system(size: 7))
+                    .foregroundStyle(.orange)
+                    .accessibilityLabel("Important")
+            }
             // In the Action lists, a pill before the note says which
             // folder it is filed under; clicking it opens that folder.
             if let filingFolder {
@@ -976,7 +988,7 @@ struct DocumentRow: View {
                 } label: {
                     Text(filingFolder)
                         .font(.caption2.weight(.medium))
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(.white)
                         .padding(.horizontal, 7)
                         .padding(.vertical, 2)
                         .background(.quaternary, in: Capsule())

@@ -32,6 +32,7 @@ struct NoteOptionsColumn: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
                 actionSection
+                importantSection
                 fileSection
                 analysisSection
                 flowSection
@@ -62,6 +63,8 @@ struct NoteOptionsColumn: View {
         ScrollView([.horizontal, .vertical]) {
             HStack(alignment: .top, spacing: 28) {
                 actionSection
+                    .frame(width: 170)
+                importantSection
                     .frame(width: 170)
                 fileSection
                     .frame(width: 170)
@@ -118,6 +121,34 @@ struct NoteOptionsColumn: View {
         .buttonStyle(GreyColumnButtonStyle())
     }
 
+    // MARK: Important
+
+    /// A binary standing beside the action axis: Important or Normal,
+    /// written into the note like the draft flag. On, an orange bullet
+    /// leads the button and the note's rows; the checkmark says it is
+    /// set. Clicking toggles it back to Normal.
+    private var importantSection: some View {
+        section("Important") {
+            Button {
+                state.setImportant(!doc.important, for: doc)
+            } label: {
+                HStack {
+                    Image(systemName: doc.important ? "circle.fill" : "circle")
+                        .font(.system(size: 9))
+                        .foregroundStyle(doc.important ? .orange : .secondary)
+                    Text("Important")
+                    if doc.important {
+                        Spacer(minLength: 4)
+                        Image(systemName: "checkmark")
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .buttonStyle(GreyColumnButtonStyle())
+            .help(doc.important ? "Mark as Normal" : "Mark as Important")
+        }
+    }
+
     // MARK: File
 
     private var fileSection: some View {
@@ -165,6 +196,7 @@ struct NoteOptionsColumn: View {
     private var fileFolders: [String] {
         state.filingFolders.filter { folder in
             folder.caseInsensitiveCompare(AppState.archivedFolderName) != .orderedSame
+                && !AppState.isHiddenFilingFolder(folder)
                 && !SidebarCatalog.standardFiles.contains {
                     $0.folder.caseInsensitiveCompare(folder) == .orderedSame
                 }

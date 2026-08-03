@@ -18,6 +18,7 @@ enum SidebarItem: Hashable {
     case draftLetters // letters still being written
     case digests      // the granted documents folder, distilled
     case action(LiquidDoc.Action)  // notes by standing: To Do, Done…
+    case importantToDo  // To Do notes marked Important — the orange head of the column
     case sourceShelf(SourceShelf)  // the Library: sources, authors, quotes
     case filedFolder(String)  // one filing folder, straight from the sidebar
     case view(String)
@@ -117,6 +118,11 @@ enum SidebarCatalog {
         [("Thought", "Thoughts"), ("Inspiration", "Inspirations"),
          ("Journal", "Journal"), ("Note", "Notes")]
 
+    /// The orange head of the column: To Do notes marked Important.
+    /// Shown only when at least one such note exists.
+    static let importantToDoPlace = SidebarPlace(
+        name: "To Do", systemImage: "checklist", item: .importantToDo)
+
     /// The Action section: the note's standing, one place per state —
     /// the lifecycle axis, orthogonal to filing, read from the notes
     /// themselves.
@@ -167,27 +173,35 @@ enum SidebarCatalog {
 
     static func sections(filedFolders: [String],
                          articlesLabel: String = "Articles",
+                         importantToDo: Bool = false,
                          layout: SidebarLayout = .small) -> [(title: String, places: [SidebarPlace])] {
+        var result: [(title: String, places: [SidebarPlace])]
         switch layout {
         case .full:
-            return [("", top), ("Actions", actions),
-                    ("Library", shelves(articlesLabel: articlesLabel)),
-                    ("Digest", digest),
-                    ("Filed", filed(filedFolders)), ("Views", views)]
+            result = [("", top), ("Actions", actions),
+                      ("Library", shelves(articlesLabel: articlesLabel)),
+                      ("Digest", digest),
+                      ("Filed", filed(filedFolders)), ("Views", views)]
         case .small:
             // The pared-down default: the head of the column, then
             // every filing folder under Files — Thoughts, Inspirations,
             // Journal, Notes, Letters, the user's own (Work, Personal…),
             // Archived last — then Actions and Views. Library and Digest
             // set aside.
-            var result: [(title: String, places: [SidebarPlace])] = [("", smallTop)]
+            var small: [(title: String, places: [SidebarPlace])] = [("", smallTop)]
             if !filedFolders.isEmpty {
-                result.append(("Files", filed(filedFolders)))
+                small.append(("Files", filed(filedFolders)))
             }
-            result.append(("Actions", actions))
-            result.append(("Views", views))
-            return result
+            small.append(("Actions", actions))
+            small.append(("Views", views))
+            result = small
         }
+        // The important-To-Do row leads the whole column, above the head,
+        // whenever any To Do note is marked Important.
+        if importantToDo, let first = result.indices.first {
+            result[first].places.insert(importantToDoPlace, at: 0)
+        }
+        return result
     }
 }
 
@@ -348,6 +362,8 @@ struct DocumentListView: View {
     var digestsOnly = false
     /// Narrows the list to notes with one action standing.
     var action: LiquidDoc.Action? = nil
+    /// The orange head of the column: To Do notes marked Important.
+    var importantToDoOnly = false
 
     /// Whether the inline note's controls are unfolded — each newly
     /// opened note starts with them tucked away.
@@ -366,6 +382,11 @@ struct DocumentListView: View {
     /// The entries this list speaks for: the Inbox's, one standing's,
     /// one folder's, or everything.
     private var scopedEntries: [IndexEntry] {
+        if importantToDoOnly {
+            return state.filteredEntries.filter {
+                $0.doc.actionValue == .toDo && $0.doc.important
+            }
+        }
         if let action {
             return state.filteredEntries.filter { $0.doc.actionValue == action }
         }
@@ -593,8 +614,9 @@ struct DocumentListView: View {
                     }
                 }
                 if state.index.isScanning {
-                    Label("Scanning…", systemImage: "arrow.triangle.2.circlepath")
-                        .foregroundStyle(.secondary)
+                    Image(systemName: "arrow.triangle.2.circlepath")
+                        .foregroundStyle(.tertiary)
+                        .opacity(0.4)
                 }
 
                 // Malformed files never crash the app: they surface greyed
@@ -630,6 +652,11 @@ struct DocumentListView: View {
                             "No Notes",
                             systemImage: "note.text",
                             description: Text("A note is the quickest kind — ⌘N, or New Note in the sidebar — and every one you write lists here."))
+                    } else if importantToDoOnly {
+                        ContentUnavailableView(
+                            "No Important To Do",
+                            systemImage: "checklist",
+                            description: Text("A To Do note marked Important lists here."))
                     } else if let action {
                         ContentUnavailableView(
                             "Nothing \(action.displayName)",

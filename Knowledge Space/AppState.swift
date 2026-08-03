@@ -263,6 +263,14 @@ final class AppState {
         selectedDocID.flatMap { index.allByID[$0]?.doc }
     }
 
+    /// Whether any To Do note is also marked Important — the condition
+    /// for the orange To Do row at the head of the sidebar. Read from
+    /// the index (not the search-filtered list), so the row's presence
+    /// does not come and go with a search.
+    var hasImportantToDo: Bool {
+        index.timeline.contains { $0.doc.actionValue == .toDo && $0.doc.important }
+    }
+
     /// The span of days the Timeline shows, chosen from its calendar —
     /// nil shows everything. The label is what the calendar button
     /// reads: "2026", "July 2026", "22 July 2026".
@@ -338,19 +346,42 @@ final class AppState {
 
     /// Flips the note's draft flag in the file, so every device sharing
     /// the folder agrees; the legacy local mark clears on publish.
+    /// Applies a metadata change to a note's file without disturbing its
+    /// words. The file on disk is the truth: the editor autosaves the
+    /// note's text there, so the in-memory `doc` a button hands us can be
+    /// a beat behind (the index re-reads a document only when it scans).
+    /// The one field is merged onto the file's current bytes and written
+    /// back — the body is never taken from the possibly-stale copy, so a
+    /// standing, Important, or filing set right after typing can no
+    /// longer overwrite the words. Returns whether it wrote.
+    @discardableResult
+    private func mutateNoteFile(_ doc: LiquidDoc,
+                               _ change: (inout LiquidDoc) -> Void) -> Bool {
+        let fresh = (try? Data(contentsOf: doc.fileURL))
+            .flatMap { try? LiquidDoc.decode(data: $0, fileURL: doc.fileURL) }
+        var updated = fresh ?? doc
+        updated.fileURL = doc.fileURL
+        change(&updated)
+        do {
+            try updated.jsonData().write(to: updated.fileURL, options: .atomic)
+            // Show the change at once — the reader's column reflects it
+            // before the background rescan of the whole folder lands —
+            // then reconcile everything else.
+            index.update(updated)
+            index.rescan()
+            return true
+        } catch {
+            showNote("Could not update the note: \(error.localizedDescription)")
+            return false
+        }
+    }
+
     func setDraft(_ isDraft: Bool, for doc: LiquidDoc) {
         if !isDraft, draftDocumentIDs.remove(doc.id) != nil {
             persistDraftIDs()
         }
         guard doc.draft != isDraft else { return }
-        var updated = doc
-        updated.draft = isDraft
-        do {
-            try updated.jsonData().write(to: updated.fileURL, options: .atomic)
-            index.rescan()
-        } catch {
-            showNote("Could not update the note: \(error.localizedDescription)")
-        }
+        mutateNoteFile(doc) { $0.draft = isDraft }
     }
 
     private func persistDraftIDs() {
@@ -364,19 +395,23 @@ final class AppState {
     /// draft flag, so every device agrees. Choosing a standing is
     /// saving: the draft flag clears with it.
     func setAction(_ action: LiquidDoc.Action?, for doc: LiquidDoc) {
-        var updated = doc
-        updated.action = action?.rawValue
-        if action != nil {
-            if draftDocumentIDs.remove(doc.id) != nil { persistDraftIDs() }
-            updated.draft = false
+        if action != nil, draftDocumentIDs.remove(doc.id) != nil { persistDraftIDs() }
+        mutateNoteFile(doc) {
+            $0.action = action?.rawValue
+            // Choosing a standing is saving: the draft flag clears with it.
+            if action != nil { $0.draft = false }
         }
-        guard updated.action != doc.action || updated.draft != doc.draft else { return }
-        do {
-            try updated.jsonData().write(to: updated.fileURL, options: .atomic)
-            index.rescan()
-        } catch {
-            showNote("Could not update the note: \(error.localizedDescription)")
-        }
+    }
+
+    // MARK: - Important (a binary standing, travelling in the file)
+
+    /// Marks the note Important or Normal — written into the file
+    /// itself, like the draft and action flags, so every device agrees.
+    /// Orthogonal to the action axis and to filing: it changes nothing
+    /// but the note's importance, and never touches the draft state.
+    func setImportant(_ isImportant: Bool, for doc: LiquidDoc) {
+        guard doc.important != isImportant else { return }
+        mutateNoteFile(doc) { $0.important = isImportant }
     }
 
     // MARK: - Filing (the system shared with Origami Text)
@@ -397,6 +432,16 @@ final class AppState {
     private(set) var filingFolders: [String] =
         UserDefaults.standard.stringArray(forKey: "filingFolders")
             ?? ["Work", "Personal", "Archived"]
+
+    /// Folder words that are no longer offered or shown under Files
+    /// because they belong to another axis. To Do is an Action now, so
+    /// it never appears as a filing folder — the raw and spaced spellings
+    /// are both caught.
+    static let hiddenFilingFolderNames: Set<String> = ["to do", "todo"]
+
+    static func isHiddenFilingFolder(_ name: String) -> Bool {
+        hiddenFilingFolderNames.contains(name.lowercased())
+    }
 
     func folder(for doc: LiquidDoc) -> String? {
         filedFolders[doc.id]
@@ -428,6 +473,7 @@ final class AppState {
         }
         append(filingFolders)
         append(filedFoldersInUse)
+        folders.removeAll(where: Self.isHiddenFilingFolder)
         folders.append(Self.archivedFolderName)
         return folders
     }
@@ -495,14 +541,7 @@ final class AppState {
             return
         }
         guard wanted != current else { return }
-        var updated = doc
-        updated.documentType = wanted
-        do {
-            try updated.jsonData().write(to: updated.fileURL, options: .atomic)
-            index.rescan()
-        } catch {
-            showNote("Could not update the note's kind: \(error.localizedDescription)")
-        }
+        mutateNoteFile(doc) { $0.documentType = wanted }
     }
 
     /// A new folder joins just above Archived, which keeps the last word.
@@ -851,9 +890,13 @@ final class AppState {
         // Filing is the reader's own, kept locally — set after the file
         // exists so the folder map has a document to point at.
         if let fileUnder { fileDocument(doc, under: fileUnder) }
-        index.rescan()
+        // Show the note at once: seat it in the index so the editor can
+        // resolve it immediately, land on it, then let the rescan (which
+        // scans the whole folder in the background) reconcile.
+        index.insert(doc)
         sidebarSelection = landing
         selectedDocID = id
+        index.rescan()
     }
 
     // MARK: - Library upkeep

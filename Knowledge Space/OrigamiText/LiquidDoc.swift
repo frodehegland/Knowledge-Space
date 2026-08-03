@@ -43,6 +43,12 @@ nonisolated struct LiquidDoc: Identifiable, Hashable, Sendable {
     /// travelling in the file like `draft`, so every device agrees; a
     /// token this app has never heard of is preserved verbatim.
     var action: String? = nil
+    /// The note's importance — a binary standing, orthogonal to the
+    /// action axis and to filing: `true` marks the note Important, its
+    /// row wearing an orange bullet; absent or `false` is the ordinary
+    /// Normal state. Travels in the file like `draft`, so every device
+    /// agrees.
+    var important: Bool = false
     /// Whose words these are, when they are not the author's own — the
     /// speaker a statement was lifted from a transcript for. `author`
     /// stays the person who made and exported the document; the named
@@ -592,6 +598,7 @@ extension LiquidDoc {
                          aiOnBehalf: raw.aiOnBehalf ?? false,
                          draft: raw.draft ?? false,
                          action: action,
+                         important: raw.important ?? false,
                          onBehalfOf: onBehalfOf,
                          documentType: documentType,
                          location: location,
@@ -629,6 +636,7 @@ extension LiquidDoc {
         var aiOnBehalf: Bool?
         var draft: Bool?
         var action: String?
+        var important: Bool?
         var onBehalfOf: String?
         var documentType: String?
         var location: String?

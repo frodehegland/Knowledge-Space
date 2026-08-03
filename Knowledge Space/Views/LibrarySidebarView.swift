@@ -27,6 +27,7 @@ struct LibrarySidebarView: View {
             List(selection: $state.sidebarSelection) {
                 ForEach(SidebarCatalog.sections(filedFolders: state.sidebarFiledFolders,
                                                 articlesLabel: state.articlesShelfLabel,
+                                                importantToDo: state.hasImportantToDo,
                                                 layout: state.sidebarLayout),
                         id: \.title) { section in
                     // The head of the column — Inbox and New Note —
@@ -37,7 +38,19 @@ struct LibrarySidebarView: View {
                         if section.title.isEmpty || !collapsed.contains(section.title) {
                         ForEach(state.shownPlaces(of: section.places)) { place in
                             HStack(spacing: 0) {
-                                Label(place.name, systemImage: place.systemImage)
+                                // The important-To-Do row wears the same
+                                // orange as the Important bullet, word and
+                                // icon alike; every other row is grey.
+                                if place.item == .importantToDo {
+                                    Label {
+                                        Text(place.name).foregroundStyle(.orange)
+                                    } icon: {
+                                        Image(systemName: place.systemImage)
+                                            .foregroundStyle(.orange)
+                                    }
+                                } else {
+                                    Label(place.name, systemImage: place.systemImage)
+                                }
                                 Spacer(minLength: 0)
                                 #if os(macOS)
                                 // Resting the pointer on People reveals a
@@ -60,8 +73,9 @@ struct LibrarySidebarView: View {
                                 }
                                 #endif
                             }
-                            // Light grey icons, not the accent blue.
-                            .listItemTint(SidebarCatalog.iconTint)
+                            // Light grey icons, not the accent blue — save
+                            // the important-To-Do row, which stands orange.
+                            .listItemTint(place.item == .importantToDo ? .orange : SidebarCatalog.iconTint)
                             .tag(place.item)
                             #if os(macOS)
                             .contextMenu {
@@ -344,9 +358,9 @@ enum AppGreys {
     private static let warmButtonText = Color.adaptive(
         light: Color(red: 74 / 255, green: 70 / 255, blue: 63 / 255),
         dark: Color(red: 216 / 255, green: 211 / 255, blue: 201 / 255))
-    // Cool: #c7ccd2 in light, #232831 in dark.
+    // Cool: #cfd5dd in light, #232831 in dark.
     private static let coolPage = Color.adaptive(
-        light: Color(red: 199 / 255, green: 204 / 255, blue: 210 / 255),
+        light: Color(red: 207 / 255, green: 213 / 255, blue: 221 / 255),
         dark: Color(red: 35 / 255, green: 40 / 255, blue: 49 / 255))
     private static let coolButton = Color.adaptive(
         light: Color(red: 186 / 255, green: 192 / 255, blue: 200 / 255),
