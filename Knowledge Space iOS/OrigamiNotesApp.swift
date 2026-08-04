@@ -460,6 +460,7 @@ final class NotesModel {
     /// and, having a standing, is no draft.
     func createNote(title: String = "Untitled", bodyText: String = "",
                     created: Date = .now, asToDo: Bool = false,
+                    important: Bool = false,
                     kind: LiquidDoc.DocumentType = .note) -> LiquidDoc? {
         guard let folderURL else {
             lastError = "No community folder is open. Choose the folder first."
@@ -494,6 +495,7 @@ final class NotesModel {
                             // decision made — such a note is no draft.
                             draft: !asToDo && kind == .note,
                             action: asToDo ? LiquidDoc.Action.toDo.rawValue : nil,
+                            important: important,
                             documentType: kind.rawValue,
                             location: currentPlace,
                             fileURL: folderURL.appendingPathComponent(id)
@@ -515,7 +517,8 @@ final class NotesModel {
     /// and place stay as captured; title and body are the user's.
     func save(_ doc: LiquidDoc, title: String, bodyText: String,
               kind: String? = nil,
-              action: LiquidDoc.Action? = nil, changesAction: Bool = false) {
+              action: LiquidDoc.Action? = nil, changesAction: Bool = false,
+              important: Bool? = nil) {
         let trimmedTitle = title.trimmingCharacters(in: .whitespaces)
         let body = LiquidDoc.parseBody(from: bodyText)
         // Title, body, the links the body implies, and — when the
@@ -536,6 +539,9 @@ final class NotesModel {
             updated.action = action?.rawValue
             if action != nil { updated.draft = false }
         }
+        // Important is a binary flag of its own, set only when the editor
+        // offers it; it carries in the file like the action standing.
+        if let important { updated.important = important }
         do {
             try updated.jsonData().write(to: updated.fileURL, options: .atomic)
         } catch {
@@ -633,16 +639,15 @@ struct NotesHomeView: View {
     /// above it.
     @State private var tab: NotesTab = .notes
 
-    /// The tabs over the list: everything, one action standing, or the
+    /// The tabs over the list: everything, the To Do standing, or the
     /// journal kind.
     enum NotesTab: String, CaseIterable, Identifiable {
-        case notes, toDo, inProgress, journal
+        case notes, toDo, journal
         var id: String { rawValue }
         var label: String {
             switch self {
-            case .notes: "Notes"
+            case .notes: "All"
             case .toDo: "To Do"
-            case .inProgress: "In Progress"
             case .journal: "Journal"
             }
         }
@@ -651,7 +656,6 @@ struct NotesHomeView: View {
             switch self {
             case .notes: true
             case .toDo: doc.actionValue == .toDo
-            case .inProgress: doc.actionValue == .inProgress
             case .journal: doc.documentType == LiquidDoc.DocumentType.journal.rawValue
             }
         }
@@ -828,10 +832,20 @@ struct NotesHomeView: View {
                     ForEach(group.notes) { doc in
                         HStack {
                             VStack(alignment: .leading, spacing: 2) {
-                                Text(doc.title)
-                                    .fontWeight(.medium)
-                                    .lineLimit(1)
-                                    .truncationMode(.tail)
+                                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                                    // A note marked Important wears a small
+                                    // orange bullet before its title.
+                                    if doc.important {
+                                        Image(systemName: "circle.fill")
+                                            .font(.system(size: 7))
+                                            .foregroundStyle(.orange)
+                                            .accessibilityLabel("Important")
+                                    }
+                                    Text(doc.title)
+                                        .fontWeight(.medium)
+                                        .lineLimit(2)
+                                        .truncationMode(.tail)
+                                }
                                 if let location = doc.location {
                                     Text(location)
                                         .font(.caption)
@@ -839,9 +853,9 @@ struct NotesHomeView: View {
                                         .lineLimit(1)
                                 }
                             }
-                            // Take the full row width so the single-line
-                            // title shows as many characters as fit before
-                            // it truncates, instead of wrapping.
+                            // Take the full row width so the title shows as
+                            // many characters as fit — up to two lines —
+                            // before it truncates.
                             .frame(maxWidth: .infinity, alignment: .leading)
                             // The bullet says the note has not yet left the
                             // phone: still uploading to iCloud, so the Mac
@@ -960,15 +974,12 @@ struct NewNoteView: View {
     @Environment(NotesModel.self) private var model
     @Environment(\.dismiss) private var dismiss
 
-    /// What the note is born as: a plain note, a journal entry, or an
-    /// inspiration — a reference caught in the wild, which may be
-    /// scanned in with the camera. Its To Do standing is a separate
-    /// axis, carried by the toggle below rather than the kind.
-    private enum NoteKind: String, CaseIterable {
-        case note = "Note"
-        case journal = "Journal"
-        // "Scan" in the picker; the kind it makes is still inspiration.
-        case inspiration = "Scan"
+    /// What the note is born as: a plain note, or an inspiration — a
+    /// reference scanned in with the camera, started by the Scan button
+    /// on the toggle line. Journal is not offered on the phone. To Do
+    /// and Important are separate axes, carried by their own toggles.
+    private enum NoteKind {
+        case note, inspiration
     }
 
     @State private var text = ""
@@ -977,6 +988,9 @@ struct NewNoteView: View {
     /// file, so it lists under To Do on every device, just as a spoken
     /// note's To Do toggle does.
     @State private var isToDo = false
+    /// Important — a binary flag of its own, orange like the Mac's
+    /// bullet, offered beside To Do.
+    @State private var isImportant = false
     @State private var scanning = false
     /// The progress indicator's words while a scan is being read —
     /// nil when idle.
@@ -1001,27 +1015,23 @@ struct NewNoteView: View {
                     .background(theme.background)
                     .clipShape(RoundedRectangle(cornerRadius: 12))
                     .focused($writing)
-                // The note's kind, chosen at its foot.
-                Picker("Kind", selection: $kind) {
-                    ForEach(NoteKind.allCases, id: \.self) { kind in
-                        Text(kind.rawValue)
-                    }
-                }
-                .pickerStyle(.segmented)
-                // Choosing Scan opens the camera straight away — one
-                // tap to capture, not two.
-                .onChange(of: kind) {
-                    if kind == .inspiration, pendingScan == nil, scanStage == nil {
-                        writing = false
-                        scanning = true
-                    }
-                }
-                // The To Do standing is its own axis — a plain note or a
-                // journal entry may be a To Do. A scan is a caught
-                // reference, not a task, so it offers no toggle.
-                if kind != .inspiration {
+                // Important, a Scan button, and To Do share one line, at
+                // the small size the kind picker used so all three fit:
+                // Important at the left, Scan in the middle, To Do at the
+                // right with its word beside the switch.
+                HStack {
+                    Toggle("Important", isOn: $isImportant)
+                        .fixedSize()
+                        .tint(.orange)
+                    Spacer()
+                    Button("Scan") { startScan() }
+                        .disabled(scanStage != nil)
+                    Spacer()
+                    Text("To Do")
                     Toggle("To Do", isOn: $isToDo)
+                        .labelsHidden()
                 }
+                .font(.footnote)
                 if kind == .inspiration {
                     if let foundBook {
                         // The book, as a citation card — this is the
@@ -1035,18 +1045,6 @@ struct NewNoteView: View {
                         // with the camera's dismissal.
                         noSourcePanel(pendingScan)
                     }
-                    // The camera path: a page, a poster, a whiteboard —
-                    // read on-device, placed if a book claims it, kept
-                    // regardless.
-                    Button {
-                        scanning = true
-                    } label: {
-                        Label(pendingScan == nil ? "Scan" : "Scan Again",
-                              systemImage: "camera.viewfinder")
-                            .frame(maxWidth: .infinity)
-                    }
-                    .buttonStyle(.bordered)
-                    .disabled(scanStage != nil)
                 }
             }
             .padding()
@@ -1197,6 +1195,14 @@ struct NewNoteView: View {
                     in: RoundedRectangle(cornerRadius: 12))
     }
 
+    /// The Scan button on the toggle line: makes this an inspiration and
+    /// opens the camera at once, one tap to capture.
+    private func startScan() {
+        kind = .inspiration
+        writing = false
+        scanning = true
+    }
+
     private func save() {
         // A scan whose book was found: file the book on the shelf with
         // its BibTeX and cite it — content in itself, so this stands
@@ -1217,10 +1223,7 @@ struct NewNoteView: View {
         switch kind {
         case .note:
             _ = model.createNote(title: parsed.title, bodyText: parsed.bodyText,
-                                 asToDo: isToDo)
-        case .journal:
-            _ = model.createNote(title: parsed.title, bodyText: parsed.bodyText,
-                                 asToDo: isToDo, kind: .journal)
+                                 asToDo: isToDo, important: isImportant)
         case .inspiration:
             // Saved without a scan: the words alone are the inspiration.
             _ = model.createNote(title: parsed.title, bodyText: parsed.bodyText,
@@ -1267,6 +1270,9 @@ struct NoteEditorView: View {
     /// control; the standing travels in the file and lists on every
     /// device.
     @State private var action: LiquidDoc.Action?
+    /// Important — a binary flag beside the action standing, orange like
+    /// the Mac's bullet; travels in the file.
+    @State private var isImportant = false
     @State private var loaded = false
     @State private var isVoiceNote = false
     /// Reading until the reader says Edit — the deliberate step keeps a
@@ -1313,14 +1319,21 @@ struct NoteEditorView: View {
                             }
                         }
                         .pickerStyle(.segmented)
-                        // The action standing — its own axis. "None" clears
-                        // it; any choice marks the note and lists it there
-                        // on every device.
-                        Picker("Action", selection: $action) {
-                            Text("None").tag(LiquidDoc.Action?.none)
-                            ForEach(LiquidDoc.Action.allCases, id: \.self) { standing in
-                                Text(standing.displayName).tag(LiquidDoc.Action?.some(standing))
-                            }
+                        // The same row as the writing sheet: Important at
+                        // the left in orange, To Do at the right with its
+                        // word beside the switch. On iOS the standing is a
+                        // plain To Do on/off — the other standings live on
+                        // the Mac.
+                        HStack {
+                            Toggle("Important", isOn: $isImportant)
+                                .fixedSize()
+                                .tint(.orange)
+                            Spacer()
+                            Text("To Do")
+                            Toggle("To Do", isOn: Binding(
+                                get: { action == .toDo },
+                                set: { action = $0 ? .toDo : nil }))
+                                .labelsHidden()
                         }
                     }
                 }
@@ -1354,6 +1367,7 @@ struct NoteEditorView: View {
             bodyText = doc.bodyEditingText
             kind = EditKind(documentType: doc.documentType)
             action = doc.actionValue
+            isImportant = doc.important
         }
         .onDisappear {
             if isEditing { saveIfNeeded() }
@@ -1372,6 +1386,7 @@ struct NoteEditorView: View {
         // whatever the body now says.
         let savedTitle = isVoiceNote ? TranscriptParser.title(for: bodyText) : title
         model.save(doc, title: savedTitle, bodyText: bodyText,
-                   kind: kind.rawValue, action: action, changesAction: true)
+                   kind: kind.rawValue, action: action, changesAction: true,
+                   important: isImportant)
     }
 }
