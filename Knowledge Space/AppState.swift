@@ -436,6 +436,11 @@ final class AppState {
         UserDefaults.standard.stringArray(forKey: "filingFolders")
             ?? ["Work", "Personal", "Archived"]
 
+    /// Drives the File section's Edit dialog. Transient UI state kept here,
+    /// not on the note options column, so a background rescan recreating
+    /// that column can't dismiss the dialog — it stays until the user is done.
+    var isEditingFilingFolders = false
+
     /// Folder words that are no longer offered or shown under Files
     /// because they belong to another axis. To Do is an Action now, so
     /// it never appears as a filing folder — the raw and spaced spellings
@@ -620,6 +625,30 @@ final class AppState {
            selected.caseInsensitiveCompare(name) == .orderedSame {
             sidebarSelection = .library
         }
+    }
+
+    /// The filing folders the Edit dialog offers to re-order and delete:
+    /// everything the note column lists as a folder, minus the structural
+    /// Archived (which always stays last) and the hidden axis-words.
+    var reorderableFilingFolders: [String] {
+        filingFolders.filter {
+            $0.caseInsensitiveCompare(Self.archivedFolderName) != .orderedSame
+                && !Self.isHiddenFilingFolder($0)
+        }
+    }
+
+    /// Re-orders the user's filing folders from the Edit dialog. Archived is
+    /// structural and stays last whatever the drag; hidden entries are kept
+    /// so persistence never silently drops them; the new order is saved.
+    func moveFilingFolders(fromOffsets: IndexSet, toOffset: Int) {
+        var movable = reorderableFilingFolders
+        movable.move(fromOffsets: fromOffsets, toOffset: toOffset)
+        let hidden = filingFolders.filter(Self.isHiddenFilingFolder)
+        let hasArchived = filingFolders.contains {
+            $0.caseInsensitiveCompare(Self.archivedFolderName) == .orderedSame
+        }
+        filingFolders = movable + hidden + (hasArchived ? [Self.archivedFolderName] : [])
+        UserDefaults.standard.set(filingFolders, forKey: "filingFolders")
     }
 
     /// Ctrl-click ▸ Delete File…: after confirmation, the document's

@@ -238,6 +238,16 @@ struct ContentView: View {
             }
         }
         .animation(.default, value: state.transientNote)
+        // The File section's Edit dialog is presented from here — a stable
+        // root — driven by AppState, so a background rescan recreating the
+        // note options column never tears it down. It stays until Done.
+        #if os(macOS)
+        .sheet(isPresented: Binding(
+            get: { state.isEditingFilingFolders },
+            set: { state.isEditingFilingFolders = $0 })) {
+            EditFilingFoldersSheet()
+        }
+        #endif
         // A theme change repaints the whole window: the colors are read
         // where they are used, so the window rebuilds around them.
         .id(state.theme)

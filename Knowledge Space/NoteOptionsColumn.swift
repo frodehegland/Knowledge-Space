@@ -176,6 +176,12 @@ struct NoteOptionsColumn: View {
                 .help("File the note away: it leaves the library's lists")
                 Spacer()
                 #if os(macOS)
+                Button("Edit") { state.isEditingFilingFolders = true }
+                    .buttonStyle(.plain)
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+                    .help("Re-order or remove your filing folders")
+                Spacer()
                 Button {
                     state.fileInNewFolder(doc)
                 } label: {
@@ -473,3 +479,56 @@ struct NoteOptionsColumn: View {
         }
     }
 }
+
+#if os(macOS)
+/// The Edit dialog behind the File section's Edit button: the user's own
+/// filing folders, dragged into the order they list in and removed one by
+/// one. Removing a folder only unfiles its notes — they stay in the
+/// library — matching the sidebar's Remove Folder. Filing is a local
+/// preference, so nothing here touches a document's file on disk.
+struct EditFilingFoldersSheet: View {
+    @Environment(AppState.self) private var state
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            List {
+                if state.reorderableFilingFolders.isEmpty {
+                    Text("No folders of your own yet. Use + in the File section to file a note under a new folder.")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                } else {
+                    ForEach(state.reorderableFilingFolders, id: \.self) { folder in
+                        HStack(spacing: 6) {
+                            Image(systemName: "line.3.horizontal")
+                                .foregroundStyle(.tertiary)
+                            Text(folder)
+                            Spacer()
+                            if state.canRemoveFilingFolder(folder) {
+                                Button(role: .destructive) {
+                                    state.removeFilingFolder(folder)
+                                } label: {
+                                    Image(systemName: "trash")
+                                }
+                                .buttonStyle(.borderless)
+                                .help("Remove “\(folder)” — its notes stay in the library")
+                            }
+                        }
+                        // The folder rows read a quarter smaller than the
+                        // system default, at the user's request.
+                        .font(.system(size: NSFont.systemFontSize * 0.75))
+                    }
+                    .onMove { state.moveFilingFolders(fromOffsets: $0, toOffset: $1) }
+                }
+            }
+            .navigationTitle("Edit Folders")
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { dismiss() }
+                }
+            }
+        }
+        .frame(minWidth: 320, minHeight: 360)
+    }
+}
+#endif

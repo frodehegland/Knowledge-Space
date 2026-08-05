@@ -436,11 +436,18 @@ extension LiquidDoc.Paragraph {
     /// paragraph links ("<uuid>#<paragraphID>" or origamitext://open/… URLs),
     /// which route back into the app via the `origamitext` scheme.
     nonisolated var renderedText: AttributedString {
+        Self.inlineMarkdown(displayText)
+    }
+
+    /// Inline markdown for an arbitrary line of text — bold, italic, code —
+    /// plus the same live links `renderedText` adds. Used by the reader's
+    /// block renderer to style a heading's or a list item's own words.
+    nonisolated static func inlineMarkdown(_ text: String) -> AttributedString {
         var attributed = (try? AttributedString(
-            markdown: displayText,
+            markdown: text,
             options: AttributedString.MarkdownParsingOptions(interpretedSyntax: .inlineOnlyPreservingWhitespace)
-        )) ?? AttributedString(displayText)
-        Self.addDetectedLinks(&attributed)
+        )) ?? AttributedString(text)
+        addDetectedLinks(&attributed)
         return attributed
     }
 

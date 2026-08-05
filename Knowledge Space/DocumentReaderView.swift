@@ -451,9 +451,18 @@ struct ParagraphView: View {
             .animation(.easeOut(duration: 0.6), value: isHighlighted)
         } else {
             VStack(alignment: .leading, spacing: 3) {
-                Text(shownText)
-                    .font(font)
-                    .lineSpacing((paragraph.effectiveHeading == nil ? 6 : 3) * scale)
+                // A paragraph pasted as a whole markdown block — several
+                // lines, list items, or a heading beyond the per-line
+                // parse's reach — is laid out block by block; the ordinary
+                // single line keeps its existing, already-correct path.
+                if MarkdownBlock.needsRendering(paragraph.text) {
+                    MarkdownBlocksView(text: paragraph.text, scale: scale,
+                                       flowed: flowed && !isAppendix)
+                } else {
+                    Text(shownText)
+                        .font(font)
+                        .lineSpacing((paragraph.effectiveHeading == nil ? 6 : 3) * scale)
+                }
             }
             .padding(4)
             .background(isHighlighted ? Color.yellow.opacity(0.35) : Color.clear,
@@ -543,6 +552,119 @@ struct ParagraphView: View {
         return .system(size: size * scale,
                        weight: paragraph.effectiveHeading == nil ? .regular : .bold,
                        design: .serif)
+    }
+}
+
+/// A block of pasted markdown the reader lays out itself. The per-line
+/// parse already turns "# ", "## ", "### " lines into headings and renders
+/// inline bold/italic; what it leaves literal — list markers, headings
+/// beyond H3, and any whole block pasted into a single paragraph — is
+/// interpreted here for display only. The file keeps its plain markdown.
+private struct MarkdownBlock: Identifiable {
+    enum Kind: Equatable { case heading(Int), bullet, ordered(Int), rule, prose }
+    let id = UUID()
+    let kind: Kind
+    let text: String
+
+    /// A single line carrying an unordered ("- ", "* ", "+ ") or ordered
+    /// ("3. ") list marker.
+    static func isListLine(_ line: String) -> Bool {
+        line.trimmingCharacters(in: .whitespaces)
+            .range(of: #"^([-*+]\s+|\d+\.\s+)"#, options: .regularExpression) != nil
+    }
+
+    /// Whether a paragraph's text carries block markdown the per-line parse
+    /// did not resolve: more than one line, a list marker, or a heading
+    /// prefix still literal in the text (the structured H1–H3 case has its
+    /// prefix stripped already, so it stays on the plain path).
+    static func needsRendering(_ text: String) -> Bool {
+        text.contains("\n")
+            || isListLine(text)
+            || text.trimmingCharacters(in: .whitespaces).hasPrefix("#")
+    }
+
+    static func parse(_ text: String) -> [MarkdownBlock] {
+        var blocks: [MarkdownBlock] = []
+        for rawLine in text.components(separatedBy: .newlines) {
+            let line = rawLine.trimmingCharacters(in: .whitespaces)
+            guard !line.isEmpty else { continue }
+            if line.range(of: #"^(-{3,}|\*{3,}|_{3,})$"#, options: .regularExpression) != nil {
+                blocks.append(.init(kind: .rule, text: ""))
+            } else if let m = line.range(of: #"^#{1,6}\s+"#, options: .regularExpression) {
+                let level = min(line[..<m.upperBound].filter { $0 == "#" }.count, 6)
+                blocks.append(.init(kind: .heading(level),
+                                    text: String(line[m.upperBound...]).trimmingCharacters(in: .whitespaces)))
+            } else if let m = line.range(of: #"^[-*+]\s+"#, options: .regularExpression) {
+                blocks.append(.init(kind: .bullet, text: String(line[m.upperBound...])))
+            } else if let m = line.range(of: #"^(\d+)\.\s+"#, options: .regularExpression) {
+                let number = Int(line[..<m.upperBound].filter(\.isNumber)) ?? 1
+                blocks.append(.init(kind: .ordered(number), text: String(line[m.upperBound...])))
+            } else {
+                blocks.append(.init(kind: .prose, text: line))
+            }
+        }
+        return blocks
+    }
+}
+
+/// Lays out a paragraph's markdown as blocks — headings (H1–H6), unordered
+/// and ordered lists with a hanging indent, rules, and prose — each block's
+/// own words carrying inline bold/italic and live links.
+private struct MarkdownBlocksView: View {
+    let text: String
+    let scale: CGFloat
+    let flowed: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6 * scale) {
+            ForEach(MarkdownBlock.parse(text)) { block in
+                switch block.kind {
+                case .rule:
+                    Divider()
+                case .heading(let level):
+                    Text(LiquidDoc.Paragraph.inlineMarkdown(block.text))
+                        .font(.system(size: headingSize(level) * scale, weight: .bold, design: .serif))
+                case .bullet:
+                    listRow("•", block.text)
+                case .ordered(let number):
+                    listRow("\(number).", block.text)
+                case .prose:
+                    Text(prose(block.text))
+                        .font(.system(size: 17 * scale, design: .serif))
+                        .lineSpacing(6 * scale)
+                }
+            }
+        }
+    }
+
+    private func prose(_ text: String) -> AttributedString {
+        let rendered = LiquidDoc.Paragraph.inlineMarkdown(text)
+        return flowed ? FlowBreaker.flowed(rendered) : rendered
+    }
+
+    private func listRow(_ marker: String, _ text: String) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8 * scale) {
+            Text(marker)
+                .font(.system(size: 17 * scale, design: .serif))
+                .foregroundStyle(.secondary)
+                .frame(minWidth: 16 * scale, alignment: .trailing)
+            Text(LiquidDoc.Paragraph.inlineMarkdown(text))
+                .font(.system(size: 17 * scale, design: .serif))
+                .lineSpacing(6 * scale)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(.leading, 6 * scale)
+    }
+
+    private func headingSize(_ level: Int) -> CGFloat {
+        switch level {
+        case 1: 28
+        case 2: 23
+        case 3: 19
+        case 4: 17
+        case 5: 16
+        default: 15
+        }
     }
 }
 
