@@ -6,6 +6,19 @@
     {
       "layers" : [
         {
+          "hidden" : false,
+          "image-name" : "ks-glow 2.png",
+          "name" : "ks-glow 2",
+          "position" : {
+            "scale" : 1.4,
+            "translation-in-points" : [
+              -3,
+              11
+            ]
+          }
+        },
+        {
+          "hidden" : false,
           "image-name" : "ks-glow.png",
           "name" : "ks-glow",
           "opacity" : 1,

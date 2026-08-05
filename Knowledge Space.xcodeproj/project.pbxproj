@@ -8,12 +8,12 @@
 
 /* Begin PBXBuildFile section */
 		5F62B05D3013675400EEF496 /* kspgal.icon in Resources */ = {isa = PBXBuildFile; fileRef = 5F62B05B3013675400EEF496 /* kspgal.icon */; };
-		5F79299F301E4B73003100EF /* kspgalmac.icon in Resources */ = {isa = PBXBuildFile; fileRef = 5F79299E301E4B73003100EF /* kspgalmac.icon */; };
-		5F7929A0301E4B73003100EF /* kspgalmac.icon in Resources */ = {isa = PBXBuildFile; fileRef = 5F79299E301E4B73003100EF /* kspgalmac.icon */; };
 		5F7929A2301E4B7C003100EF /* kspgalvis.icon in Resources */ = {isa = PBXBuildFile; fileRef = 5F7929A1301E4B7C003100EF /* kspgalvis.icon */; };
 		5F792CC2301FDC10003100EF /* WidgetKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 5F792CC1301FDC10003100EF /* WidgetKit.framework */; };
 		5F792CC4301FDC10003100EF /* SwiftUI.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 5F792CC3301FDC10003100EF /* SwiftUI.framework */; };
 		5F792CD1301FDC10003100EF /* Augmented LibraryExtension.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 5F792CBF301FDC10003100EF /* Augmented LibraryExtension.appex */; platformFilters = (xros, ); settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		5F793F5B30236D04003100EF /* kspgalmac.icon in Resources */ = {isa = PBXBuildFile; fileRef = 5F793F5A30236D04003100EF /* kspgalmac.icon */; };
+		5F793F5C30236D04003100EF /* kspgalmac.icon in Resources */ = {isa = PBXBuildFile; fileRef = 5F793F5A30236D04003100EF /* kspgalmac.icon */; };
 		5FAFC518301A3F1000FDBED8 /* Knowledge Space EXT.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 5FAFC500301A3F1000FDBED8 /* Knowledge Space EXT.appex */; platformFilters = (macos, ); settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		5FE0761E30153AD40039E5B8 /* kspgal-vision.icon in Resources */ = {isa = PBXBuildFile; fileRef = 5FE0761D30153AD40039E5B8 /* kspgal-vision.icon */; };
 /* End PBXBuildFile section */
@@ -52,11 +52,11 @@
 		000000000000000000000120 /* Knowledge Space.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Knowledge Space.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 		5F1064A3300FE10F002C1FE1 /* Knowledge Space iOS.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Knowledge Space iOS.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 		5F62B05B3013675400EEF496 /* kspgal.icon */ = {isa = PBXFileReference; lastKnownFileType = folder.iconcomposer.icon; path = kspgal.icon; sourceTree = "<group>"; };
-		5F79299E301E4B73003100EF /* kspgalmac.icon */ = {isa = PBXFileReference; lastKnownFileType = folder.iconcomposer.icon; path = kspgalmac.icon; sourceTree = "<group>"; };
 		5F7929A1301E4B7C003100EF /* kspgalvis.icon */ = {isa = PBXFileReference; lastKnownFileType = folder.iconcomposer.icon; path = kspgalvis.icon; sourceTree = "<group>"; };
 		5F792CBF301FDC10003100EF /* Augmented LibraryExtension.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = "Augmented LibraryExtension.appex"; sourceTree = BUILT_PRODUCTS_DIR; };
 		5F792CC1301FDC10003100EF /* WidgetKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = WidgetKit.framework; path = System/Library/Frameworks/WidgetKit.framework; sourceTree = SDKROOT; };
 		5F792CC3301FDC10003100EF /* SwiftUI.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = SwiftUI.framework; path = System/Library/Frameworks/SwiftUI.framework; sourceTree = SDKROOT; };
+		5F793F5A30236D04003100EF /* kspgalmac.icon */ = {isa = PBXFileReference; lastKnownFileType = folder.iconcomposer.icon; path = kspgalmac.icon; sourceTree = "<group>"; };
 		5FAFC500301A3F1000FDBED8 /* Knowledge Space EXT.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = "Knowledge Space EXT.appex"; sourceTree = BUILT_PRODUCTS_DIR; };
 		5FE0761D30153AD40039E5B8 /* kspgal-vision.icon */ = {isa = PBXFileReference; lastKnownFileType = folder.iconcomposer.icon; path = "kspgal-vision.icon"; sourceTree = "<group>"; };
 /* End PBXFileReference section */
@@ -188,10 +188,10 @@
 				5F62B05B3013675400EEF496 /* kspgal.icon */,
 				5FE0761D30153AD40039E5B8 /* kspgal-vision.icon */,
 				5FAFC501301A3F1000FDBED8 /* Knowledge Space EXT */,
-				5F79299E301E4B73003100EF /* kspgalmac.icon */,
 				5F7929A1301E4B7C003100EF /* kspgalvis.icon */,
 				5F792CC5301FDC10003100EF /* Augmented Library */,
 				5F792CC0301FDC10003100EF /* Frameworks */,
+				5F793F5A30236D04003100EF /* kspgalmac.icon */,
 				000000000000000000000020 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -346,16 +346,16 @@
 		000000000000000140000000 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			files = (
+				5F793F5C30236D04003100EF /* kspgalmac.icon in Resources */,
 				5FE0761E30153AD40039E5B8 /* kspgal-vision.icon in Resources */,
 				5F7929A2301E4B7C003100EF /* kspgalvis.icon in Resources */,
 				5F62B05D3013675400EEF496 /* kspgal.icon in Resources */,
-				5F7929A0301E4B73003100EF /* kspgalmac.icon in Resources */,
 			);
 		};
 		5F1064A1300FE10F002C1FE1 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			files = (
-				5F79299F301E4B73003100EF /* kspgalmac.icon in Resources */,
+				5F793F5B30236D04003100EF /* kspgalmac.icon in Resources */,
 			);
 		};
 		5F792CBD301FDC10003100EF /* Resources */ = {
@@ -548,8 +548,8 @@
 		000000000000000111000000 /* Debug configuration for PBXNativeTarget "Knowledge Space" */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
-				ASSETCATALOG_COMPILER_APPICON_NAME = kspgalvis;
-				"ASSETCATALOG_COMPILER_APPICON_NAME[sdk=xros*]" = kspgalvis;
+				ASSETCATALOG_COMPILER_APPICON_NAME = kspgalmac;
+				"ASSETCATALOG_COMPILER_APPICON_NAME[sdk=xros*]" = kspgalmac;
 				ASSETCATALOG_COMPILER_INCLUDE_ALL_APPICON_ASSETS = YES;
 				AUTOMATION_APPLE_EVENTS = NO;
 				CODE_SIGN_ENTITLEMENTS = "Knowledge Space/Knowledge Space.entitlements";
@@ -619,9 +619,9 @@
 		000000000000000112000000 /* Release configuration for PBXNativeTarget "Knowledge Space" */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
-				ASSETCATALOG_COMPILER_APPICON_NAME = kspgalvis;
+				ASSETCATALOG_COMPILER_APPICON_NAME = kspgalmac;
 				"ASSETCATALOG_COMPILER_APPICON_NAME[sdk=macosx*]" = kspgalmac;
-				"ASSETCATALOG_COMPILER_APPICON_NAME[sdk=xros*]" = kspgalvis;
+				"ASSETCATALOG_COMPILER_APPICON_NAME[sdk=xros*]" = kspgalmac;
 				ASSETCATALOG_COMPILER_INCLUDE_ALL_APPICON_ASSETS = YES;
 				AUTOMATION_APPLE_EVENTS = NO;
 				CODE_SIGN_ENTITLEMENTS = "Knowledge Space/Knowledge Space.entitlements";
@@ -691,8 +691,8 @@
 		5F1064AB300FE10F002C1FE1 /* Debug configuration for PBXNativeTarget "Knowledge Space iOS" */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
-				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
-				"ASSETCATALOG_COMPILER_APPICON_NAME[sdk=iphoneos*]" = AppIcon;
+				ASSETCATALOG_COMPILER_APPICON_NAME = kspgalmac;
+				"ASSETCATALOG_COMPILER_APPICON_NAME[sdk=iphoneos*]" = kspgalmac;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				ASSETCATALOG_COMPILER_INCLUDE_ALL_APPICON_ASSETS = YES;
 				CODE_SIGN_STYLE = Automatic;
@@ -736,8 +736,8 @@
 		5F1064AC300FE10F002C1FE1 /* Release configuration for PBXNativeTarget "Knowledge Space iOS" */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
-				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
-				"ASSETCATALOG_COMPILER_APPICON_NAME[sdk=iphoneos*]" = AppIcon;
+				ASSETCATALOG_COMPILER_APPICON_NAME = kspgalmac;
+				"ASSETCATALOG_COMPILER_APPICON_NAME[sdk=iphoneos*]" = kspgalmac;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				ASSETCATALOG_COMPILER_INCLUDE_ALL_APPICON_ASSETS = YES;
 				CODE_SIGN_STYLE = Automatic;

@@ -483,6 +483,29 @@ private struct LocationsSettingsView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
+            Section {
+                if state.localities.localities.isEmpty {
+                    Text("No named localities yet. Name one on the phone — Settings ▸ Name Present Locality — and it appears here once the folder syncs.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                ForEach(state.localities.localities) { locality in
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(locality.name)
+                        if !locality.tail.isEmpty {
+                            Text(locality.tail)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
+            } header: {
+                Text("Named Localities")
+            } footer: {
+                Text("Nicknames you gave places on the phone, kept with the locality found there. Read-only on the Mac — you can refer to a nickname and the system knows where it is; naming happens on the phone, where the precise fix is taken.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
         }
         .formStyle(.grouped)
         .onAppear(perform: reload)

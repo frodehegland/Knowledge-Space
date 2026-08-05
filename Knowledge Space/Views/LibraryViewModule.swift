@@ -533,6 +533,17 @@ struct DocumentListView: View {
                                         // as a column beside the words.
                                         HStack(alignment: .top, spacing: 4) {
                                             closeToggle
+                                            // The open note wears the same
+                                            // orange Important bullet its
+                                            // closed row does, so the mark
+                                            // does not vanish when it opens.
+                                            if entry.doc.important {
+                                                Image(systemName: "circle.fill")
+                                                    .font(.system(size: 7))
+                                                    .foregroundStyle(.orange)
+                                                    .accessibilityLabel("Important")
+                                                    .padding(.top, 6)
+                                            }
                                             // A note writes; every other
                                             // kind — a transcript, a
                                             // source — reads. Both carry

@@ -37,6 +37,9 @@ final class AppState {
     /// The community's contact records — the same People.json Digital
     /// Letters and the phone read and write in the shared folder.
     let people = PersonDirectory()
+    /// The named-locality registry the phone publishes into the folder —
+    /// read-only here; the Mac refers to nicknames but does not add them.
+    let localities = LocalityDirectory()
     #if os(macOS)
     /// The portrait pipeline carried over from Digital Letters: photos
     /// kept untouched, cartoons drawn by Image Playground.
@@ -1076,6 +1079,8 @@ final class AppState {
             people.upsert(me)
         }
         people.attach(folder: folder)
+        // The nickname registry the phone publishes — read-only here.
+        localities.attach(folder: folder)
         if people.communityWriteFailed {
             showNote("Contact information could not be written to the shared folder — choose the folder again to renew write access.")
         }

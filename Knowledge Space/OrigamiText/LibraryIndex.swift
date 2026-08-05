@@ -140,19 +140,37 @@ final class LibraryIndex {
         let generation = scanGeneration
         isScanning = true
         Task.detached(priority: .userInitiated) {
-            let result = LibraryScanner.scan(folder: folderURL)
+            // Two passes. The first reads and decodes the folder — in
+            // parallel across cores — and publishes everything the lists
+            // and reader need (ids, backlinks, revisions, the timeline),
+            // so the library appears as soon as the files are in. The
+            // second computes person mentions, a whole-folder text scan
+            // that powers only the per-person "mentioned in" lists; it
+            // used to run before anything was shown, holding the whole
+            // library behind the slowest part.
+            let core = await LibraryScanner.scanCore(folder: folderURL)
             await MainActor.run {
                 guard generation == self.scanGeneration else { return }
-                self.allByID = result.byID
-                self.fullBacklinks = result.backlinks
-                self.fullTimeline = result.timeline
-                self.fullMentions = result.mentions
-                self.revisionOf = result.revisionOf
-                self.unreadableFiles = result.unreadable
-                self.supersededIDs = Set(result.revisionOf.keys)
-                self.retractedIDs = result.retractedIDs
+                self.allByID = core.byID
+                self.fullBacklinks = core.backlinks
+                self.fullTimeline = core.timeline
+                self.revisionOf = core.revisionOf
+                self.unreadableFiles = core.unreadable
+                self.supersededIDs = Set(core.revisionOf.keys)
+                self.retractedIDs = core.retractedIDs
+                // Leave the previous scan's mentions in place until the
+                // second pass replaces them, so nothing flickers to empty.
                 self.applyArchiveFilter()
                 self.isScanning = false
+            }
+
+            let mentions = LibraryScanner.mentions(in: core.timeline, folder: folderURL)
+            await MainActor.run {
+                // A newer scan may have started (and finished) while this
+                // one computed mentions — its results win.
+                guard generation == self.scanGeneration else { return }
+                self.fullMentions = mentions
+                self.applyArchiveFilter()
             }
         }
     }
@@ -201,17 +219,23 @@ nonisolated enum KnowledgeSpaceFolders {
 }
 
 nonisolated enum LibraryScanner {
-    struct Result: Sendable {
+    /// Phase one's yield: everything the lists and reader need, without
+    /// the person-mention scan — which the index computes in a second
+    /// pass so it never holds up the library appearing.
+    struct CoreResult: Sendable {
         var byID: [String: IndexEntry] = [:]
         var backlinks: [String: [BacklinkRef]] = [:]
         var revisionOf: [String: String] = [:]
         var retractedIDs: Set<String> = []
         var timeline: [IndexEntry] = []
         var unreadable: [UnreadableFile] = []
-        /// Card id → the documents whose words name that card's person,
-        /// newest first. Matched against the card's display name, its
-        /// credited author, and every alias it carries.
-        var mentions: [String: [String]] = [:]
+    }
+
+    /// One file's read: either a decoded document with the modification
+    /// date used to settle id collisions, or the reason it wouldn't read.
+    private enum FileOutcome: Sendable {
+        case decoded(doc: LiquidDoc, modDate: Date)
+        case unreadable(UnreadableFile)
     }
 
     /// The folder often lives in iCloud Drive: a file another device
@@ -268,8 +292,12 @@ nonisolated enum LibraryScanner {
         return count
     }
 
-    static func scan(folder: URL) -> Result {
-        var result = Result()
+    /// Reads and decodes the whole folder, in parallel across cores — a
+    /// large community folder is thousands of independent files, and
+    /// decoding them one at a time on a single thread was the bulk of the
+    /// launch wait — then builds the id map, backlinks, and timeline.
+    static func scanCore(folder: URL) async -> CoreResult {
+        var result = CoreResult()
         requestICloudDownloads(in: folder)
         guard let enumerator = FileManager.default.enumerator(
             at: folder,
@@ -277,21 +305,37 @@ nonisolated enum LibraryScanner {
             options: [.skipsHiddenFiles, .skipsPackageDescendants]
         ) else { return result }
 
-        var docs: [LiquidDoc] = []
-        var modificationDates: [String: Date] = [:]
-        var duplicateIDs: Set<String> = []
-
+        // A cheap directory walk to gather the document URLs; the costly
+        // read-and-decode of each then runs concurrently below.
+        var urls: [URL] = []
         for case let url as URL in enumerator {
             if KnowledgeSpaceFolders.isExcludedScanDirectory(url) {
                 enumerator.skipDescendants()
                 continue
             }
             guard LiquidDoc.isDocumentFile(url) else { continue }
-            do {
-                let data = try Data(contentsOf: url)
-                let doc = try LiquidDoc.decode(data: data, fileURL: url)
-                let modDate = (try? url.resourceValues(forKeys: [.contentModificationDateKey])
-                    .contentModificationDate) ?? .distantPast
+            urls.append(url)
+        }
+
+        let outcomes: [FileOutcome] = await withTaskGroup(of: FileOutcome.self) { group in
+            for url in urls {
+                group.addTask { decode(url) }
+            }
+            var collected: [FileOutcome] = []
+            collected.reserveCapacity(urls.count)
+            for await outcome in group { collected.append(outcome) }
+            return collected
+        }
+
+        var docs: [LiquidDoc] = []
+        var modificationDates: [String: Date] = [:]
+        var duplicateIDs: Set<String> = []
+
+        for outcome in outcomes {
+            switch outcome {
+            case .unreadable(let file):
+                result.unreadable.append(file)
+            case .decoded(let doc, let modDate):
                 if let existingDate = modificationDates[doc.id] {
                     // Two files claim the same id: keep the newer one, flag both.
                     duplicateIDs.insert(doc.id)
@@ -304,8 +348,6 @@ nonisolated enum LibraryScanner {
                     modificationDates[doc.id] = modDate
                     docs.append(doc)
                 }
-            } catch {
-                result.unreadable.append(UnreadableFile(fileURL: url, reason: error.localizedDescription))
             }
         }
 
@@ -324,8 +366,21 @@ nonisolated enum LibraryScanner {
         }
 
         result.timeline = result.byID.values.sorted { $0.doc.listedDate < $1.doc.listedDate }
-        result.mentions = mentions(in: result.timeline, folder: folder)
         return result
+    }
+
+    /// Reads one file off the shared pool: its decoded document and
+    /// modification date, or why it could not be read.
+    private static func decode(_ url: URL) -> FileOutcome {
+        do {
+            let data = try Data(contentsOf: url)
+            let doc = try LiquidDoc.decode(data: data, fileURL: url)
+            let modDate = (try? url.resourceValues(forKeys: [.contentModificationDateKey])
+                .contentModificationDate) ?? .distantPast
+            return .decoded(doc: doc, modDate: modDate)
+        } catch {
+            return .unreadable(UnreadableFile(fileURL: url, reason: error.localizedDescription))
+        }
     }
 
     /// Every person, found by name in the documents' words — contact
@@ -334,8 +389,8 @@ nonisolated enum LibraryScanner {
     /// Each matches on the display name, credited author or credit name,
     /// other names, and aliases, whole words only — "Ted" never matches
     /// "quoted".
-    private static func mentions(in timeline: [IndexEntry],
-                                 folder: URL) -> [String: [String]] {
+    static func mentions(in timeline: [IndexEntry],
+                         folder: URL) -> [String: [String]] {
         var nameSets: [(cardID: String, names: [String])] = []
         func nameSet(id: String, names: [String]) {
             var kept: [String] = []

@@ -432,6 +432,9 @@ struct VoiceCaptureView: View {
     /// Checked, the spoken note is born a To Do — the standing travels
     /// in the file, so it lists under To Do on every device.
     @State private var isToDo = false
+    /// Important — a binary flag of its own, orange like the Mac's and
+    /// like the typing sheet's; it carries in the file beside the standing.
+    @State private var isImportant = false
 
     private var isRecording: Bool { recorder.state == .recording }
 
@@ -466,6 +469,10 @@ struct VoiceCaptureView: View {
                     .padding(.horizontal)
 
                 Toggle("To Do", isOn: $isToDo)
+                    .padding(.horizontal)
+
+                Toggle("Important", isOn: $isImportant)
+                    .tint(.orange)
                     .padding(.horizontal)
 
                 recordButton
@@ -562,7 +569,8 @@ struct VoiceCaptureView: View {
         guard let doc = model.createNote(title: parsed.title,
                                          bodyText: parsed.bodyText,
                                          created: captureDate ?? .now,
-                                         asToDo: isToDo) else {
+                                         asToDo: isToDo,
+                                         important: isImportant) else {
             // The reason is in model.lastError, shown by the home view.
             dismiss()
             return

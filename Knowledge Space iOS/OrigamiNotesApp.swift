@@ -43,10 +43,11 @@ private enum KeyboardPrewarmer {
 /// the format document and this contract together.
 private nonisolated enum CaptureContract {
     /// Every top-level key a freshly captured note may carry — `action`
-    /// when the note is checked To Do at capture.
+    /// when the note is checked To Do at capture, `important` when it is
+    /// checked Important.
     static let allowedKeys: Set<String> = [
         "about", "format", "id", "title", "author", "created",
-        "body", "links", "draft", "action", "documentType", "location",
+        "body", "links", "draft", "action", "important", "documentType", "location",
     ]
     /// The keys the standard requires of every text document.
     static let requiredKeys: Set<String> = [
@@ -121,12 +122,25 @@ enum NotesTheme: String, CaseIterable, Identifiable {
         case .gentle: Color(uiColor: .systemGroupedBackground)
         case .darker: Color(white: 0.86)
         case .highContrast: .white
+        // Warm and Cool share the same neutral light shade (#e5e4e1),
+        // keeping their own darker tints for the system's dark appearance.
         case .warm: .themeAdaptive(
-            light: Color(red: 220 / 255, green: 215 / 255, blue: 206 / 255),
+            light: Color(red: 229 / 255, green: 228 / 255, blue: 225 / 255),
             dark: Color(red: 45 / 255, green: 42 / 255, blue: 38 / 255))
         case .cool: .themeAdaptive(
-            light: Color(red: 199 / 255, green: 204 / 255, blue: 210 / 255),
+            light: Color(red: 229 / 255, green: 228 / 255, blue: 225 / 255),
             dark: Color(red: 35 / 255, green: 40 / 255, blue: 49 / 255))
+        }
+    }
+
+    /// The colour text takes in the lists and the reader: black in a
+    /// light appearance so every word reads solid, white only where Warm
+    /// and Cool follow the system into dark. The fixed themes are always
+    /// light, so always black.
+    var readingText: Color {
+        switch self {
+        case .warm, .cool: .themeAdaptive(light: .black, dark: .white)
+        default: .black
         }
     }
 }
@@ -239,6 +253,7 @@ final class NotesModel {
             log.error("openFolder: bookmark failed: \(error.localizedDescription)")
         }
         folderURL = url
+        MyPlaces.shared.attach(folder: url)
         rescan()
     }
 
@@ -251,6 +266,7 @@ final class NotesModel {
             return
         }
         folderURL = url
+        MyPlaces.shared.attach(folder: url)
         rescan()
     }
 
@@ -384,6 +400,20 @@ final class NotesModel {
         // scan never reads blind: it asks each file's download status,
         // reads only what is already here, and requests the rest,
         // reporting how many are still coming so the caller retries.
+        // The phone shows only what its user wrote, and a document's
+        // address — which is also its file name — begins with the
+        // author's person prefix ("f.hegla."). Ownership is read from the
+        // name, before anything is downloaded or decoded: the community
+        // folder holds thousands of others' documents, and fetching and
+        // parsing all of them to keep one person's handful is what made
+        // loading crawl. Identity cards are the exception — spotted by
+        // name and kept folder-wide so any card can still be adopted.
+        // (Legacy UUID-named notes carry no prefix; the phone only ever
+        // writes address-named files, so its own notes always match.)
+        let ownPrefix = author.isEmpty
+            ? nil
+            : LiquidAddress.personPrefix(author: author).lowercased() + "."
+        let cardSuffix = ".card." + LiquidDoc.fileExtension
         let keys: [URLResourceKey] = [.isRegularFileKey,
                                       .ubiquitousItemDownloadingStatusKey]
         let enumerator = FileManager.default.enumerator(
@@ -392,6 +422,12 @@ final class NotesModel {
         var result = ScanResult()
         while let url = enumerator?.nextObject() as? URL {
             guard LiquidDoc.isDocumentFile(url) else { continue }
+            // Skip other people's documents by name alone — no download,
+            // no decode. Cards are always kept, so identity still works.
+            let name = url.lastPathComponent.lowercased()
+            let isCard = name.hasSuffix(cardSuffix)
+            let isOwnByName = ownPrefix.map(name.hasPrefix) ?? false
+            guard isCard || isOwnByName else { continue }
             let status = (try? url.resourceValues(
                 forKeys: [.ubiquitousItemDownloadingStatusKey]))?
                 .ubiquitousItemDownloadingStatus
@@ -708,6 +744,13 @@ struct NotesHomeView: View {
                         } label: {
                             Label("Choose Shared Folder…", systemImage: "folder")
                         }
+                        // Name where you are now — a nickname kept with the
+                        // automatic locality, so notes made here carry it.
+                        Button {
+                            namingPlaces = true
+                        } label: {
+                            Label("Name Present Locality", systemImage: "mappin.and.ellipse")
+                        }
                         Picker("Appearance", selection: $themeRaw) {
                             ForEach(NotesTheme.allCases) { option in
                                 Text(option.label).tag(option.rawValue)
@@ -755,7 +798,7 @@ struct NotesHomeView: View {
             NewNoteView()
         }
         .sheet(isPresented: $namingPlaces) {
-            MyPlacesView()
+            MyPlacesView(startNaming: true)
         }
         .alert("Your Card", isPresented: $choosingCard) {
             ForEach(model.cards) { card in
@@ -893,6 +936,8 @@ struct NotesHomeView: View {
         // Plain, edge-to-edge rows rather than inset-grouped cards, so the
         // title uses the full screen width instead of a narrow centred card.
         .listStyle(.plain)
+        // Every word in the list reads black in a light appearance.
+        .foregroundStyle(theme.readingText)
         .overlay {
             if notesByDay.isEmpty {
                 ContentUnavailableView(
@@ -1344,8 +1389,8 @@ struct NoteEditorView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        // The note reads on the theme's background — tinted for Warm and
-        // Cool, dark with them when the system is dark.
+        // Every word of the note reads black in a light appearance.
+        .foregroundStyle(theme.readingText)
         .background(theme.background.ignoresSafeArea())
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {

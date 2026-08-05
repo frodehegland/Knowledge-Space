@@ -145,3 +145,56 @@ final class PlaceDirectory {
         try? data.write(to: Self.fileURL, options: .atomic)
     }
 }
+
+/// One named locality the phone published into the community folder — a
+/// nickname the user gave a spot, kept with the automatic locality the
+/// reverse-geocode found and the precise fix taken at naming. The field
+/// shape matches the phone's `MyPlaces.Record`, so the shared
+/// `Localities.json` decodes on either platform.
+nonisolated struct Locality: Codable, Identifiable, Hashable, Sendable {
+    var id: UUID
+    var name: String        // the nickname the user chose
+    var latitude: Double
+    var longitude: Double
+    var tail: String        // "Wimbledon, London, United Kingdom"
+
+    /// The whole stamp a note from here carries — nickname, then the
+    /// surroundings — matching the phone's `stamp`.
+    var stamp: String { tail.isEmpty ? name : "\(name), \(tail)" }
+
+    var coordinate: CLLocationCoordinate2D {
+        CLLocationCoordinate2D(latitude: latitude, longitude: longitude)
+    }
+}
+
+/// The named-locality registry as the Mac sees it: **read-only**. Naming
+/// takes a precise on-device fix and so happens only on the phone, which
+/// publishes `Localities.json` into the community folder; the Mac reads
+/// it so the user can refer to a nickname and the system knows where it
+/// is. Adding on the Mac is deliberately not offered yet.
+@MainActor @Observable
+final class LocalityDirectory {
+    private(set) var localities: [Locality] = []
+
+    nonisolated static let communityFileName = "Localities.json"
+
+    /// Reads the registry the phone published into the open folder.
+    func attach(folder: URL) {
+        let url = folder.appendingPathComponent(Self.communityFileName)
+        guard let data = try? Data(contentsOf: url),
+              let decoded = try? JSONDecoder().decode([Locality].self, from: data)
+        else { localities = []; return }
+        localities = decoded.sorted {
+            $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
+        }
+    }
+
+    /// The locality a nickname refers to, so a reference to "the studio"
+    /// resolves to where it is. Matches the chosen name, case-insensitively.
+    func locality(named name: String) -> Locality? {
+        let trimmed = name.trimmingCharacters(in: .whitespaces)
+        return localities.first {
+            $0.name.caseInsensitiveCompare(trimmed) == .orderedSame
+        }
+    }
+}

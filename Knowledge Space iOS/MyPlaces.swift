@@ -38,8 +38,32 @@ final class MyPlaces {
 
     private(set) var records: [Record] = []
 
+    /// The community folder's copy, once a folder is open — the readable
+    /// registry the Mac reads to know a nickname's locality. Naming still
+    /// happens only on the phone.
+    private var communityURL: URL?
+
+    /// The file name the Mac looks for in the community folder.
+    nonisolated static let communityFileName = "Localities.json"
+
     init() {
         load()
+    }
+
+    /// Points the store at an open community folder: any records already
+    /// there (from another phone) are folded in, then the merged registry
+    /// is published so the folder holds the fullest picture.
+    func attach(folder: URL) {
+        let url = folder.appendingPathComponent(Self.communityFileName)
+        communityURL = url
+        if let data = try? Data(contentsOf: url),
+           let arrived = try? JSONDecoder().decode([Record].self, from: data) {
+            for record in arrived where !records.contains(where: { $0.id == record.id }) {
+                records.append(record)
+            }
+            records.sort { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+        }
+        save()
     }
 
     /// The stamp for a capture made near a named place — the nearest
@@ -101,6 +125,11 @@ final class MyPlaces {
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         guard let data = try? encoder.encode(records) else { return }
         try? data.write(to: Self.fileURL, options: .atomic)
+        // Publish the readable registry into the community folder too, so
+        // the Mac can refer to the nicknames and know where they are.
+        if let communityURL {
+            try? data.write(to: communityURL, options: .atomic)
+        }
     }
 }
 
@@ -134,10 +163,16 @@ private final class PreciseFixFinder: NSObject, CLLocationManagerDelegate {
 /// where the phone is — then the chosen name stands in for the
 /// neighbourhood on every note made there.
 struct MyPlacesView: View {
+    /// Opened straight into naming from Settings ("Name Present
+    /// Locality"): take the precise fix at once so the user lands on the
+    /// name field, without a second tap.
+    var startNaming = false
+
     @Environment(\.dismiss) private var dismiss
 
     @State private var places = MyPlaces.shared
     @State private var finder = PreciseFixFinder()
+    @State private var hasAutoStarted = false
     @State private var locating = false
     @State private var namingFix: CLLocation?
     @State private var namingTail = ""
@@ -198,6 +233,13 @@ struct MyPlacesView: View {
                 }
             }
             .navigationTitle("My Places")
+            // From Settings' "Name Present Locality", the fix is taken the
+            // moment the screen appears, so naming here is immediate.
+            .onAppear {
+                guard startNaming, !hasAutoStarted else { return }
+                hasAutoStarted = true
+                beginNaming()
+            }
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Done") { dismiss() }
