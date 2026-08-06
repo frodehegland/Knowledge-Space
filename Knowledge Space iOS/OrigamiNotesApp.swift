@@ -47,7 +47,7 @@ private nonisolated enum CaptureContract {
     /// checked Important.
     static let allowedKeys: Set<String> = [
         "about", "format", "id", "title", "author", "created",
-        "body", "links", "draft", "action", "important", "documentType", "location",
+        "body", "links", "draft", "action", "important", "documentType", "location", "filedUnder",
     ]
     /// The keys the standard requires of every text document.
     static let requiredKeys: Set<String> = [
@@ -223,6 +223,13 @@ final class NotesModel {
             // The list shows only this name's notes — refilter for it.
             rescan()
         }
+    }
+
+    /// User-created filing folders, shared with the Mac via the same
+    /// UserDefaults key. On a fresh device this is empty until the Mac
+    /// has synced, or the user adds folders on iOS.
+    var filingFolders: [String] {
+        UserDefaults.standard.stringArray(forKey: "filingFolders") ?? []
     }
 
     init() {
@@ -497,7 +504,8 @@ final class NotesModel {
     func createNote(title: String = "Untitled", bodyText: String = "",
                     created: Date = .now, asToDo: Bool = false,
                     important: Bool = false,
-                    kind: LiquidDoc.DocumentType = .note) -> LiquidDoc? {
+                    kind: LiquidDoc.DocumentType = .note,
+                    filedUnder: String? = nil) -> LiquidDoc? {
         guard let folderURL else {
             lastError = "No community folder is open. Choose the folder first."
             return nil
@@ -534,6 +542,7 @@ final class NotesModel {
                             important: important,
                             documentType: kind.rawValue,
                             location: currentPlace,
+                            filedUnder: filedUnder,
                             fileURL: folderURL.appendingPathComponent(id)
                                 .appendingPathExtension(LiquidDoc.fileExtension))
         do {
@@ -1036,6 +1045,8 @@ struct NewNoteView: View {
     /// Important — a binary flag of its own, orange like the Mac's
     /// bullet, offered beside To Do.
     @State private var isImportant = false
+    @State private var filingKind: LiquidDoc.DocumentType = .note
+    @State private var filingFolder: String? = nil
     @State private var scanning = false
     /// The progress indicator's words while a scan is being read —
     /// nil when idle.
@@ -1097,6 +1108,9 @@ struct NewNoteView: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
+                }
+                ToolbarItem(placement: .principal) {
+                    filingPicker
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Done") { save() }
@@ -1240,10 +1254,63 @@ struct NewNoteView: View {
                     in: RoundedRectangle(cornerRadius: 12))
     }
 
+    private var filingPicker: some View {
+        let kindNames = Set(["Thoughts", "Inspirations", "Journal"].map { $0.lowercased() })
+        let customFolders = model.filingFolders.filter {
+            !kindNames.contains($0.lowercased())
+                && $0.caseInsensitiveCompare("Archived") != .orderedSame
+        }
+        let pickerLabel: String = {
+            if let f = filingFolder { return f }
+            if filingKind == .note { return "File" }
+            return filingKind.displayName
+        }()
+        return Menu {
+            ForEach([LiquidDoc.DocumentType.note, .thought, .journal, .inspiration],
+                    id: \.self) { k in
+                Button {
+                    filingKind = k
+                    filingFolder = nil
+                } label: {
+                    let selected = filingKind == k && filingFolder == nil
+                    if selected {
+                        Label(k == .note ? "Note (default)" : k.displayName,
+                              systemImage: "checkmark")
+                    } else {
+                        Text(k == .note ? "Note (default)" : k.displayName)
+                    }
+                }
+            }
+            if !customFolders.isEmpty {
+                Divider()
+                ForEach(customFolders, id: \.self) { folder in
+                    Button {
+                        filingFolder = folder
+                        filingKind = .note
+                    } label: {
+                        if filingFolder == folder {
+                            Label(folder, systemImage: "checkmark")
+                        } else {
+                            Text(folder)
+                        }
+                    }
+                }
+            }
+        } label: {
+            HStack(spacing: 3) {
+                Text(pickerLabel)
+                    .font(.headline)
+                Image(systemName: "chevron.down")
+                    .font(.caption.weight(.semibold))
+            }
+        }
+    }
+
     /// The Scan button on the toggle line: makes this an inspiration and
     /// opens the camera at once, one tap to capture.
     private func startScan() {
         kind = .inspiration
+        filingKind = .inspiration
         writing = false
         scanning = true
     }
@@ -1268,11 +1335,12 @@ struct NewNoteView: View {
         switch kind {
         case .note:
             _ = model.createNote(title: parsed.title, bodyText: parsed.bodyText,
-                                 asToDo: isToDo, important: isImportant)
+                                 asToDo: isToDo, important: isImportant,
+                                 kind: filingKind, filedUnder: filingFolder)
         case .inspiration:
             // Saved without a scan: the words alone are the inspiration.
             _ = model.createNote(title: parsed.title, bodyText: parsed.bodyText,
-                                 kind: .inspiration)
+                                 kind: filingKind, filedUnder: filingFolder)
         }
         dismiss()
     }

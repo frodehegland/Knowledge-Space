@@ -65,6 +65,12 @@ nonisolated struct LiquidDoc: Identifiable, Hashable, Sendable {
     /// recorded it — a place name, free-form. Notes captured on the move
     /// (some by voice, outside Origami Text) carry one.
     var location: String? = nil
+    /// Where the author wants this document filed — a folder name set at
+    /// capture on a phone. The receiving Mac reads it on the next scan
+    /// and applies the filing to its local folder map, giving cross-device
+    /// filing without a separate sync mechanism. Once the Mac has applied
+    /// it the field is left in place but ignored on subsequent scans.
+    var filedUnder: String? = nil
     /// Defined Concepts — the document's glossary: a shared pool of
     /// nodes (id, name, definition) that spatial layouts arrange and
     /// citations attach to. Books and papers carry them; the EPUB
@@ -530,6 +536,10 @@ extension LiquidDoc {
             .map { $0.trimmingCharacters(in: .whitespaces) }
             .flatMap { $0.isEmpty ? nil : $0 }
 
+        let filedUnder = raw.filedUnder
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .flatMap { $0.isEmpty ? nil : $0 }
+
         // Tolerant, like links: a concept or position missing its
         // essentials is skipped, never fatal.
         let concepts: [Concept] = (raw.concepts ?? []).compactMap { rawConcept in
@@ -602,6 +612,7 @@ extension LiquidDoc {
                          onBehalfOf: onBehalfOf,
                          documentType: documentType,
                          location: location,
+                         filedUnder: filedUnder,
                          concepts: concepts,
                          layouts: layouts,
                          mapConnections: mapConnections,
@@ -640,6 +651,7 @@ extension LiquidDoc {
         var onBehalfOf: String?
         var documentType: String?
         var location: String?
+        var filedUnder: String?
         var concepts: [RawConcept]?
         var layouts: [RawLayout]?
         var connections: [RawConnection]?

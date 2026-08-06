@@ -435,6 +435,8 @@ struct VoiceCaptureView: View {
     /// Important — a binary flag of its own, orange like the Mac's and
     /// like the typing sheet's; it carries in the file beside the standing.
     @State private var isImportant = false
+    @State private var filingKind: LiquidDoc.DocumentType = .note
+    @State private var filingFolder: String? = nil
 
     private var isRecording: Bool { recorder.state == .recording }
 
@@ -487,6 +489,9 @@ struct VoiceCaptureView: View {
                         dismiss()
                     }
                 }
+                ToolbarItem(placement: .principal) {
+                    filingPicker
+                }
                 ToolbarItem(placement: .confirmationAction) {
                     // Done works mid-dictation: it stops the recorder
                     // and saves what was said in one tap.
@@ -521,6 +526,58 @@ struct VoiceCaptureView: View {
                 }
             }
             .disabled(isRecording)   // hands off while dictating
+    }
+
+    private var filingPicker: some View {
+        let kindNames = Set(["Thoughts", "Inspirations", "Journal"].map { $0.lowercased() })
+        let customFolders = model.filingFolders.filter {
+            !kindNames.contains($0.lowercased())
+                && $0.caseInsensitiveCompare("Archived") != .orderedSame
+        }
+        let pickerLabel: String = {
+            if let f = filingFolder { return f }
+            if filingKind == .note { return "File" }
+            return filingKind.displayName
+        }()
+        return Menu {
+            ForEach([LiquidDoc.DocumentType.note, .thought, .journal, .inspiration],
+                    id: \.self) { k in
+                Button {
+                    filingKind = k
+                    filingFolder = nil
+                } label: {
+                    let selected = filingKind == k && filingFolder == nil
+                    if selected {
+                        Label(k == .note ? "Note (default)" : k.displayName,
+                              systemImage: "checkmark")
+                    } else {
+                        Text(k == .note ? "Note (default)" : k.displayName)
+                    }
+                }
+            }
+            if !customFolders.isEmpty {
+                Divider()
+                ForEach(customFolders, id: \.self) { folder in
+                    Button {
+                        filingFolder = folder
+                        filingKind = .note
+                    } label: {
+                        if filingFolder == folder {
+                            Label(folder, systemImage: "checkmark")
+                        } else {
+                            Text(folder)
+                        }
+                    }
+                }
+            }
+        } label: {
+            HStack(spacing: 3) {
+                Text(pickerLabel)
+                    .font(.headline)
+                Image(systemName: "chevron.down")
+                    .font(.caption.weight(.semibold))
+            }
+        }
     }
 
     private var recordButton: some View {
@@ -570,7 +627,9 @@ struct VoiceCaptureView: View {
                                          bodyText: parsed.bodyText,
                                          created: captureDate ?? .now,
                                          asToDo: isToDo,
-                                         important: isImportant) else {
+                                         important: isImportant,
+                                         kind: filingKind,
+                                         filedUnder: filingFolder) else {
             // The reason is in model.lastError, shown by the home view.
             dismiss()
             return

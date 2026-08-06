@@ -154,6 +154,15 @@ final class AppState {
         // narrowing; Show in People re-narrows after it navigates.
         didSet { peopleFilterName = nil }
     }
+    @ObservationIgnored private var hasSetInitialSelection = false
+
+    /// Called once after the first library scan. Lands on To Do when
+    /// there are important items waiting, otherwise on Timeline.
+    func setInitialSidebarSelection() {
+        guard !hasSetInitialSelection else { return }
+        hasSetInitialSelection = true
+        sidebarSelection = hasImportantToDo ? .importantToDo : .timeline
+    }
     /// The person picked in the People list — their mentions fill the
     /// reading column while no document is open.
     var selectedPersonID: String?
@@ -971,6 +980,19 @@ final class AppState {
         }
         if migrated > 0 {
             showNote("To Do, In Progress, and Done now travel inside the notes — \(migrated) moved over.")
+        }
+    }
+
+    /// Reads the `filedUnder` field from every scanned note and applies
+    /// it to the local filing map, giving cross-device filing for notes
+    /// captured on a phone: the folder choice travels in the file and the
+    /// Mac picks it up on the next scan. Already-filed notes are skipped.
+    func applyInboundFiling() {
+        for entry in index.allByID.values {
+            let doc = entry.doc
+            guard let folder = doc.filedUnder, filedFolders[doc.id] == nil else { continue }
+            addFilingFolder(folder)
+            fileDocument(doc, under: folder)
         }
     }
 

@@ -92,9 +92,6 @@ struct ContentView: View {
                             .background(AppGreys.page)
                             #if os(macOS)
                             .safeAreaInset(edge: .bottom, spacing: 0) { findBar }
-                            .safeAreaInset(edge: .top, spacing: 0) {
-                                contentHeader
-                            }
                             #endif
                     }
                 }
@@ -118,14 +115,7 @@ struct ContentView: View {
                         // modest width so the words get the room.
                         .navigationSplitViewColumnWidth(min: 150, ideal: 225, max: 340)
                         #if os(macOS)
-                        // Find sits framed at the foot of the notes list
-                        // and filters it; the Timeline heading sits as a
-                        // plain header at its top, outside the toolbar so
-                        // it doesn't get wrapped in a glass capsule.
                         .safeAreaInset(edge: .bottom, spacing: 0) { findBar }
-                        .safeAreaInset(edge: .top, spacing: 0) {
-                            contentHeader
-                        }
                         #endif
                 } detail: {
                     detailPane
@@ -180,6 +170,8 @@ struct ContentView: View {
                 // Journal notes captured on the phone file themselves
                 // under Journal here.
                 state.fileJournalNotes()
+                state.applyInboundFiling()
+                state.setInitialSidebarSelection()
             }
         }
         .task { state.libraryUpkeep() }
@@ -311,20 +303,7 @@ struct ContentView: View {
     /// names its list the way Inbox does — Inbox alone carries the
     /// calendar's reveal triangle.
     @ViewBuilder private var contentHeader: some View {
-        switch state.sidebarSelection {
-        case .library: listHeader("Inbox")
-        case .timeline: timelineHeader
-        case .place: listHeader("Places")
-        case .people: listHeader("People")
-        case .transcripts: listHeader("Transcripts")
-        case .aiChats: listHeader("AI Chat")
-        case .notes: listHeader("Notes")
-        case .draftLetters: listHeader("Draft Letters")
-        case .digests: listHeader("Digests")
-        case .action(let action): listHeader(action.placeName)
-        case .importantToDo: listHeader("To Do")
-        default: EmptyView()
-        }
+        EmptyView()
     }
 
     /// A plain header naming the list, the Inbox header's quieter twin.
@@ -423,7 +402,7 @@ struct ContentView: View {
                 .scrollContentBackground(.hidden)
                 #if os(macOS)
                 .safeAreaInset(edge: .bottom, spacing: 0) { findBar }
-                .safeAreaInset(edge: .top, spacing: 0) { contentHeader }
+
                 #endif
                 .frame(maxWidth: 800)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)

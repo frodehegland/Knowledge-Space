@@ -15,7 +15,8 @@ struct LibrarySidebarView: View {
     #if os(macOS)
     /// The place the pointer is resting on — People answers with its
     /// reveal triangle.
-    @State private var hoveredPlace: SidebarItem?
+    @State private var hoveredItem: SidebarItem?
+    @State private var isNewHovered = false
     #endif
 
     var body: some View {
@@ -49,14 +50,19 @@ struct LibrarySidebarView: View {
                                             .foregroundStyle(.orange)
                                     }
                                 } else {
-                                    Label(place.name, systemImage: place.systemImage)
+                                    Label {
+                                        Text(place.name)
+                                            .foregroundStyle(sidebarTextColor(for: place.item))
+                                    } icon: {
+                                        Image(systemName: place.systemImage)
+                                    }
                                 }
                                 Spacer(minLength: 0)
                                 #if os(macOS)
                                 // Resting the pointer on People reveals a
                                 // triangle; it opens the way to a new
                                 // person in the shared contact directory.
-                                if place.item == .people, hoveredPlace == .people {
+                                if place.item == .people, hoveredItem == .people {
                                     Menu {
                                         Button("New Person…") {
                                             state.addingPerson = true
@@ -114,8 +120,7 @@ struct LibrarySidebarView: View {
                             #endif
                             #if os(macOS)
                             .onHover { inside in
-                                guard place.item == .people else { return }
-                                hoveredPlace = inside ? .people : nil
+                                hoveredItem = inside ? place.item : nil
                             }
                             #endif
                         }
@@ -125,15 +130,18 @@ struct LibrarySidebarView: View {
                             } label: {
                                 Label {
                                     Text("New")
-                                        .foregroundStyle(AppGreys.buttonText)
+                                        .foregroundStyle(isNewHovered ? Color.primary : Color(white: 169 / 255))
                                 } icon: {
                                     Image(systemName: "square.and.pencil")
-                                        .foregroundStyle(SidebarCatalog.iconTint)
+                                        .foregroundStyle(isNewHovered ? Color.primary : Color(white: 169 / 255))
                                 }
                             }
                             .buttonStyle(.plain)
                             .disabled(state.index.folderURL == nil)
                             .help("A new note, straight into writing (⌘N)")
+                            #if os(macOS)
+                            .onHover { isNewHovered = $0 }
+                            #endif
                             // New Letter is resting for now; the act
                             // returns when Digital Letters' sending
                             // arrives. newLetter() stands ready.
@@ -161,7 +169,7 @@ struct LibrarySidebarView: View {
                 Text("Knowledge Space")
                     .font(.headline)
                     .fontWeight(.bold)
-                    .foregroundStyle(.primary)
+                    .foregroundStyle(Color(white: 169 / 255))
                     .lineLimit(1)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal, 16)
@@ -203,7 +211,7 @@ struct LibrarySidebarView: View {
         // A slim spine, but never slimmer than 230 points — room for
         // the app's own name, "Knowledge Space", to stand whole, and
         // the longest section entries with it.
-        .navigationSplitViewColumnWidth(min: 230, ideal: 240)
+        .navigationSplitViewColumnWidth(min: 280, ideal: 295)
     }
 
     /// A section heading that folds its rows away: the title with a
@@ -221,6 +229,7 @@ struct LibrarySidebarView: View {
         } label: {
             HStack(spacing: 4) {
                 Text(title)
+                    .foregroundStyle(Color(white: 169 / 255))
                 // A small triangle just past the title, not out at the
                 // column's edge: turned down when open, on its side
                 // when closed.
@@ -233,6 +242,13 @@ struct LibrarySidebarView: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+    }
+
+    private func sidebarTextColor(for item: SidebarItem) -> Color {
+        if state.sidebarSelection == item || hoveredItem == item {
+            return .primary
+        }
+        return Color(white: 169 / 255)
     }
 }
 
