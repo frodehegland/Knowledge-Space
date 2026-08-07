@@ -510,12 +510,16 @@ final class AppState {
     func fileDocument(_ doc: LiquidDoc, under folder: String) {
         filedFolders[doc.id] = folder
         persistFiling()
+        // Write filedUnder into the document so other devices (iOS) can
+        // discover the folder name without relying on UserDefaults sync.
+        mutateNoteFile(doc) { $0.filedUnder = folder }
         syncFolderKind(for: doc, filedUnder: folder)
     }
 
     func unfile(_ doc: LiquidDoc) {
         guard filedFolders.removeValue(forKey: doc.id) != nil else { return }
         persistFiling()
+        mutateNoteFile(doc) { $0.filedUnder = nil }
         syncFolderKind(for: doc, filedUnder: nil)
     }
 

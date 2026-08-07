@@ -225,11 +225,18 @@ final class NotesModel {
         }
     }
 
-    /// User-created filing folders, shared with the Mac via the same
-    /// UserDefaults key. On a fresh device this is empty until the Mac
-    /// has synced, or the user adds folders on iOS.
+    /// Filing folders discovered by reading `filedUnder` from the user's
+    /// own documents in the community folder. Travels via iCloud with
+    /// the documents themselves, so Mac-created folders appear here
+    /// as soon as their notes sync — no separate UserDefaults sync needed.
+    var discoveredFolders: [String] = []
+
+    /// User-created filing folders: any added locally on iOS (UserDefaults),
+    /// merged with those discovered from documents filed on the Mac.
     var filingFolders: [String] {
-        UserDefaults.standard.stringArray(forKey: "filingFolders") ?? []
+        let local = UserDefaults.standard.stringArray(forKey: "filingFolders") ?? []
+        let merged = Set(local).union(discoveredFolders)
+        return merged.sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
     }
 
     init() {
@@ -315,6 +322,7 @@ final class NotesModel {
                 model.notes = result.notes
                 model.cards = result.cards.isEmpty ? earlyCards : result.cards
                 model.sources = result.sources
+                model.discoveredFolders = Array(result.filingFolders)
                 log.info("rescan: \(result.notes.count) notes, \(result.cards.count) cards, \(result.sources.count) sources, \(result.pendingDownloads) downloading in \(folderURL.path)")
                 // The folder is the source of identity: one card, no
                 // name yet — that card is the user's, adopted without
@@ -396,6 +404,7 @@ final class NotesModel {
         var notes: [LiquidDoc] = []
         var cards: [LiquidDoc] = []
         var sources: [LiquidDoc] = []
+        var filingFolders: Set<String> = []
         var pendingDownloads = 0
     }
 
@@ -453,14 +462,20 @@ final class NotesModel {
                 // The shelf, read so a scanned book is cited once.
                 result.sources.append(doc)
             } else if [LiquidDoc.DocumentType.note.rawValue,
+                       LiquidDoc.DocumentType.thought.rawValue,
                        LiquidDoc.DocumentType.journal.rawValue,
                        LiquidDoc.DocumentType.inspiration.rawValue]
                         .contains(doc.documentType ?? ""),
                       isOwn(doc, author: author) {
                 // The phone's own capture kinds — a plain note, a
-                // journal entry, an inspiration — all belong in its
-                // list; the shelf kinds and others' notes stay out.
+                // thought, a journal entry, an inspiration — all belong
+                // in its list; the shelf kinds and others' notes stay out.
                 result.notes.append(doc)
+                // Collect filing folders from the note's filedUnder field
+                // so Mac-created folders are visible in the iOS picker.
+                if let folder = doc.filedUnder {
+                    result.filingFolders.insert(folder)
+                }
             }
         }
         result.notes.sort { $0.listedDate > $1.listedDate }
@@ -562,21 +577,21 @@ final class NotesModel {
     /// and place stay as captured; title and body are the user's.
     func save(_ doc: LiquidDoc, title: String, bodyText: String,
               kind: String? = nil,
+              filedUnder: String? = nil, changesFiledUnder: Bool = false,
               action: LiquidDoc.Action? = nil, changesAction: Bool = false,
               important: Bool? = nil) {
         let trimmedTitle = title.trimmingCharacters(in: .whitespaces)
         let body = LiquidDoc.parseBody(from: bodyText)
         // Title, body, the links the body implies, and — when the
-        // editor changed them — the kind and the action standing are the
-        // phone's to change; nothing else. Copy-and-mutate carries every
-        // other field through, so an attention set on the Mac survives an
-        // edit made here.
+        // editor changed them — the kind, filing folder, and action
+        // standing are the phone's to change; nothing else.
         var updated = doc
         updated.title = trimmedTitle.isEmpty ? "Untitled" : trimmedTitle
         updated.body = body
         updated.links = LiquidDoc.detectedLinks(in: body)
         updated.wraps = nil
         if let kind { updated.documentType = kind }
+        if changesFiledUnder { updated.filedUnder = filedUnder }
         // The action picker owns the whole standing: To Do, In Progress,
         // Done, Cancelled, or none. Setting any standing is a decision,
         // so the note is no longer a draft.
@@ -1355,29 +1370,14 @@ struct NoteEditorView: View {
     @Environment(NotesModel.self) private var model
     let docID: String
 
-    /// The categories an existing note can be moved between — the ones
-    /// the sidebar keeps their own place for. Raw values are the
-    /// documentType tokens; the Mac files a journal note under Journal
-    /// when it sees the change.
-    private enum EditKind: String, CaseIterable {
-        case note = "note", journal = "journal", thought = "thought",
-             inspiration = "inspiration"
-        var label: String {
-            switch self {
-            case .note: "Note"
-            case .journal: "Journal"
-            case .thought: "Thought"
-            case .inspiration: "Inspiration"
-            }
-        }
-        init(documentType: String?) {
-            self = EditKind(rawValue: documentType ?? "note") ?? .note
-        }
-    }
-
     @State private var title = ""
     @State private var bodyText = ""
-    @State private var kind: EditKind = .note
+    /// The document kind selected in the filing menu — one of the four
+    /// standard types (note, thought, journal, inspiration).
+    @State private var editFilingKind: LiquidDoc.DocumentType = .note
+    /// A custom user folder chosen in the filing menu; when set, the kind
+    /// is treated as "note" and filedUnder carries the folder name.
+    @State private var editFilingFolder: String?
     /// The note's action standing — To Do, In Progress, Done, Cancelled,
     /// or none. A separate axis from the category, so it rides its own
     /// control; the standing travels in the file and lists on every
@@ -1422,16 +1422,11 @@ struct NoteEditorView: View {
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
-                    // The note's category, changeable while editing —
-                    // choosing Journal here files it under Journal on
-                    // the Mac.
+                    // The note's filing destination, changeable while
+                    // editing — matches the same menu used on the new-note
+                    // sheet and on macOS.
                     if isEditing {
-                        Picker("Category", selection: $kind) {
-                            ForEach(EditKind.allCases, id: \.self) { kind in
-                                Text(kind.label)
-                            }
-                        }
-                        .pickerStyle(.segmented)
+                        editFilingPicker
                         // The same row as the writing sheet: Important at
                         // the left in orange, To Do at the right with its
                         // word beside the switch. On iOS the standing is a
@@ -1478,12 +1473,67 @@ struct NoteEditorView: View {
                                                        bodyText: doc.bodyEditingText)
             title = doc.title == "Untitled" ? "" : doc.title
             bodyText = doc.bodyEditingText
-            kind = EditKind(documentType: doc.documentType)
+            editFilingKind = LiquidDoc.DocumentType(rawValue: doc.documentType ?? "note") ?? .note
+            editFilingFolder = doc.filedUnder
             action = doc.actionValue
             isImportant = doc.important
         }
         .onDisappear {
             if isEditing { saveIfNeeded() }
+        }
+    }
+
+    /// The same filing pop-up the new-note sheet shows, adapted for
+    /// editing: reads discovered folders from the model and shows the
+    /// current selection as the menu label.
+    private var editFilingPicker: some View {
+        let kindNames = Set(["Thoughts", "Inspirations", "Journal"].map { $0.lowercased() })
+        let customFolders = model.filingFolders.filter {
+            !kindNames.contains($0.lowercased())
+                && $0.caseInsensitiveCompare("Archived") != .orderedSame
+        }
+        let pickerLabel: String = {
+            if let f = editFilingFolder { return f }
+            if editFilingKind == .note { return "Note" }
+            return editFilingKind.displayName
+        }()
+        return Menu {
+            ForEach([LiquidDoc.DocumentType.note, .thought, .journal, .inspiration],
+                    id: \.self) { k in
+                Button {
+                    editFilingKind = k
+                    editFilingFolder = nil
+                } label: {
+                    let selected = editFilingKind == k && editFilingFolder == nil
+                    if selected {
+                        Label(k.displayName, systemImage: "checkmark")
+                    } else {
+                        Text(k.displayName)
+                    }
+                }
+            }
+            if !customFolders.isEmpty {
+                Divider()
+                ForEach(customFolders, id: \.self) { folder in
+                    Button {
+                        editFilingFolder = folder
+                        editFilingKind = .note
+                    } label: {
+                        if editFilingFolder == folder {
+                            Label(folder, systemImage: "checkmark")
+                        } else {
+                            Text(folder)
+                        }
+                    }
+                }
+            }
+        } label: {
+            HStack(spacing: 3) {
+                Text(pickerLabel)
+                    .font(.headline)
+                Image(systemName: "chevron.down")
+                    .font(.caption.weight(.semibold))
+            }
         }
     }
 
@@ -1495,11 +1545,13 @@ struct NoteEditorView: View {
 
     private func saveIfNeeded() {
         guard isEditable, let doc else { return }
-        // A voice note's title stays derived — the first four words of
-        // whatever the body now says.
         let savedTitle = isVoiceNote ? TranscriptParser.title(for: bodyText) : title
+        let kindRaw = editFilingFolder != nil ? LiquidDoc.DocumentType.note.rawValue
+                                              : editFilingKind.rawValue
         model.save(doc, title: savedTitle, bodyText: bodyText,
-                   kind: kind.rawValue, action: action, changesAction: true,
+                   kind: kindRaw,
+                   filedUnder: editFilingFolder, changesFiledUnder: true,
+                   action: action, changesAction: true,
                    important: isImportant)
     }
 }
