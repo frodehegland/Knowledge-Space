@@ -565,6 +565,16 @@ final class AppState {
         mutateNoteFile(doc) { $0.documentType = wanted }
     }
 
+    /// Writes the current filing folder list to a small JSON manifest in
+    /// the community folder so iOS can discover the folders immediately
+    /// via iCloud, without requiring UserDefaults sync between devices.
+    private func writeFilingFolderManifest() {
+        guard let folderURL = index.folderURL,
+              let data = try? JSONSerialization.data(withJSONObject: filingFolders) else { return }
+        let url = folderURL.appendingPathComponent("filing-folders.json")
+        try? data.write(to: url, options: .atomic)
+    }
+
     /// A new folder joins just above Archived, which keeps the last word.
     func addFilingFolder(_ name: String) {
         guard !filingFolders.contains(where: { $0.caseInsensitiveCompare(name) == .orderedSame })
@@ -572,6 +582,7 @@ final class AppState {
         let index = filingFolders.firstIndex(of: Self.archivedFolderName) ?? filingFolders.endIndex
         filingFolders.insert(name, at: index)
         UserDefaults.standard.set(filingFolders, forKey: "filingFolders")
+        writeFilingFolderManifest()
     }
 
     #if os(macOS)
@@ -632,6 +643,7 @@ final class AppState {
         for id in filedIDs { filedFolders.removeValue(forKey: id) }
         filingFolders.removeAll { $0.caseInsensitiveCompare(name) == .orderedSame }
         UserDefaults.standard.set(filingFolders, forKey: "filingFolders")
+        writeFilingFolderManifest()
         persistFiling()
         // The place being read is gone: land somewhere real.
         if case .filedFolder(let selected) = sidebarSelection,
@@ -662,6 +674,7 @@ final class AppState {
         }
         filingFolders = movable + hidden + (hasArchived ? [Self.archivedFolderName] : [])
         UserDefaults.standard.set(filingFolders, forKey: "filingFolders")
+        writeFilingFolderManifest()
     }
 
     /// Ctrl-click ▸ Delete File…: after confirmation, the document's
@@ -985,6 +998,7 @@ final class AppState {
         if migrated > 0 {
             showNote("To Do, In Progress, and Done now travel inside the notes — \(migrated) moved over.")
         }
+        writeFilingFolderManifest()
     }
 
     /// Reads the `filedUnder` field from every scanned note and applies

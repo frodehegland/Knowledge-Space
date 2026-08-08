@@ -477,6 +477,9 @@ struct VoiceCaptureView: View {
                     .tint(.orange)
                     .padding(.horizontal)
 
+                filingMenu
+                    .padding(.horizontal)
+
                 recordButton
                     .padding(.bottom, 8)
             }
@@ -489,9 +492,6 @@ struct VoiceCaptureView: View {
                         dismiss()
                     }
                 }
-                ToolbarItem(placement: .principal) {
-                    filingPicker
-                }
                 ToolbarItem(placement: .confirmationAction) {
                     // Done works mid-dictation: it stops the recorder
                     // and saves what was said in one tap.
@@ -502,6 +502,7 @@ struct VoiceCaptureView: View {
             }
         }
         .interactiveDismissDisabled(isRecording)
+        .task { await model.refreshFilingFolders() }
         .task {
             if !isRecording {
                 await toggleRecording()
@@ -528,55 +529,48 @@ struct VoiceCaptureView: View {
             .disabled(isRecording)   // hands off while dictating
     }
 
-    private var filingPicker: some View {
-        let kindNames = Set(["Thoughts", "Inspirations", "Journal"].map { $0.lowercased() })
+    private var filingMenu: some View {
         let customFolders = model.filingFolders.filter {
-            !kindNames.contains($0.lowercased())
-                && $0.caseInsensitiveCompare("Archived") != .orderedSame
+            !["thoughts", "inspirations", "journal", "archived"]
+                .contains($0.lowercased())
         }
-        let pickerLabel: String = {
+        let label: String = {
             if let f = filingFolder { return f }
-            if filingKind == .note { return "File" }
-            return filingKind.displayName
+            return filingKind == .note ? "Note" : filingKind.displayName
         }()
         return Menu {
             ForEach([LiquidDoc.DocumentType.note, .thought, .journal, .inspiration],
                     id: \.self) { k in
-                Button {
+                Button(k == .note ? "Note" : k.displayName) {
                     filingKind = k
                     filingFolder = nil
-                } label: {
-                    let selected = filingKind == k && filingFolder == nil
-                    if selected {
-                        Label(k == .note ? "Note (default)" : k.displayName,
-                              systemImage: "checkmark")
-                    } else {
-                        Text(k == .note ? "Note (default)" : k.displayName)
-                    }
                 }
             }
             if !customFolders.isEmpty {
                 Divider()
                 ForEach(customFolders, id: \.self) { folder in
-                    Button {
+                    Button(folder) {
                         filingFolder = folder
                         filingKind = .note
-                    } label: {
-                        if filingFolder == folder {
-                            Label(folder, systemImage: "checkmark")
-                        } else {
-                            Text(folder)
-                        }
                     }
                 }
             }
         } label: {
-            HStack(spacing: 3) {
-                Text(pickerLabel)
-                    .font(.headline)
-                Image(systemName: "chevron.down")
-                    .font(.caption.weight(.semibold))
+            HStack {
+                Text("File under:")
+                    .foregroundStyle(.secondary)
+                Text(label)
+                    .fontWeight(.medium)
+                Image(systemName: "chevron.up.chevron.down")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
+            .font(.subheadline)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 8)
+            .frame(maxWidth: .infinity)
+            .background(Color(.secondarySystemBackground),
+                        in: RoundedRectangle(cornerRadius: 10))
         }
     }
 

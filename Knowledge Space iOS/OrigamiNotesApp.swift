@@ -361,6 +361,30 @@ final class NotesModel {
         }
     }
 
+    /// Reads `filing-folders.json` from the community folder and merges
+    /// any new folder names into `discoveredFolders` immediately — without
+    /// waiting for a full rescan. This is called when filing sheets open
+    /// so the menu is always populated as long as iCloud has synced the
+    /// manifest that macOS writes on startup.
+    @MainActor
+    func refreshFilingFolders() async {
+        guard let url = folderURL?.appendingPathComponent("filing-folders.json") else { return }
+        let folders: [String] = await Task.detached(priority: .utility) {
+            // Request download if the manifest isn't local yet.
+            try? FileManager.default.startDownloadingUbiquitousItem(at: url)
+            guard let data = try? Data(contentsOf: url),
+                  let result = try? JSONSerialization.jsonObject(with: data) as? [String]
+            else { return [] }
+            return result
+        }.value
+        guard !folders.isEmpty else { return }
+        let merged = Set(discoveredFolders).union(folders)
+        guard merged != Set(discoveredFolders) else { return }
+        discoveredFolders = merged.sorted {
+            $0.localizedCaseInsensitiveCompare($1) == .orderedAscending
+        }
+    }
+
     /// The identity pass: only files named "<id>.card.liquid.json" are
     /// read — the name is visible without downloading, so who the user
     /// is arrives ahead of the whole folder.
@@ -477,6 +501,14 @@ final class NotesModel {
                     result.filingFolders.insert(folder)
                 }
             }
+        }
+        // Read the manifest macOS writes whenever filing folders change
+        // so iOS sees the full set immediately via iCloud, not only
+        // the subset it can infer from documents that carry filedUnder.
+        let manifestURL = folderURL.appendingPathComponent("filing-folders.json")
+        if let mData = try? Data(contentsOf: manifestURL),
+           let mFolders = try? JSONSerialization.jsonObject(with: mData) as? [String] {
+            result.filingFolders.formUnion(mFolders)
         }
         result.notes.sort { $0.listedDate > $1.listedDate }
         result.cards.sort {
@@ -1086,6 +1118,10 @@ struct NewNoteView: View {
                     .background(theme.background)
                     .clipShape(RoundedRectangle(cornerRadius: 12))
                     .focused($writing)
+                // Filing destination — a single pop-up button that lists
+                // every option: the four standard kinds and all custom
+                // folders from the community folder.
+                filingMenu
                 // Important, a Scan button, and To Do share one line, at
                 // the small size the kind picker used so all three fit:
                 // Important at the left, Scan in the middle, To Do at the
@@ -1124,9 +1160,6 @@ struct NewNoteView: View {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
                 }
-                ToolbarItem(placement: .principal) {
-                    filingPicker
-                }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Done") { save() }
                         // A found book is content in itself, so Done
@@ -1157,6 +1190,7 @@ struct NewNoteView: View {
         // while nothing else (a scan) holds the view, and only until the
         // writer has the field, so a note already being typed is never
         // interrupted.
+        .task { await model.refreshFilingFolders() }
         .task {
             // Assert focus repeatedly across the present window, catching
             // the first moment the field can take it — the keyboard,
@@ -1269,55 +1303,52 @@ struct NewNoteView: View {
                     in: RoundedRectangle(cornerRadius: 12))
     }
 
-    private var filingPicker: some View {
-        let kindNames = Set(["Thoughts", "Inspirations", "Journal"].map { $0.lowercased() })
+    /// A prominently placed pop-up button that lists every filing
+    /// destination — the four standard kinds and all custom folders
+    /// discovered from the community folder (synced from macOS via
+    /// filing-folders.json). The label always shows the current choice.
+    private var filingMenu: some View {
         let customFolders = model.filingFolders.filter {
-            !kindNames.contains($0.lowercased())
-                && $0.caseInsensitiveCompare("Archived") != .orderedSame
+            !["thoughts", "inspirations", "journal", "archived"]
+                .contains($0.lowercased())
         }
-        let pickerLabel: String = {
+        let label: String = {
             if let f = filingFolder { return f }
-            if filingKind == .note { return "File" }
-            return filingKind.displayName
+            return filingKind == .note ? "Note" : filingKind.displayName
         }()
         return Menu {
             ForEach([LiquidDoc.DocumentType.note, .thought, .journal, .inspiration],
                     id: \.self) { k in
-                Button {
+                Button(k == .note ? "Note" : k.displayName) {
                     filingKind = k
                     filingFolder = nil
-                } label: {
-                    let selected = filingKind == k && filingFolder == nil
-                    if selected {
-                        Label(k == .note ? "Note (default)" : k.displayName,
-                              systemImage: "checkmark")
-                    } else {
-                        Text(k == .note ? "Note (default)" : k.displayName)
-                    }
                 }
             }
             if !customFolders.isEmpty {
                 Divider()
                 ForEach(customFolders, id: \.self) { folder in
-                    Button {
+                    Button(folder) {
                         filingFolder = folder
                         filingKind = .note
-                    } label: {
-                        if filingFolder == folder {
-                            Label(folder, systemImage: "checkmark")
-                        } else {
-                            Text(folder)
-                        }
                     }
                 }
             }
         } label: {
-            HStack(spacing: 3) {
-                Text(pickerLabel)
-                    .font(.headline)
-                Image(systemName: "chevron.down")
-                    .font(.caption.weight(.semibold))
+            HStack {
+                Text("File under:")
+                    .foregroundStyle(.secondary)
+                Text(label)
+                    .fontWeight(.medium)
+                Image(systemName: "chevron.up.chevron.down")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
+            .font(.subheadline)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 8)
+            .frame(maxWidth: .infinity)
+            .background(Color(.secondarySystemBackground),
+                        in: RoundedRectangle(cornerRadius: 10))
         }
     }
 
@@ -1426,7 +1457,7 @@ struct NoteEditorView: View {
                     // editing — matches the same menu used on the new-note
                     // sheet and on macOS.
                     if isEditing {
-                        editFilingPicker
+                        editFilingMenu
                         // The same row as the writing sheet: Important at
                         // the left in orange, To Do at the right with its
                         // word beside the switch. On iOS the standing is a
@@ -1478,62 +1509,55 @@ struct NoteEditorView: View {
             action = doc.actionValue
             isImportant = doc.important
         }
+        .task { await model.refreshFilingFolders() }
         .onDisappear {
             if isEditing { saveIfNeeded() }
         }
     }
 
-    /// The same filing pop-up the new-note sheet shows, adapted for
-    /// editing: reads discovered folders from the model and shows the
-    /// current selection as the menu label.
-    private var editFilingPicker: some View {
-        let kindNames = Set(["Thoughts", "Inspirations", "Journal"].map { $0.lowercased() })
+    /// Same pop-up as the new-note sheet, bound to editFilingKind/editFilingFolder.
+    private var editFilingMenu: some View {
         let customFolders = model.filingFolders.filter {
-            !kindNames.contains($0.lowercased())
-                && $0.caseInsensitiveCompare("Archived") != .orderedSame
+            !["thoughts", "inspirations", "journal", "archived"]
+                .contains($0.lowercased())
         }
-        let pickerLabel: String = {
+        let label: String = {
             if let f = editFilingFolder { return f }
-            if editFilingKind == .note { return "Note" }
-            return editFilingKind.displayName
+            return editFilingKind == .note ? "Note" : editFilingKind.displayName
         }()
         return Menu {
             ForEach([LiquidDoc.DocumentType.note, .thought, .journal, .inspiration],
                     id: \.self) { k in
-                Button {
+                Button(k == .note ? "Note" : k.displayName) {
                     editFilingKind = k
                     editFilingFolder = nil
-                } label: {
-                    let selected = editFilingKind == k && editFilingFolder == nil
-                    if selected {
-                        Label(k.displayName, systemImage: "checkmark")
-                    } else {
-                        Text(k.displayName)
-                    }
                 }
             }
             if !customFolders.isEmpty {
                 Divider()
                 ForEach(customFolders, id: \.self) { folder in
-                    Button {
+                    Button(folder) {
                         editFilingFolder = folder
                         editFilingKind = .note
-                    } label: {
-                        if editFilingFolder == folder {
-                            Label(folder, systemImage: "checkmark")
-                        } else {
-                            Text(folder)
-                        }
                     }
                 }
             }
         } label: {
-            HStack(spacing: 3) {
-                Text(pickerLabel)
-                    .font(.headline)
-                Image(systemName: "chevron.down")
-                    .font(.caption.weight(.semibold))
+            HStack {
+                Text("File under:")
+                    .foregroundStyle(.secondary)
+                Text(label)
+                    .fontWeight(.medium)
+                Image(systemName: "chevron.up.chevron.down")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
+            .font(.subheadline)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 8)
+            .frame(maxWidth: .infinity)
+            .background(Color(.secondarySystemBackground),
+                        in: RoundedRectangle(cornerRadius: 10))
         }
     }
 

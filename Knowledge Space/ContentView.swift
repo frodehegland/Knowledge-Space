@@ -980,7 +980,7 @@ struct DocumentRow: View {
                         .foregroundStyle(.white)
                         .padding(.horizontal, 7)
                         .padding(.vertical, 2)
-                        .background(.quaternary, in: Capsule())
+                        .background(Color(white: 0x9f / 255.0), in: Capsule())
                 }
                 .buttonStyle(.plain)
                 .help("Show \(filingFolder)")
