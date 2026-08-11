@@ -880,8 +880,14 @@ final class AppState {
     #endif
 
     /// A new note on the desk: an ordinary note document in the library
-    /// folder, opened straight into writing.
+    /// folder, opened straight into writing. Begun while a filing
+    /// folder's list is showing, the note files there from the start —
+    /// ⌘N in Journal makes a journal entry, not an Inbox draft.
     func newNote() {
+        if case .filedFolder(let folder) = sidebarSelection {
+            newNote(filedUnder: folder)
+            return
+        }
         makeNewDocument(type: .note, landing: .library)
     }
 
