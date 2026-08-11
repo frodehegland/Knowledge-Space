@@ -930,7 +930,7 @@ struct DocumentRow: View {
     /// no pill belongs.
     var actionPill: LiquidDoc.Action? = nil
     /// A longer preview: the Files views give the note's opening words
-    /// room to fill both of the row's two lines, about double the
+    /// room to fill all of the row's four lines, about double the
     /// standard preview.
     var expandedPreview: Bool = false
 
@@ -941,7 +941,7 @@ struct DocumentRow: View {
     private var isTranscript: Bool { DocumentListView.isTranscript(entry.doc) }
 
     /// The row's words when the list is the page ("In the list"): the
-    /// body itself, its first twenty words — rules and the metadata
+    /// body itself, its first forty words — rules and the metadata
     /// blocks skipped — with an ellipsis where more follows. An empty
     /// note falls back to its title.
     private var bodyOpening: String {
@@ -957,8 +957,8 @@ struct DocumentRow: View {
             .split(whereSeparator: \.isWhitespace)
         guard !words.isEmpty else { return entry.doc.title }
         // The Files views take twice the words, so the preview can fill
-        // both lines rather than trailing off after one.
-        let cap = expandedPreview ? 40 : 20
+        // its lines rather than trailing off early.
+        let cap = expandedPreview ? 80 : 40
         let opening = words.prefix(cap).joined(separator: " ")
         return words.count > cap ? opening + "…" : opening
     }
@@ -1019,11 +1019,11 @@ struct DocumentRow: View {
                 Text(isTranscript ? entry.doc.listedDateText : bodyOpening)
                     // Bold until read; opening the note ends the bolding.
                     .fontWeight(state.isUnread(entry.doc) ? .bold : .regular)
-                    // Tight leading draws the note's own two lines a
-                    // little closer; the row padding sets the notes apart.
+                    // Tight leading draws the note's own lines a little
+                    // closer; the row padding sets the notes apart.
                     .font(.system(size: state.listTextSize, design: .serif).leading(.tight))
-                    // At most two lines, an ellipsis where more follows.
-                    .lineLimit(2)
+                    // At most four lines, an ellipsis where more follows.
+                    .lineLimit(4)
             } else {
                 Text(isTranscript ? entry.doc.listedDateText : entry.doc.title)
                     .font(.headline)
