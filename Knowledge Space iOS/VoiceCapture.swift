@@ -535,7 +535,7 @@ struct VoiceCaptureView: View {
                 .contains($0.lowercased())
         }
         let label: String = {
-            if let f = filingFolder { return f }
+            if let f = filingFolder { return model.displayName(for: f) }
             return filingKind == .note ? "Note" : filingKind.displayName
         }()
         return Menu {
@@ -549,7 +549,8 @@ struct VoiceCaptureView: View {
             if !customFolders.isEmpty {
                 Divider()
                 ForEach(customFolders, id: \.self) { folder in
-                    Button(folder) {
+                    // The alias shows; the canonical name files.
+                    Button(model.displayName(for: folder)) {
                         filingFolder = folder
                         filingKind = .note
                     }

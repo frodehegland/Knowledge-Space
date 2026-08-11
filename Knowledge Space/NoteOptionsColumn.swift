@@ -180,7 +180,7 @@ struct NoteOptionsColumn: View {
                     .buttonStyle(.plain)
                     .font(.caption)
                     .foregroundStyle(.tertiary)
-                    .help("Re-order or remove your filing folders")
+                    .help("Rename, re-order or remove your filing folders")
                 Spacer()
                 Button {
                     state.fileInNewFolder(doc)
@@ -224,7 +224,7 @@ struct NoteOptionsColumn: View {
             }
         } label: {
             HStack {
-                Text(label ?? folder)
+                Text(label ?? state.displayName(forFolder: folder))
                 if state.folder(for: doc) == folder {
                     Spacer(minLength: 4)
                     Image(systemName: "checkmark")
@@ -482,10 +482,12 @@ struct NoteOptionsColumn: View {
 
 #if os(macOS)
 /// The Edit dialog behind the File section's Edit button: the user's own
-/// filing folders, dragged into the order they list in and removed one by
-/// one. Removing a folder only unfiles its notes — they stay in the
-/// library — matching the sidebar's Remove Folder. Filing is a local
-/// preference, so nothing here touches a document's file on disk.
+/// filing folders, dragged into the order they list in, renamed in place,
+/// and removed one by one. Removing a folder only unfiles its notes —
+/// they stay in the library — matching the sidebar's Remove Folder. A
+/// rename is an alias over the folder's own name, which keeps holding
+/// the notes underneath. Filing is a local preference, so nothing here
+/// touches a document's file on disk.
 struct EditFilingFoldersSheet: View {
     @Environment(AppState.self) private var state
     @Environment(\.dismiss) private var dismiss
@@ -502,7 +504,14 @@ struct EditFilingFoldersSheet: View {
                         HStack(spacing: 6) {
                             Image(systemName: "line.3.horizontal")
                                 .foregroundStyle(.tertiary)
-                            Text(folder)
+                            FilingFolderNameField(folder: folder)
+                            if state.filingAlias(for: folder) != nil {
+                                // The name underneath, kept in sight so
+                                // a rename never hides where notes
+                                // actually stand.
+                                Text("was \(folder)")
+                                    .foregroundStyle(.tertiary)
+                            }
                             Spacer()
                             if state.canRemoveFilingFolder(folder) {
                                 Button(role: .destructive) {
@@ -511,7 +520,7 @@ struct EditFilingFoldersSheet: View {
                                     Image(systemName: "trash")
                                 }
                                 .buttonStyle(.borderless)
-                                .help("Remove “\(folder)” — its notes stay in the library")
+                                .help("Remove “\(state.displayName(forFolder: folder))” — its notes stay in the library")
                             }
                         }
                         // The folder rows read a quarter smaller than the
@@ -519,6 +528,9 @@ struct EditFilingFoldersSheet: View {
                         .font(.system(size: NSFont.systemFontSize * 0.75))
                     }
                     .onMove { state.moveFilingFolders(fromOffsets: $0, toOffset: $1) }
+                    Text("Click a name to rename it. The folder keeps its original name underneath — both names answer in Find — and clearing the field takes the rename back.")
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
                 }
             }
             .navigationTitle("Edit Folders")
@@ -529,6 +541,24 @@ struct EditFilingFoldersSheet: View {
             }
         }
         .frame(minWidth: 320, minHeight: 360)
+    }
+}
+
+/// One folder's name in the Edit dialog, editable in place. A new name
+/// becomes the folder's alias — display only, the original name stays
+/// the identity on disk — committed on return and when the dialog
+/// closes. The original name, or an empty field, takes the rename back.
+private struct FilingFolderNameField: View {
+    @Environment(AppState.self) private var state
+    let folder: String
+    @State private var name = ""
+
+    var body: some View {
+        TextField(folder, text: $name)
+            .textFieldStyle(.plain)
+            .onAppear { name = state.displayName(forFolder: folder) }
+            .onSubmit { state.setFilingAlias(name, forFolder: folder) }
+            .onDisappear { state.setFilingAlias(name, forFolder: folder) }
     }
 }
 #endif

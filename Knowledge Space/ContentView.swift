@@ -392,6 +392,14 @@ struct ContentView: View {
         if let module = LibraryViewRegistry.module(for: state.sidebarSelection),
            let detail = module.makeDetail?(state) {
             detail
+        } else if let doc = state.selectedDoc, Self.isWritable(doc) {
+            // A note being written holds the full screen alone — even
+            // "in the list", where the list otherwise stays the page:
+            // writing shows nothing but the writing area, no other
+            // notes around it. Closing the note lands back on the list.
+            NoteWritingView(doc: doc, measure: 800, centersContent: true)
+                .id(doc.id)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else if state.notesOpenInList {
             // "In the list", the list is the page — full screen shows
             // the whole list, its open note in place, on the familiar
@@ -408,15 +416,11 @@ struct ContentView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .background(AppGreys.page)
         } else if let doc = state.selectedDoc {
-            if Self.isWritable(doc) {
-                NoteWritingView(doc: doc, measure: 800, centersContent: true)
-                    .id(doc.id)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else {
-                DocumentReaderView(doc: doc, measure: 800, centersContent: true)
-                    .id(doc.id)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-            }
+            // Only unwritable kinds reach here — a writable note took
+            // the whole screen above.
+            DocumentReaderView(doc: doc, measure: 800, centersContent: true)
+                .id(doc.id)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
             detailPane
         }
@@ -490,6 +494,7 @@ struct ContentView: View {
     private var peekPlacesList: some View {
         List {
             ForEach(SidebarCatalog.sections(filedFolders: state.sidebarFiledFolders,
+                                            folderDisplayName: state.displayName(forFolder:),
                                             articlesLabel: state.articlesShelfLabel,
                                             importantToDo: state.hasImportantToDo),
                     id: \.title) { section in

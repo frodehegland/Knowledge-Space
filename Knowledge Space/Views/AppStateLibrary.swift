@@ -272,6 +272,17 @@ extension AppState {
             || doc.author.localizedCaseInsensitiveContains(searchText)
             || doc.onBehalfOf?.localizedCaseInsensitiveContains(searchText) == true
             || (doc.body ?? []).contains { $0.text.localizedCaseInsensitiveContains(searchText) }
+            || folderNameMatches(doc)
+    }
+
+    /// Naming a folder in Find summons its notes — by the folder's own
+    /// name or the alias it was renamed to. Whole names only, so a note
+    /// filed under Notes doesn't answer every search with "note" in it.
+    private func folderNameMatches(_ doc: LiquidDoc) -> Bool {
+        guard let folder = folder(for: doc) ?? doc.filedUnder else { return false }
+        let query = searchText.trimmingCharacters(in: .whitespaces)
+        return folder.caseInsensitiveCompare(query) == .orderedSame
+            || filingAlias(for: folder)?.caseInsensitiveCompare(query) == .orderedSame
     }
 
     /// Everything addressed for the user's attention.

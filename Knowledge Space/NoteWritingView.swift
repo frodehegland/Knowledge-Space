@@ -70,7 +70,6 @@ struct NoteWritingView: View {
                            maxHeight: inline ? nil : .infinity,
                            alignment: centersContent ? .top : .topLeading)
                     .frame(minHeight: inline ? 44 : 0)
-                    .overlay(alignment: .topLeading) { emptyHint }
                 #else
                 TextEditor(text: $text)
                     // An open note reads one point larger than the
@@ -90,7 +89,6 @@ struct NoteWritingView: View {
                            alignment: centersContent ? .top : .topLeading)
                     .frame(minHeight: inline ? 44 : 0)
                     .focused($writing)
-                    .overlay(alignment: .topLeading) { emptyHint }
                 #endif
             }
             if state.showsVisualMeta {
@@ -165,17 +163,6 @@ struct NoteWritingView: View {
         }
         // The writing page stands on the design's page grey.
         .background(AppGreys.page)
-    }
-
-    /// The empty page's invitation, gone with the first words.
-    @ViewBuilder private var emptyHint: some View {
-        if text.isEmpty {
-            Text("Write. A blank line starts a new paragraph; # starts a heading; **bold** and *italic* read as written.")
-                .foregroundStyle(.tertiary)
-                .padding(.horizontal, inline ? 6 : 26)
-                .padding(.top, inline ? 6 : 33)
-                .allowsHitTesting(false)
-        }
     }
 
     #if os(macOS)
@@ -680,6 +667,16 @@ private struct NoteTextEditor: NSViewRepresentable {
         textView.showInItems = { [weak coordinator = context.coordinator] selection in
             coordinator?.parent.showInItems(selection) ?? []
         }
+        // A linked document's name wears the page's own ink — underlined,
+        // not blue — and answers the pointer with the hand.
+        textView.linkTextAttributes = [
+            .underlineStyle: NSUnderlineStyle.single.rawValue,
+            .foregroundColor: NSColor.black,
+            .cursor: NSCursor.pointingHand,
+        ]
+        // Glyph generation consults the view, so a linked document's
+        // path can hide behind its name.
+        textView.layoutManager?.delegate = textView
         textView.string = text
         applyStyle(textView)
         if inline { return textView }
@@ -728,6 +725,7 @@ private struct NoteTextEditor: NSViewRepresentable {
         textView.textStorage?.setAttributes(
             attributes,
             range: NSRange(location: 0, length: (textView.string as NSString).length))
+        (textView as? MenuOwningTextView)?.restyleLinks()
         textView.invalidateIntrinsicContentSize()
     }
 
@@ -747,15 +745,32 @@ private struct NoteTextEditor: NSViewRepresentable {
         func focusChanged(_ inFocus: Bool) {
             if parent.focused != inFocus { parent.focused = inFocus }
         }
+
+        /// The caret entering a link reveals its markdown; leaving folds
+        /// it back to the name.
+        func textViewDidChangeSelection(_ notification: Notification) {
+            self.textView?.restyleLinks()
+        }
+
+        /// A click on a linked document's name opens the document.
+        func textView(_ textView: NSTextView, clickedOnLink link: Any, at charIndex: Int) -> Bool {
+            let url = link as? URL ?? (link as? String).flatMap { URL(string: $0) }
+            guard let url else { return false }
+            NSWorkspace.shared.open(url)
+            return true
+        }
     }
 }
 
 /// The menu is owned at the view level: on current SDKs the text system
 /// can build its menu without consulting the delegate hook, so the
 /// override is the reliable seam (Digital Letters' pattern).
-private final class MenuOwningTextView: NSTextView, NSMenuDelegate {
+private final class MenuOwningTextView: NSTextView, NSMenuDelegate, NSLayoutManagerDelegate {
     var showInItems: ((String?) -> [NSMenuItem])?
     var onFocusChange: ((Bool) -> Void)?
+    /// Whether the last styling pass found any linked documents — so a
+    /// deleted link is unstyled without scanning untouched notes.
+    private var linksStyled = false
     /// Inline in the list: the view reports its words' height and the
     /// list scrolls, instead of scrolling within.
     var sizesToFit = false
@@ -773,6 +788,7 @@ private final class MenuOwningTextView: NSTextView, NSMenuDelegate {
 
     override func didChangeText() {
         super.didChangeText()
+        restyleLinks()
         if sizesToFit { invalidateIntrinsicContentSize() }
     }
 
@@ -798,7 +814,8 @@ private final class MenuOwningTextView: NSTextView, NSMenuDelegate {
     static let ownedItemTag = 0x0716
 
     /// The editor's menu is ours: the basics, the misspelling's
-    /// suggestions where there are any, and Show in at the foot.
+    /// suggestions where there are any, and at the foot Link Document…
+    /// (with no selection) and Show in.
     override func menu(for event: NSEvent) -> NSMenu? {
         let system = super.menu(for: event)
         let menu = NSMenu()
@@ -822,12 +839,232 @@ private final class MenuOwningTextView: NSTextView, NSMenuDelegate {
         let range = selectedRange()
         let selection = range.length > 0
             ? (string as NSString).substring(with: range) : nil
-        if let items = showInItems?(selection), !items.isEmpty {
+        var foot: [NSMenuItem] = []
+        // Linking, ⌘K's twin: selected words become the link's name —
+        // the clipboard's web address links them directly — and with no
+        // selection the chosen document's name joins the words.
+        let linkTitle = selection != nil && clipboardWebAddress != nil
+            ? "Link to Copied Address" : "Link Document…"
+        let linkItem = ClosureMenuItem(title: linkTitle) { [weak self] in
+            self?.makeLink()
+        }
+        linkItem.keyEquivalent = "k"
+        linkItem.keyEquivalentModifierMask = .command
+        foot.append(linkItem)
+        foot += showInItems?(selection) ?? []
+        if !foot.isEmpty {
             menu.addItem(.separator())
-            for item in items { menu.addItem(item) }
+            for item in foot { menu.addItem(item) }
         }
         for item in menu.items { item.tag = Self.ownedItemTag }
         return menu
+    }
+
+    // MARK: Linked documents
+
+    /// ⌘K, and the context menu's link item. The link lands as markdown
+    /// — "[Name](address)" in the plain text, the name alone on the
+    /// page, clickable — so the note's file stays self-describing,
+    /// readable by any editor.
+    ///
+    /// Selected words become the link's name: a web address waiting on
+    /// the clipboard links them there directly; otherwise an Open
+    /// dialog asks which document. With nothing selected, the chosen
+    /// document's own name joins the words at the insertion point.
+    @objc fileprivate func makeLink() {
+        let range = selectedRange()
+        if range.length > 0 {
+            let name = cleanedLinkName((string as NSString).substring(with: range))
+            let address = clipboardWebAddress
+                ?? chooseDocument().map(encodedFileAddress)
+            guard let address else { return }
+            insertLink(named: name, to: address, replacing: range)
+        } else {
+            guard let url = chooseDocument() else { return }
+            let name = cleanedLinkName(FileManager.default.displayName(atPath: url.path))
+            insertLink(named: name, to: encodedFileAddress(url), replacing: range)
+        }
+    }
+
+    /// ⌘K makes a link, the context menu's twin.
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        if event.modifierFlags.intersection(.deviceIndependentFlagsMask) == .command,
+           event.charactersIgnoringModifiers?.lowercased() == "k" {
+            makeLink()
+            return true
+        }
+        return super.performKeyEquivalent(with: event)
+    }
+
+    /// A web address on the clipboard — a whole http(s) URL and nothing
+    /// else — ready to become a selection's link.
+    fileprivate var clipboardWebAddress: String? {
+        let pasteboard = NSPasteboard.general
+        let raw = (NSURL(from: pasteboard) as URL?)?.absoluteString
+            ?? pasteboard.string(forType: .string)?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let raw, !raw.contains(where: \.isWhitespace),
+              let url = URL(string: raw),
+              let scheme = url.scheme?.lowercased(),
+              scheme == "http" || scheme == "https",
+              url.host != nil
+        else { return nil }
+        return raw
+    }
+
+    /// The name as markdown can carry it: brackets softened, line
+    /// breaks flattened.
+    private func cleanedLinkName(_ name: String) -> String {
+        name.replacingOccurrences(of: "[", with: "(")
+            .replacingOccurrences(of: "]", with: ")")
+            .replacingOccurrences(of: "\n", with: " ")
+    }
+
+    private func chooseDocument() -> URL? {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        panel.message = "The document's name joins the note; clicking the name opens the document."
+        return panel.runModal() == .OK ? panel.url : nil
+    }
+
+    /// Parentheses are legal in file URLs; encoded so the link's own
+    /// closing bracket is unmistakable.
+    private func encodedFileAddress(_ url: URL) -> String {
+        url.absoluteString
+            .replacingOccurrences(of: "(", with: "%28")
+            .replacingOccurrences(of: ")", with: "%29")
+    }
+
+    private func insertLink(named name: String, to address: String,
+                            replacing range: NSRange) {
+        var insertion = "[\(name)](\(address))"
+        // A breath either side when the link sits against words. (An
+        // emoji neighbour reads as a word: surrogate halves carry no
+        // scalar, so they simply aren't whitespace.)
+        let text = string as NSString
+        func isWhitespace(at index: Int) -> Bool {
+            guard let scalar = UnicodeScalar(text.character(at: index)) else { return false }
+            return CharacterSet.whitespacesAndNewlines.contains(scalar)
+        }
+        if range.location > 0, !isWhitespace(at: range.location - 1) {
+            insertion = " " + insertion
+        }
+        if range.location + range.length < text.length,
+           !isWhitespace(at: range.location + range.length) {
+            insertion += " "
+        }
+        insertText(insertion, replacementRange: range)
+    }
+
+    /// Finds every "[Name](file:...)" and "[Name](http...)" in the words.
+    private static let markdownLinkRegex = try! NSRegularExpression(
+        pattern: #"\[([^\[\]\n]+)\]\(((?:file:|https?://)[^)\s]+)\)"#)
+
+    /// A web address standing bare in the words — pasted as itself.
+    private static let bareWebAddressRegex = try! NSRegularExpression(
+        pattern: #"https?://[^\s\)\]>"']+"#)
+
+    /// The name reads as a link — the page's ink, underlined, clickable —
+    /// and the syntax around it, path and all, hides from layout. A bare
+    /// web address is a link as it stands, shown whole. The backing text
+    /// is untouched: copying a link copies its whole truth.
+    ///
+    /// A link the caret or selection is inside stands revealed — the
+    /// whole markdown, path and all — so nothing editable is ever
+    /// invisible; step out and it folds back to the name.
+    fileprivate func restyleLinks() {
+        guard let storage = textStorage else { return }
+        guard linksStyled || string.contains("](file:") || string.contains("http")
+        else { return }
+        let text = string as NSString
+        let full = NSRange(location: 0, length: storage.length)
+        let selections = selectedRanges.map(\.rangeValue)
+        func touches(_ whole: NSRange) -> Bool {
+            selections.contains { sel in
+                NSIntersectionRange(sel, whole).length > 0
+                    || (sel.length == 0 && sel.location > whole.location
+                        && sel.location < whole.location + whole.length)
+            }
+        }
+        storage.beginEditing()
+        storage.removeAttribute(.link, range: full)
+        storage.removeAttribute(.hiddenLinkSyntax, range: full)
+        var styled = false
+        var markdownRanges: [NSRange] = []
+        Self.markdownLinkRegex.enumerateMatches(in: string, range: full) { match, _, _ in
+            guard let match else { return }
+            let whole = match.range
+            markdownRanges.append(whole)
+            styled = true
+            // Being edited: the markdown shows itself whole, plain.
+            guard !touches(whole) else { return }
+            let name = match.range(at: 1)
+            let address = text.substring(with: match.range(at: 2))
+            guard let url = URL(string: address) else { return }
+            storage.addAttribute(.link, value: url, range: name)
+            let lead = NSRange(location: whole.location,
+                               length: name.location - whole.location)
+            let trail = NSRange(location: name.location + name.length,
+                                length: whole.location + whole.length
+                                    - name.location - name.length)
+            storage.addAttribute(.hiddenLinkSyntax, value: true, range: lead)
+            storage.addAttribute(.hiddenLinkSyntax, value: true, range: trail)
+        }
+        Self.bareWebAddressRegex.enumerateMatches(in: string, range: full) { match, _, _ in
+            guard let match else { return }
+            var range = match.range
+            // Not the address inside a markdown link — that one already
+            // hides behind its name.
+            guard !markdownRanges.contains(where: {
+                NSIntersectionRange($0, range).length > 0
+            }) else { return }
+            // The sentence's own punctuation is not the address's.
+            while range.length > 0,
+                  ".,;:!?".contains(Character(UnicodeScalar(
+                    text.character(at: range.location + range.length - 1)) ?? " ")) {
+                range.length -= 1
+            }
+            guard range.length > 0,
+                  let url = URL(string: text.substring(with: range)) else { return }
+            storage.addAttribute(.link, value: url, range: range)
+            styled = true
+        }
+        storage.endEditing()
+        linksStyled = styled
+        layoutManager?.invalidateGlyphs(forCharacterRange: full,
+                                        changeInLength: 0,
+                                        actualCharacterRange: nil)
+        // Folding and revealing change the words' height in the list.
+        if sizesToFit { invalidateIntrinsicContentSize() }
+    }
+
+    /// The hiding itself: characters marked as link syntax generate
+    /// null glyphs — no ink, no width — while staying in the text.
+    func layoutManager(_ layoutManager: NSLayoutManager,
+                       shouldGenerateGlyphs glyphs: UnsafePointer<CGGlyph>,
+                       properties: UnsafePointer<NSLayoutManager.GlyphProperty>,
+                       characterIndexes: UnsafePointer<Int>,
+                       font: NSFont,
+                       forGlyphRange glyphRange: NSRange) -> Int {
+        guard let storage = textStorage, linksStyled else { return 0 }
+        var adjusted = [NSLayoutManager.GlyphProperty](repeating: .null, count: glyphRange.length)
+        var hidesAny = false
+        for i in 0..<glyphRange.length {
+            if storage.attribute(.hiddenLinkSyntax, at: characterIndexes[i],
+                                 effectiveRange: nil) != nil {
+                adjusted[i] = .null
+                hidesAny = true
+            } else {
+                adjusted[i] = properties[i]
+            }
+        }
+        guard hidesAny else { return 0 }   // 0: keep the default glyphs
+        layoutManager.setGlyphs(glyphs, properties: &adjusted,
+                                characterIndexes: characterIndexes,
+                                font: font, forGlyphRange: glyphRange)
+        return glyphRange.length
     }
 
     func menuNeedsUpdate(_ menu: NSMenu) {
@@ -857,6 +1094,12 @@ private final class MenuOwningTextView: NSTextView, NSMenuDelegate {
         }
         return false
     }
+}
+
+/// Marks the characters of a document link's markdown syntax — the
+/// brackets and the path — hidden from layout while only the name shows.
+private extension NSAttributedString.Key {
+    static let hiddenLinkSyntax = NSAttributedString.Key("KSHiddenLinkSyntax")
 }
 
 /// Bridges a Swift closure to an NSMenuItem target/action pair.

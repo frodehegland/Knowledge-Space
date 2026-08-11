@@ -80,13 +80,13 @@ enum SidebarCatalog {
         SidebarPlace(name: "Draft Letters", systemImage: "envelope.open", item: .draftLetters),
     ]
 
-    /// The Small layout's head, in this order: Inbox, Timeline, People
-    /// (the contacts list — photos and all), and the Map. Every filing
-    /// folder lists below under Files; New closes the head. Places,
+    /// The Small layout's Views: Timeline, People (the contacts list —
+    /// photos and all), and the Map lead — moved down from the head of
+    /// the column — then every installed view module. Inbox, Places,
     /// Transcripts, and Draft Letters are set aside for now.
-    static var smallTop: [SidebarPlace] {
-        let order: [SidebarItem] = [.library, .timeline, .people, .view("places")]
-        return order.compactMap { item in top.first { $0.item == item } }
+    static var smallViews: [SidebarPlace] {
+        let order: [SidebarItem] = [.timeline, .people, .view("places")]
+        return order.compactMap { item in top.first { $0.item == item } } + views
     }
 
     /// The Library: the reference shelf — sources whole and by kind,
@@ -150,10 +150,13 @@ enum SidebarCatalog {
     }
 
     /// Filed is a heading, not a click: each folder in use stands as
-    /// its own place, one click from its contents.
-    static func filed(_ folders: [String]) -> [SidebarPlace] {
+    /// its own place, one click from its contents. The place shows the
+    /// folder's display name — its alias when renamed — while the item
+    /// keeps the canonical name, which is the folder's identity.
+    static func filed(_ folders: [String],
+                      displayName: (String) -> String = { $0 }) -> [SidebarPlace] {
         folders.map {
-            SidebarPlace(name: $0,
+            SidebarPlace(name: displayName($0),
                          systemImage: filedIcon(for: $0),
                          item: .filedFolder($0))
         }
@@ -172,6 +175,7 @@ enum SidebarCatalog {
     }
 
     static func sections(filedFolders: [String],
+                         folderDisplayName: (String) -> String = { $0 },
                          articlesLabel: String = "Articles",
                          importantToDo: Bool = false,
                          layout: SidebarLayout = .small) -> [(title: String, places: [SidebarPlace])] {
@@ -181,19 +185,21 @@ enum SidebarCatalog {
             result = [("", top), ("Actions", actions),
                       ("Library", shelves(articlesLabel: articlesLabel)),
                       ("Digest", digest),
-                      ("Filed", filed(filedFolders)), ("Views", views)]
+                      ("Filed", filed(filedFolders, displayName: folderDisplayName)),
+                      ("Views", views)]
         case .small:
-            // The pared-down default: the head of the column, then
-            // every filing folder under Files — Thoughts, Inspirations,
-            // Journal, Notes, Letters, the user's own (Work, Personal…),
-            // Archived last — then Actions and Views. Library and Digest
-            // set aside.
-            var small: [(title: String, places: [SidebarPlace])] = [("", smallTop)]
+            // The pared-down default: a bare head — only the orange
+            // To Do when one stands, and New — then every filing folder
+            // under Files — Thoughts, Inspirations, Journal, Notes,
+            // Letters, the user's own (Work, Personal…), Archived last —
+            // then Actions, then Views, where Timeline, People, and the
+            // Map lead the modules. Library and Digest set aside.
+            var small: [(title: String, places: [SidebarPlace])] = [("", [])]
             if !filedFolders.isEmpty {
-                small.append(("Files", filed(filedFolders)))
+                small.append(("Files", filed(filedFolders, displayName: folderDisplayName)))
             }
             small.append(("Actions", actions))
-            small.append(("Views", views))
+            small.append(("Views", smallViews))
             result = small
         }
         // The important-To-Do row leads the whole column, above the head,
@@ -677,7 +683,7 @@ struct DocumentListView: View {
                         ContentUnavailableView(
                             "Nothing Here",
                             systemImage: "checklist",
-                            description: Text("File a note under \(filedUnder) — from the column beside the reader — and it lists here."))
+                            description: Text("File a note under \(state.displayName(forFolder: filedUnder)) — from the column beside the reader — and it lists here."))
                     } else {
                         ContentUnavailableView("Empty Library",
                                                systemImage: "tray",

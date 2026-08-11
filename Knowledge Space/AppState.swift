@@ -250,8 +250,10 @@ final class AppState {
     func setView(_ id: String, hidden: Bool) {
         if hidden {
             hiddenViewIDs.insert(id)
-            // The view being read leaves the sidebar: land somewhere real.
-            if sidebarSelection == .view(id) { sidebarSelection = .library }
+            // The view being read leaves the sidebar: land somewhere
+            // real — the Timeline, which has a row in every layout
+            // (the Inbox no longer stands in the small column).
+            if sidebarSelection == .view(id) { sidebarSelection = .timeline }
         } else {
             hiddenViewIDs.remove(id)
         }
@@ -575,6 +577,48 @@ final class AppState {
         try? data.write(to: url, options: .atomic)
     }
 
+    /// The user's renames: canonical folder name (lowercased) → the name
+    /// shown. A rename is an alias — the original name stays the identity
+    /// in every note's filedUnder and in the folder list, so nothing on
+    /// disk is rewritten and both names keep answering in Find.
+    private(set) var filingFolderAliases: [String: String] =
+        UserDefaults.standard.dictionary(forKey: "filingFolderAliases") as? [String: String] ?? [:]
+
+    /// The alias a folder was renamed to, if any.
+    func filingAlias(for folder: String) -> String? {
+        filingFolderAliases[folder.lowercased()]
+    }
+
+    /// The name a folder shows everywhere: its alias when renamed,
+    /// otherwise its own.
+    func displayName(forFolder folder: String) -> String {
+        filingAlias(for: folder) ?? folder
+    }
+
+    /// Renames a folder for display. An empty alias, or the folder's own
+    /// name, takes the rename back.
+    func setFilingAlias(_ alias: String?, forFolder folder: String) {
+        let key = folder.lowercased()
+        let trimmed = (alias ?? "").trimmingCharacters(in: .whitespaces)
+        if trimmed.isEmpty || trimmed.caseInsensitiveCompare(folder) == .orderedSame {
+            guard filingFolderAliases.removeValue(forKey: key) != nil else { return }
+        } else {
+            guard filingFolderAliases[key] != trimmed else { return }
+            filingFolderAliases[key] = trimmed
+        }
+        UserDefaults.standard.set(filingFolderAliases, forKey: "filingFolderAliases")
+        writeFilingFolderAliasManifest()
+    }
+
+    /// Writes the renames beside filing-folders.json — canonical → alias —
+    /// so the phone shows the same names the Mac does.
+    private func writeFilingFolderAliasManifest() {
+        guard let folderURL = index.folderURL,
+              let data = try? JSONSerialization.data(withJSONObject: filingFolderAliases) else { return }
+        let url = folderURL.appendingPathComponent("filing-folder-aliases.json")
+        try? data.write(to: url, options: .atomic)
+    }
+
     /// A new folder joins just above Archived, which keeps the last word.
     func addFilingFolder(_ name: String) {
         guard !filingFolders.contains(where: { $0.caseInsensitiveCompare(name) == .orderedSame })
@@ -642,14 +686,35 @@ final class AppState {
         }
         for id in filedIDs { filedFolders.removeValue(forKey: id) }
         filingFolders.removeAll { $0.caseInsensitiveCompare(name) == .orderedSame }
+        // A removed folder takes its rename with it.
+        setFilingAlias(nil, forFolder: name)
         UserDefaults.standard.set(filingFolders, forKey: "filingFolders")
         writeFilingFolderManifest()
         persistFiling()
-        // The place being read is gone: land somewhere real.
+        // The place being read is gone: land somewhere real — the
+        // Timeline, which has a row in every layout.
         if case .filedFolder(let selected) = sidebarSelection,
            selected.caseInsensitiveCompare(name) == .orderedSame {
-            sidebarSelection = .library
+            sidebarSelection = .timeline
         }
+    }
+
+    /// Ctrl-click ▸ Rename Folder…: asks for the shown name. The rename
+    /// is an alias over the folder's own name, which keeps holding the
+    /// notes underneath — nothing on disk changes, and both names answer
+    /// in Find.
+    func renameFilingFolder(_ name: String) {
+        let alert = NSAlert()
+        alert.messageText = "Rename “\(displayName(forFolder: name))”"
+        alert.informativeText = "The folder keeps “\(name)” as its name underneath — a rename touches no files, and either name answers in Find. An empty name takes the rename back."
+        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 240, height: 24))
+        field.stringValue = displayName(forFolder: name)
+        alert.accessoryView = field
+        alert.addButton(withTitle: "Rename")
+        alert.addButton(withTitle: "Cancel")
+        alert.window.initialFirstResponder = field
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        setFilingAlias(field.stringValue, forFolder: name)
     }
 
     /// The filing folders the Edit dialog offers to re-order and delete:
@@ -1005,6 +1070,7 @@ final class AppState {
             showNote("To Do, In Progress, and Done now travel inside the notes — \(migrated) moved over.")
         }
         writeFilingFolderManifest()
+        writeFilingFolderAliasManifest()
     }
 
     /// Reads the `filedUnder` field from every scanned note and applies

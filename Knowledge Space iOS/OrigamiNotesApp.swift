@@ -239,6 +239,18 @@ final class NotesModel {
         return merged.sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
     }
 
+    /// The Mac's folder renames — canonical name (lowercased) → the name
+    /// shown — read from filing-folder-aliases.json beside the folder
+    /// manifest. Filing always writes the canonical name into the note,
+    /// so a renamed folder's notes still agree across devices.
+    var folderAliases: [String: String] = [:]
+
+    /// The name a folder shows: its alias when renamed on the Mac,
+    /// otherwise its own.
+    func displayName(for folder: String) -> String {
+        folderAliases[folder.lowercased()] ?? folder
+    }
+
     init() {
         restoreFolder()
         locationFinder.onPlace = { [weak self] place in
@@ -368,15 +380,25 @@ final class NotesModel {
     /// manifest that macOS writes on startup.
     @MainActor
     func refreshFilingFolders() async {
-        guard let url = folderURL?.appendingPathComponent("filing-folders.json") else { return }
-        let folders: [String] = await Task.detached(priority: .utility) {
-            // Request download if the manifest isn't local yet.
+        guard let folderURL else { return }
+        let url = folderURL.appendingPathComponent("filing-folders.json")
+        let aliasURL = folderURL.appendingPathComponent("filing-folder-aliases.json")
+        let (folders, aliases): ([String], [String: String]?) = await Task.detached(priority: .utility) {
+            // Request download if the manifests aren't local yet.
             try? FileManager.default.startDownloadingUbiquitousItem(at: url)
-            guard let data = try? Data(contentsOf: url),
-                  let result = try? JSONSerialization.jsonObject(with: data) as? [String]
-            else { return [] }
-            return result
+            try? FileManager.default.startDownloadingUbiquitousItem(at: aliasURL)
+            let folders = ((try? Data(contentsOf: url)).flatMap {
+                try? JSONSerialization.jsonObject(with: $0) as? [String]
+            }) ?? []
+            // nil when unreadable — a failed read must not wipe the
+            // renames already known; an empty manifest genuinely
+            // clears them.
+            let aliases = (try? Data(contentsOf: aliasURL)).flatMap {
+                try? JSONSerialization.jsonObject(with: $0) as? [String: String]
+            }
+            return (folders, aliases)
         }.value
+        if let aliases, aliases != folderAliases { folderAliases = aliases }
         guard !folders.isEmpty else { return }
         let merged = Set(discoveredFolders).union(folders)
         guard merged != Set(discoveredFolders) else { return }
@@ -1313,7 +1335,7 @@ struct NewNoteView: View {
                 .contains($0.lowercased())
         }
         let label: String = {
-            if let f = filingFolder { return f }
+            if let f = filingFolder { return model.displayName(for: f) }
             return filingKind == .note ? "Note" : filingKind.displayName
         }()
         return Menu {
@@ -1327,7 +1349,8 @@ struct NewNoteView: View {
             if !customFolders.isEmpty {
                 Divider()
                 ForEach(customFolders, id: \.self) { folder in
-                    Button(folder) {
+                    // The alias shows; the canonical name files.
+                    Button(model.displayName(for: folder)) {
                         filingFolder = folder
                         filingKind = .note
                     }
@@ -1522,7 +1545,7 @@ struct NoteEditorView: View {
                 .contains($0.lowercased())
         }
         let label: String = {
-            if let f = editFilingFolder { return f }
+            if let f = editFilingFolder { return model.displayName(for: f) }
             return editFilingKind == .note ? "Note" : editFilingKind.displayName
         }()
         return Menu {
@@ -1536,7 +1559,8 @@ struct NoteEditorView: View {
             if !customFolders.isEmpty {
                 Divider()
                 ForEach(customFolders, id: \.self) { folder in
-                    Button(folder) {
+                    // The alias shows; the canonical name files.
+                    Button(model.displayName(for: folder)) {
                         editFilingFolder = folder
                         editFilingKind = .note
                     }

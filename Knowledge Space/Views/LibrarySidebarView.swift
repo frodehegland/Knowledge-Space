@@ -9,9 +9,9 @@ struct LibrarySidebarView: View {
     @Environment(\.openSettings) private var openSettings
     #endif
     @State private var editingViews = false
-    /// The named sections folded away under their headings — Views
-    /// starts closed.
-    @State private var collapsed: Set<String> = ["Views"]
+    /// The named sections folded away under their headings. Views —
+    /// now home to Timeline, People, and the Map — starts open.
+    @State private var collapsed: Set<String> = []
     #if os(macOS)
     /// The place the pointer is resting on — People answers with its
     /// reveal triangle.
@@ -27,6 +27,7 @@ struct LibrarySidebarView: View {
         VStack(spacing: 0) {
             List(selection: $state.sidebarSelection) {
                 ForEach(SidebarCatalog.sections(filedFolders: state.sidebarFiledFolders,
+                                                folderDisplayName: state.displayName(forFolder:),
                                                 articlesLabel: state.articlesShelfLabel,
                                                 importantToDo: state.hasImportantToDo,
                                                 layout: state.sidebarLayout),
@@ -39,12 +40,14 @@ struct LibrarySidebarView: View {
                         if section.title.isEmpty || !collapsed.contains(section.title) {
                         ForEach(state.shownPlaces(of: section.places)) { place in
                             HStack(spacing: 0) {
-                                // The important-To-Do row wears the same
-                                // orange as the Important bullet, word and
-                                // icon alike; every other row is grey.
+                                // The important-To-Do row's icon wears the
+                                // same orange as the Important bullet; its
+                                // word reads the same dark grey as every
+                                // other row.
                                 if place.item == .importantToDo {
                                     Label {
-                                        Text(place.name).foregroundStyle(.orange)
+                                        Text(place.name)
+                                            .foregroundStyle(sidebarTextColor(for: place.item))
                                     } icon: {
                                         Image(systemName: place.systemImage)
                                             .foregroundStyle(.orange)
@@ -79,9 +82,13 @@ struct LibrarySidebarView: View {
                                 }
                                 #endif
                             }
-                            // Light grey icons, not the accent blue — save
-                            // the important-To-Do row, which stands orange.
-                            .listItemTint(place.item == .importantToDo ? .orange : SidebarCatalog.iconTint)
+                            // Grey icons, not the accent blue — save the
+                            // important-To-Do row, which stands orange,
+                            // and the Archive, which stands back in the
+                            // quieter mid-grey.
+                            .listItemTint(place.item == .importantToDo ? .orange
+                                          : isArchivedPlace(place.item) ? AppGreys.quietText
+                                          : SidebarCatalog.iconTint)
                             .tag(place.item)
                             #if os(macOS)
                             .contextMenu {
@@ -97,8 +104,17 @@ struct LibrarySidebarView: View {
                                 // and offers to remove a folder of the
                                 // user's own making; its notes stay.
                                 if case .filedFolder(let folder) = place.item {
-                                    Button("New \(folder)") {
+                                    Button("New \(state.displayName(forFolder: folder))") {
                                         state.newNote(filedUnder: folder)
+                                    }
+                                    // A rename is an alias over the
+                                    // folder's own name — display only,
+                                    // so any folder but Archived may
+                                    // wear one.
+                                    if folder.caseInsensitiveCompare(AppState.archivedFolderName) != .orderedSame {
+                                        Button("Rename Folder…") {
+                                            state.renameFilingFolder(folder)
+                                        }
                                     }
                                     // The Archive can be emptied whole:
                                     // every note filed there to the Trash.
@@ -130,10 +146,10 @@ struct LibrarySidebarView: View {
                             } label: {
                                 Label {
                                     Text("New")
-                                        .foregroundStyle(isNewHovered ? Color.primary : Color(white: 169 / 255))
+                                        .foregroundStyle(isNewHovered ? Color.primary : AppGreys.buttonText)
                                 } icon: {
                                     Image(systemName: "square.and.pencil")
-                                        .foregroundStyle(isNewHovered ? Color.primary : Color(white: 169 / 255))
+                                        .foregroundStyle(isNewHovered ? Color.primary : AppGreys.buttonText)
                                 }
                             }
                             .buttonStyle(.plain)
@@ -151,7 +167,7 @@ struct LibrarySidebarView: View {
                                 editingViews = true
                             } label: {
                                 Label("Edit Views…", systemImage: "slider.horizontal.3")
-                                    .foregroundStyle(AppGreys.buttonText)
+                                    .foregroundStyle(AppGreys.quietText)
                             }
                             .buttonStyle(.plain)
                         }
@@ -169,7 +185,7 @@ struct LibrarySidebarView: View {
                 Text("Knowledge Space")
                     .font(.headline)
                     .fontWeight(.bold)
-                    .foregroundStyle(Color(white: 169 / 255))
+                    .foregroundStyle(AppGreys.buttonText)
                     .lineLimit(1)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal, 16)
@@ -229,7 +245,7 @@ struct LibrarySidebarView: View {
         } label: {
             HStack(spacing: 4) {
                 Text(title)
-                    .foregroundStyle(Color(white: 169 / 255))
+                    .foregroundStyle(AppGreys.buttonText)
                 // A small triangle just past the title, not out at the
                 // column's edge: turned down when open, on its side
                 // when closed.
@@ -248,7 +264,19 @@ struct LibrarySidebarView: View {
         if state.sidebarSelection == item || hoveredItem == item {
             return .primary
         }
-        return Color(white: 169 / 255)
+        // The Archive reads quieter — set-aside, not in play.
+        if isArchivedPlace(item) { return AppGreys.quietText }
+        // The icons' own dark grey, so the column's words and symbols
+        // read as one set — and stay legible in the dark themes.
+        return AppGreys.buttonText
+    }
+
+    /// The Archive's place, told apart so its row can stand back.
+    private func isArchivedPlace(_ item: SidebarItem) -> Bool {
+        if case .filedFolder(let folder) = item {
+            return folder.caseInsensitiveCompare(AppState.archivedFolderName) == .orderedSame
+        }
+        return false
     }
 }
 
@@ -415,6 +443,10 @@ enum AppGreys {
     static var buttonBorder: Color {
         AppTheme.current == .highContrast ? .black : .clear
     }
+    /// A quieter mid-grey for the sidebar's secondary rows — Edit Views…
+    /// and Archived — standing between the column's dark words and its
+    /// background, in light and dark themes alike.
+    static let quietText = Color(white: 128 / 255)
     static var page: Color {
         switch AppTheme.current {
         case .highContrast: .white
