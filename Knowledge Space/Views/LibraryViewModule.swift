@@ -625,8 +625,12 @@ struct DocumentListView: View {
                         // The day and place headings sit a shade
                         // lighter than the notes' own words — and
                         // recede with the rows while one is written in.
+                        // Half the stock header's stand: the words the
+                        // same, on a slimmer bar.
                         Text(group.label)
+                            .font(state.listHeadingFont)
                             .foregroundStyle(.tertiary)
+                            .listRowInsets(EdgeInsets(top: 2, leading: 10, bottom: 2, trailing: 10))
                             .opacity(state.dimsListWhileEditing && state.editingInList ? 0.3 : 1)
                     }
                 }

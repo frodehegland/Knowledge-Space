@@ -1021,12 +1021,12 @@ struct DocumentRow: View {
                     .fontWeight(state.isUnread(entry.doc) ? .bold : .regular)
                     // Tight leading draws the note's own lines a little
                     // closer; the row padding sets the notes apart.
-                    .font(.system(size: state.listTextSize, design: .serif).leading(.tight))
+                    .font(state.listFont(size: state.listTextSize).leading(.tight))
                     // At most four lines, an ellipsis where more follows.
                     .lineLimit(4)
             } else {
                 Text(isTranscript ? entry.doc.listedDateText : entry.doc.title)
-                    .font(.headline)
+                    .font(state.listTitleFont)
                     // Bold until read; opening the note ends the bolding.
                     .fontWeight(state.isUnread(entry.doc) ? .bold : .regular)
                     .lineLimit(2)

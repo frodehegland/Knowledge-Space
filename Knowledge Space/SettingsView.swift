@@ -101,11 +101,20 @@ private struct AppearanceSettingsView: View {
                 Stepper(value: $state.listTextSize, in: 10...20, step: 1) {
                     Text("List text size: \(Int(state.listTextSize)) pt")
                 }
+                Picker("List typeface", selection: $state.listFontFamily) {
+                    Text("New York — the body's serif").tag("")
+                    Text("San Francisco — the system face").tag("system-sans")
+                    Divider()
+                    ForEach(NSFontManager.shared.availableFontFamilies, id: \.self) { family in
+                        Text(family).tag(family)
+                    }
+                }
+                .pickerStyle(.menu)
                 Toggle("Dim the list while writing", isOn: $state.dimsListWhileEditing)
             } header: {
                 Text("Notes List")
             } footer: {
-                Text("The size of the list's rows in the In-the-list layout — the title and the body's first words, set in New York, the body's own type. Dimming fades the other rows to grey while a note is being written, so the open one stands out — off by default.")
+                Text("The size and face of the list's rows — the title and the body's first words — and the day headings over them, which follow the same choice. New York, the body's own type, is the design's default. Dimming fades the other rows to grey while a note is being written, so the open one stands out — off by default.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

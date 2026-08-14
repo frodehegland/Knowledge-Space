@@ -110,6 +110,45 @@ final class AppState {
         didSet { UserDefaults.standard.set(listTextSize, forKey: "listTextSize") }
     }
 
+    /// The typeface of the notes list — the rows and the day headings
+    /// follow it together. Empty means the current design: New York for
+    /// the in-list rows, San Francisco for titles and headings.
+    /// "system-sans" sets San Francisco throughout; anything else names
+    /// an installed family. Chosen in Settings ▸ Appearance.
+    var listFontFamily: String =
+        UserDefaults.standard.string(forKey: "listFontFamily") ?? "" {
+        didSet {
+            UserDefaults.standard.set(listFontFamily, forKey: "listFontFamily")
+        }
+    }
+
+    /// The list's body font at a given size — the in-list rows' words.
+    func listFont(size: Double) -> Font {
+        switch listFontFamily {
+        case "": .system(size: size, design: .serif)
+        case "system-sans": .system(size: size)
+        default: .custom(listFontFamily, size: size)
+        }
+    }
+
+    /// The font of a closed row's title line — the stock headline
+    /// unless a family is chosen, at the headline's own size.
+    var listTitleFont: Font {
+        switch listFontFamily {
+        case "", "system-sans": .headline
+        default: .custom(listFontFamily, size: 13)
+        }
+    }
+
+    /// The day headings' font — nil inherits the list's own header
+    /// style, so the default look is untouched.
+    var listHeadingFont: Font? {
+        switch listFontFamily {
+        case "", "system-sans": nil
+        default: .custom(listFontFamily, size: 11).weight(.semibold)
+        }
+    }
+
     /// Whether the list dims while a note is being written in it — the
     /// other rows receding to 0.3 so the open note stands out. Off by
     /// default; chosen in Settings ▸ Appearance.
