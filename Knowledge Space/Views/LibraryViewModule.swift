@@ -80,12 +80,12 @@ enum SidebarCatalog {
         SidebarPlace(name: "Draft Letters", systemImage: "envelope.open", item: .draftLetters),
     ]
 
-    /// The Small layout's Views: Timeline, People (the contacts list —
-    /// photos and all), and the Map lead — moved down from the head of
-    /// the column — then every installed view module. Inbox, Places,
+    /// The Small layout's Views: People (the contacts list — photos and
+    /// all) and the Map lead — Timeline has moved to the head of the
+    /// column — then every installed view module. Inbox, Places,
     /// Transcripts, and Draft Letters are set aside for now.
     static var smallViews: [SidebarPlace] {
-        let order: [SidebarItem] = [.timeline, .people, .view("places")]
+        let order: [SidebarItem] = [.people, .view("places")]
         return order.compactMap { item in top.first { $0.item == item } } + views
     }
 
@@ -117,11 +117,6 @@ enum SidebarCatalog {
     static let standardFiles: [(label: String, folder: String)] =
         [("Thought", "Thoughts"), ("Inspiration", "Inspirations"),
          ("Journal", "Journal"), ("Note", "Notes")]
-
-    /// The orange head of the column: To Do notes marked Important.
-    /// Shown only when at least one such note exists.
-    static let importantToDoPlace = SidebarPlace(
-        name: "To Do", systemImage: "checklist", item: .importantToDo)
 
     /// The Action section: the note's standing, one place per state —
     /// the lifecycle axis, orthogonal to filing, read from the notes
@@ -177,35 +172,35 @@ enum SidebarCatalog {
     static func sections(filedFolders: [String],
                          folderDisplayName: (String) -> String = { $0 },
                          articlesLabel: String = "Articles",
-                         importantToDo: Bool = false,
                          layout: SidebarLayout = .small) -> [(title: String, places: [SidebarPlace])] {
         var result: [(title: String, places: [SidebarPlace])]
         switch layout {
         case .full:
-            result = [("", top), ("Actions", actions),
+            // Actions left the sidebar for the persistent column at the
+            // list's right edge (ActionFilterColumn), where they filter
+            // instead of navigate.
+            result = [("", top),
                       ("Library", shelves(articlesLabel: articlesLabel)),
                       ("Digest", digest),
                       ("Filed", filed(filedFolders, displayName: folderDisplayName)),
                       ("Views", views)]
         case .small:
-            // The pared-down default: a bare head — only the orange
-            // To Do when one stands, and New — then every filing folder
-            // under Files — Thoughts, Inspirations, Journal, Notes,
-            // Letters, the user's own (Work, Personal…), Archived last —
-            // then Actions, then Views, where Timeline, People, and the
-            // Map lead the modules. Library and Digest set aside.
-            var small: [(title: String, places: [SidebarPlace])] = [("", [])]
+            // The pared-down default: Timeline on top, unnamed, then
+            // every filing folder under Files — Thoughts, Inspirations,
+            // Journal, Notes, Letters, the user's own (Work, Personal…),
+            // Archived last — then Views, where People and the Map lead
+            // the modules. Library and Digest set aside; Actions (and
+            // with them To Do) live in the column at the list's right
+            // edge; New lives in ⌘N and the toolbar.
+            var small: [(title: String, places: [SidebarPlace])] = []
+            if let timeline = top.first(where: { $0.item == .timeline }) {
+                small.append(("", [timeline]))
+            }
             if !filedFolders.isEmpty {
                 small.append(("Files", filed(filedFolders, displayName: folderDisplayName)))
             }
-            small.append(("Actions", actions))
             small.append(("Views", smallViews))
             result = small
-        }
-        // The important-To-Do row leads the whole column, above the head,
-        // whenever any To Do note is marked Important.
-        if importantToDo, let first = result.indices.first {
-            result[first].places.insert(importantToDoPlace, at: 0)
         }
         return result
     }
@@ -338,6 +333,87 @@ enum LibraryViewRegistry {
                + "Each LibraryViewModule needs a unique id.")
     }()
     #endif
+}
+
+/// The persistent Actions column at the right edge of every document
+/// list — the lifecycle axis, orthogonal to filing, standing beside the
+/// notes it sorts. Choosing a standing narrows whatever list the sidebar
+/// has open to notes carrying it; choosing it again lets the list back
+/// out. Nothing is ever demanded: with no choice made, the column only
+/// stands and waits.
+struct ActionFilterColumn: View {
+    @Environment(AppState.self) private var state
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text("Actions")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.tertiary)
+                .padding(.leading, 8)
+                .padding(.bottom, 4)
+            // All leads the column and is the resting state: no filter,
+            // the whole list. It wears the chosen look whenever no
+            // standing below has taken over.
+            allRow
+            ForEach(LiquidDoc.Action.allCases, id: \.self) { action in
+                row(action)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.top, 12)
+        .padding(.horizontal, 6)
+        .frame(width: 126, alignment: .leading)
+    }
+
+    private var allRow: some View {
+        let chosen = state.listActionFilter == nil
+        return Button {
+            withAnimation(.snappy) { state.listActionFilter = nil }
+        } label: {
+            Label("All", systemImage: "list.bullet")
+                .font(.callout)
+                .foregroundStyle(chosen ? Color.primary : SidebarCatalog.iconTint)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.vertical, 5)
+                .padding(.horizontal, 8)
+                .background(
+                    RoundedRectangle(cornerRadius: 6)
+                        .fill(chosen ? Color.primary.opacity(0.08) : .clear))
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help("Everything in the current list, whatever its standing")
+    }
+
+    private func row(_ action: LiquidDoc.Action) -> some View {
+        let chosen = state.listActionFilter == action
+        return Button {
+            withAnimation(.snappy) {
+                state.listActionFilter = chosen ? nil : action
+            }
+        } label: {
+            Label(action.placeName, systemImage: SidebarCatalog.icon(for: action))
+                .font(.callout)
+                .foregroundStyle(chosen ? Color.primary : SidebarCatalog.iconTint)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.vertical, 5)
+                .padding(.horizontal, 8)
+                .background(
+                    RoundedRectangle(cornerRadius: 6)
+                        .fill(chosen ? Color.primary.opacity(0.08) : .clear))
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help(chosen ? "Show everything again"
+              : "Only \(action.placeName) in the current list")
+        #if os(macOS)
+        // A standing's row starts a note with that standing — New To Do,
+        // New Question — as its sidebar place did before the move here.
+        .contextMenu {
+            Button("New \(action.displayName)") { state.newNote(action: action) }
+        }
+        #endif
+    }
 }
 
 /// The library's document list, as the content column: what the modules'
@@ -484,6 +560,16 @@ struct DocumentListView: View {
         }
     }
 
+    /// The Actions column's filter, laid over whatever scope the
+    /// sidebar chose. The open document keeps its seat — changing a
+    /// note's standing must not snatch it out from under the writer.
+    private var displayedEntries: [IndexEntry] {
+        guard let filter = state.listActionFilter else { return scopedEntries }
+        return scopedEntries.filter {
+            $0.doc.actionValue == filter || $0.id == state.selectedDocID
+        }
+    }
+
     /// A transcript is a document declared `transcript`, or — for
     /// documents from before the type existed — one whose body carries
     /// at least two distinct speaker attributions. Digital Letters'
@@ -504,6 +590,21 @@ struct DocumentListView: View {
     }
 
     var body: some View {
+        // The Actions column stands at the list's right edge, always:
+        // the sidebar says where you are looking, the column says what
+        // standing you want to see there. The two compose. Full screen
+        // hides it with the sidebar; the right edge peeks it back in
+        // (ContentView's peek), the same way the left edge answers.
+        HStack(spacing: 0) {
+            listColumn
+            if !inFullScreen {
+                Divider()
+                ActionFilterColumn()
+            }
+        }
+    }
+
+    private var listColumn: some View {
         VStack(spacing: 0) {
             List(selection: listSelection) {
                 // A bare place the search has placed awaits the reader's
@@ -517,6 +618,17 @@ struct DocumentListView: View {
                 }
                 ForEach(groups, id: \.label) { group in
                     Section {
+                        // The day stands as the first row of its group,
+                        // inline with the notes and scrolling with them —
+                        // no header bar of its own. A shade lighter than
+                        // the notes' words, and receding with the rows
+                        // while one is written in.
+                        Text(group.label)
+                            .font(state.listHeadingFont)
+                            .foregroundStyle(.secondary)
+                            .listRowSeparator(.hidden)
+                            .padding(.top, 6)
+                            .opacity(state.dimsListWhileEditing && state.editingInList ? 0.3 : 1)
                         ForEach(group.entries) { entry in
                             Group {
                                 // "In the list" (Settings ▸ Appearance):
@@ -530,11 +642,12 @@ struct DocumentListView: View {
                                     // and the list resumes.
                                     VStack(spacing: 0) {
                                         openNoteRule
-                                        // An open-state triangle stands
-                                        // left of the first line — only
-                                        // open documents wear one; the
-                                        // click folds the note away. At
-                                        // the top right, Show Column
+                                        // An unmarked close spot stands
+                                        // left of the first line — a
+                                        // click there folds the note
+                                        // away, known to the hand, not
+                                        // drawn on the page. At the
+                                        // top right, Show Column
                                         // brings the note's controls in
                                         // as a column beside the words.
                                         HStack(alignment: .top, spacing: 4) {
@@ -621,17 +734,6 @@ struct DocumentListView: View {
                                 #endif
                             }
                         }
-                    } header: {
-                        // The day and place headings sit a shade
-                        // lighter than the notes' own words — and
-                        // recede with the rows while one is written in.
-                        // Half the stock header's stand: the words the
-                        // same, on a slimmer bar.
-                        Text(group.label)
-                            .font(state.listHeadingFont)
-                            .foregroundStyle(.tertiary)
-                            .listRowInsets(EdgeInsets(top: 2, leading: 10, bottom: 2, trailing: 10))
-                            .opacity(state.dimsListWhileEditing && state.editingInList ? 0.3 : 1)
                     }
                 }
                 if state.index.isScanning {
@@ -655,10 +757,18 @@ struct DocumentListView: View {
                     }
                 }
             }
+            // The list also pads the top of its scroll content before
+            // the first heading; that air is the frame's, not the text's.
+            .contentMargins(.top, 0, for: .scrollContent)
             .overlay {
-                if state.index.folderURL != nil, scopedEntries.isEmpty,
+                if state.index.folderURL != nil, displayedEntries.isEmpty,
                    !state.index.isScanning {
-                    if draftLettersOnly {
+                    if let filter = state.listActionFilter, !scopedEntries.isEmpty {
+                        ContentUnavailableView(
+                            "Nothing \(filter.displayName)",
+                            systemImage: SidebarCatalog.icon(for: filter),
+                            description: Text("No note here carries this standing — choose it again in the Actions column to see everything."))
+                    } else if draftLettersOnly {
                         ContentUnavailableView(
                             "No Draft Letters",
                             systemImage: "envelope.open",
@@ -756,14 +866,18 @@ struct DocumentListView: View {
         Button {
             withAnimation(.snappy) { state.selectedDocID = nil }
         } label: {
-            Image(systemName: "chevron.down")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.secondary)
+            // An invisible dot: the control keeps its place, its click,
+            // and its tooltip, but paints nothing — the fold-away is for
+            // hands that know it, not a mark on the page.
+            Circle()
+                .fill(.clear)
+                .frame(width: 8, height: 8)
                 .padding(.vertical, 10)
                 .padding(.horizontal, 2)
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .accessibilityLabel("Close")
         .help("Close — the note folds back into the list")
     }
 
@@ -839,8 +953,8 @@ struct DocumentListView: View {
 
     private var groups: [(label: String, entries: [IndexEntry])] {
         switch grouping {
-        case .place: return placeGroups(scopedEntries)
-        case .time: return timeGroups(scopedEntries)
+        case .place: return placeGroups(displayedEntries)
+        case .time: return timeGroups(displayedEntries)
         }
     }
 

@@ -495,8 +495,7 @@ struct ContentView: View {
         List {
             ForEach(SidebarCatalog.sections(filedFolders: state.sidebarFiledFolders,
                                             folderDisplayName: state.displayName(forFolder:),
-                                            articlesLabel: state.articlesShelfLabel,
-                                            importantToDo: state.hasImportantToDo),
+                                            articlesLabel: state.articlesShelfLabel),
                     id: \.title) { section in
                 Section(section.title) {
                     ForEach(state.shownPlaces(of: section.places)) { place in
@@ -575,11 +574,22 @@ struct ContentView: View {
         return state.selectedDoc
     }
 
+    /// Whether the full screen is showing the list itself — "in the
+    /// list", no document taken solo, no module canvas — so the right
+    /// edge summons the Actions column rather than a document's options.
+    private var fullScreenShowsList: Bool {
+        if let module = LibraryViewRegistry.module(for: state.sidebarSelection),
+           module.makeDetail?(state) != nil { return false }
+        return state.selectedDoc == nil && state.notesOpenInList
+    }
+
     /// The sidebar peek's mirror: a slim invisible strip along the
-    /// right edge summons the open document's options column as a
-    /// floating panel, and it fades once the pointer moves on.
+    /// right edge summons the open document's options column — or, when
+    /// the full screen is the list alone, the Actions column that full
+    /// screen tucked away — as a floating panel, and it fades once the
+    /// pointer moves on.
     @ViewBuilder private var peekOptionsColumn: some View {
-        if let doc = fullScreenDoc {
+        if fullScreenDoc != nil || fullScreenShowsList {
             HStack(spacing: 0) {
                 HoverSensor { inside in
                     if inside {
@@ -591,16 +601,22 @@ struct ContentView: View {
                 }
                 .frame(width: 16)
                 if showsPeekOptions {
-                    NoteOptionsColumn(doc: doc)
-                        .frame(maxHeight: .infinity)
-                        .background(.regularMaterial)
-                        .clipShape(UnevenRoundedRectangle(topLeadingRadius: 12, bottomLeadingRadius: 12,
-                                                          bottomTrailingRadius: 0, topTrailingRadius: 0))
-                        .shadow(radius: 8, x: -2, y: 0)
-                        .background(HoverSensor { inside in
-                            inside ? cancelPeekOptionsHide() : schedulePeekOptionsHide()
-                        })
-                        .transition(.move(edge: .trailing).combined(with: .opacity))
+                    Group {
+                        if let doc = fullScreenDoc {
+                            NoteOptionsColumn(doc: doc)
+                        } else {
+                            ActionFilterColumn()
+                        }
+                    }
+                    .frame(maxHeight: .infinity)
+                    .background(.regularMaterial)
+                    .clipShape(UnevenRoundedRectangle(topLeadingRadius: 12, bottomLeadingRadius: 12,
+                                                      bottomTrailingRadius: 0, topTrailingRadius: 0))
+                    .shadow(radius: 8, x: -2, y: 0)
+                    .background(HoverSensor { inside in
+                        inside ? cancelPeekOptionsHide() : schedulePeekOptionsHide()
+                    })
+                    .transition(.move(edge: .trailing).combined(with: .opacity))
                 }
             }
             .frame(maxHeight: .infinity)

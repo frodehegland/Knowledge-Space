@@ -16,7 +16,6 @@ struct LibrarySidebarView: View {
     /// The place the pointer is resting on — People answers with its
     /// reveal triangle.
     @State private var hoveredItem: SidebarItem?
-    @State private var isNewHovered = false
     #endif
 
     var body: some View {
@@ -29,11 +28,10 @@ struct LibrarySidebarView: View {
                 ForEach(SidebarCatalog.sections(filedFolders: state.sidebarFiledFolders,
                                                 folderDisplayName: state.displayName(forFolder:),
                                                 articlesLabel: state.articlesShelfLabel,
-                                                importantToDo: state.hasImportantToDo,
                                                 layout: state.sidebarLayout),
                         id: \.title) { section in
-                    // The head of the column — Inbox and New Note —
-                    // stands above the Library heading, unnamed.
+                    // The head of the column — Timeline — stands above
+                    // the named headings, unnamed.
                     Section {
                         // The unnamed head always stands; a named
                         // section's rows fold away under its triangle.
@@ -140,28 +138,9 @@ struct LibrarySidebarView: View {
                             }
                             #endif
                         }
-                        if section.title.isEmpty {
-                            Button {
-                                state.newNote()
-                            } label: {
-                                Label {
-                                    Text("New")
-                                        .foregroundStyle(isNewHovered ? Color.primary : AppGreys.buttonText)
-                                } icon: {
-                                    Image(systemName: "square.and.pencil")
-                                        .foregroundStyle(isNewHovered ? Color.primary : AppGreys.buttonText)
-                                }
-                            }
-                            .buttonStyle(.plain)
-                            .disabled(state.index.folderURL == nil)
-                            .help("A new note, straight into writing (⌘N)")
-                            #if os(macOS)
-                            .onHover { isNewHovered = $0 }
-                            #endif
-                            // New Letter is resting for now; the act
-                            // returns when Digital Letters' sending
-                            // arrives. newLetter() stands ready.
-                        }
+                        // New left the column for ⌘N and the toolbar;
+                        // New Letter rests until Digital Letters'
+                        // sending arrives. newLetter() stands ready.
                         if section.title == "Views" {
                             Button {
                                 editingViews = true

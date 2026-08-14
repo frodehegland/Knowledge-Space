@@ -51,6 +51,12 @@ final class AppState {
     private(set) var currentPlace: String?
     private let placeFinder = PlaceFinder()
 
+    /// The Actions column's standing filter — the persistent column at
+    /// the list's right edge. Nil shows everything; a chosen standing
+    /// narrows whatever list the sidebar has open. Session state, never
+    /// persisted: a filter that survives a relaunch reads as lost notes.
+    var listActionFilter: LiquidDoc.Action? = nil
+
     /// The document open in the reader. Opening a note is reading it —
     /// its bolding in the list ends here; Mark Unread restores it.
     var selectedDocID: String? {
@@ -110,8 +116,9 @@ final class AppState {
         didSet { UserDefaults.standard.set(listTextSize, forKey: "listTextSize") }
     }
 
-    /// The typeface of the notes list — the rows and the day headings
-    /// follow it together. Empty means the current design: New York for
+    /// The typeface of the notes list — the rows and the open note
+    /// follow it together; the day headings stay in the sidebar's
+    /// system face. Empty means the current design: New York for
     /// the in-list rows, San Francisco for titles and headings.
     /// "system-sans" sets San Francisco throughout; anything else names
     /// an installed family. Chosen in Settings ▸ Appearance.
@@ -140,14 +147,10 @@ final class AppState {
         }
     }
 
-    /// The day headings' font — nil inherits the list's own header
-    /// style, so the default look is untouched.
-    var listHeadingFont: Font? {
-        switch listFontFamily {
-        case "", "system-sans": nil
-        default: .custom(listFontFamily, size: 11).weight(.semibold)
-        }
-    }
+    /// The day headings' font: the sidebar's own face — the system
+    /// sans, headline weight — whatever typeface the rows themselves
+    /// wear, so the dates read as wayfinding and not as notes.
+    var listHeadingFont: Font { .headline }
 
     /// Whether the list dims while a note is being written in it — the
     /// other rows receding to 0.3 so the open note stands out. Off by
@@ -195,12 +198,13 @@ final class AppState {
     }
     @ObservationIgnored private var hasSetInitialSelection = false
 
-    /// Called once after the first library scan. Lands on To Do when
-    /// there are important items waiting, otherwise on Timeline.
+    /// Called once after the first library scan. Lands on Timeline —
+    /// the head of the column; To Do now waits in the Actions column
+    /// at the list's right edge, not at the top of the sidebar.
     func setInitialSidebarSelection() {
         guard !hasSetInitialSelection else { return }
         hasSetInitialSelection = true
-        sidebarSelection = hasImportantToDo ? .importantToDo : .timeline
+        sidebarSelection = .timeline
     }
     /// The person picked in the People list — their mentions fill the
     /// reading column while no document is open.

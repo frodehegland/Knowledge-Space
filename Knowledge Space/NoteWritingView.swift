@@ -59,6 +59,7 @@ struct NoteWritingView: View {
                 // basics, spelling, and Show in <View> — nothing else.
                 NoteTextEditor(text: $text,
                                fontSize: state.listTextSize + 1,
+                               fontFamily: state.listFontFamily,
                                inline: inline,
                                focused: $editorFocused,
                                showInItems: showInMenuItems(selection:))
@@ -72,9 +73,10 @@ struct NoteWritingView: View {
                     .frame(minHeight: inline ? 44 : 0)
                 #else
                 TextEditor(text: $text)
-                    // An open note reads one point larger than the
-                    // list's rows (Settings ▸ Appearance sets those).
-                    .font(.system(size: state.listTextSize + 1, design: .serif))
+                    // An open note reads in the list's own face, one
+                    // point larger than its rows (Settings ▸ Appearance
+                    // sets both).
+                    .font(state.listFont(size: state.listTextSize + 1))
                     .lineSpacing(6)
                     .scrollContentBackground(.hidden)
                     // Inline, the editor holds all its words and the
@@ -637,6 +639,9 @@ struct NoteWritingView: View {
 private struct NoteTextEditor: NSViewRepresentable {
     @Binding var text: String
     var fontSize: Double
+    /// The list's typeface family (AppState.listFontFamily) — empty for
+    /// the serif design, "system-sans" for plain system, else a family.
+    var fontFamily: String
     var inline: Bool
     @Binding var focused: Bool
     /// Builds the Show in items for the current selection.
@@ -696,8 +701,10 @@ private struct NoteTextEditor: NSViewRepresentable {
             textView.string = text
             applyStyle(textView)
         }
-        if context.coordinator.appliedFontSize != fontSize {
+        if context.coordinator.appliedFontSize != fontSize
+            || context.coordinator.appliedFontFamily != fontFamily {
             context.coordinator.appliedFontSize = fontSize
+            context.coordinator.appliedFontFamily = fontFamily
             applyStyle(textView)
         }
         if focused, let window = textView.window,
@@ -706,16 +713,26 @@ private struct NoteTextEditor: NSViewRepresentable {
         }
     }
 
-    /// One uniform style: the body serif at the chosen size, black,
+    /// One uniform style: the list's own body face at the chosen size —
+    /// the open note is the same font as its row, only larger — black,
     /// the page's line spacing.
     private func applyStyle(_ textView: NSTextView) {
         let size = CGFloat(fontSize)
         let paragraph = NSMutableParagraphStyle()
         paragraph.lineSpacing = 6
-        let descriptor = NSFont.systemFont(ofSize: size).fontDescriptor
-            .withDesign(.serif)
-        let font = descriptor.flatMap { NSFont(descriptor: $0, size: size) }
-            ?? NSFont.systemFont(ofSize: size)
+        let font: NSFont
+        switch fontFamily {
+        case "":
+            let descriptor = NSFont.systemFont(ofSize: size).fontDescriptor
+                .withDesign(.serif)
+            font = descriptor.flatMap { NSFont(descriptor: $0, size: size) }
+                ?? NSFont.systemFont(ofSize: size)
+        case "system-sans":
+            font = NSFont.systemFont(ofSize: size)
+        default:
+            font = NSFont(name: fontFamily, size: size)
+                ?? NSFont.systemFont(ofSize: size)
+        }
         let attributes: [NSAttributedString.Key: Any] = [
             .font: font,
             .paragraphStyle: paragraph,
@@ -733,6 +750,7 @@ private struct NoteTextEditor: NSViewRepresentable {
         var parent: NoteTextEditor
         weak var textView: MenuOwningTextView?
         var appliedFontSize: Double = 0
+        var appliedFontFamily: String?
 
         init(_ parent: NoteTextEditor) { self.parent = parent }
 
