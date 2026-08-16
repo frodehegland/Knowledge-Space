@@ -100,6 +100,9 @@ final class AppState {
     /// parallel reading still bring their own pane.
     var notesOpenInList: Bool {
         if case .sourceShelf = sidebarSelection { return false }
+        if sidebarSelection == .authorDocuments { return false }
+        if case .pdfShelf = sidebarSelection { return false }
+        if case .epubShelf = sidebarSelection { return false }
         return noteLayout == .inList
             && parallelDoc == nil
             && sidebarSelection != .people
@@ -148,9 +151,10 @@ final class AppState {
     }
 
     /// The day headings' font: the sidebar's own face — the system
-    /// sans, headline weight — whatever typeface the rows themselves
-    /// wear, so the dates read as wayfinding and not as notes.
-    var listHeadingFont: Font { .headline }
+    /// sans at the headline's size but regular weight, so the dates
+    /// read as quiet wayfinding, not as emphasis — whatever typeface
+    /// the rows themselves wear.
+    var listHeadingFont: Font { .headline.weight(.regular) }
 
     /// Whether the list dims while a note is being written in it — the
     /// other rows receding to 0.3 so the open note stands out. Off by
@@ -268,7 +272,11 @@ final class AppState {
     init() {
         restoreFolder()
         restoreReaderLibrary()
+        restoreEPUBLibrary()
         restoreDigestSource()
+        #if os(macOS)
+        restoreAuthorLibrary()
+        #endif
         placeFinder.onPlace = { [weak self] place in
             self?.currentPlace = place
         }
@@ -1179,6 +1187,36 @@ final class AppState {
     /// as a security-scoped bookmark like the community folder, scanned
     /// for Visual-Meta PDFs at launch and on request (ReaderLibrary.swift).
     var readerLibraryURL: URL?
+    /// The EPUB Library: the folder where the user's EPUBs live, the
+    /// Reader Library's twin — granted once and remembered. Imported
+    /// EPUBs are copied here (beside their community-folder documents'
+    /// records); unset, they are kept beside the documents themselves
+    /// (EPUBLibrary.swift).
+    var epubLibraryURL: URL?
+    #if os(macOS)
+    /// The Author library: Author's .liquid documents read in place
+    /// (AuthorLibrary.swift). Nil means Author's own iCloud folder.
+    var authorLibraryURL: URL?
+    /// Every Author document the last scan read, newest first.
+    var authorDocuments: [AuthorDocument] = []
+    /// A scan already walking the Author folder; a second waits.
+    var authorScanRunning = false
+    /// One quiet scan per run, when the Author section first shows.
+    var authorScanDone = false
+    /// A document waiting for its own reading window — set when an
+    /// EPUB opened from the Finder finishes importing; ContentView
+    /// watches it and opens the window.
+    var pendingReaderDocID: String?
+    /// The app that opens Interatlas links (Settings ▸ Library): Open
+    /// Source on an image's citation hands the scene link here, so it
+    /// recreates in Interatlas rather than the browser. Nil falls back
+    /// to the system default until Interatlas registers its universal
+    /// link.
+    var interatlasAppPath: String? =
+        UserDefaults.standard.string(forKey: "interatlasAppPath") {
+        didSet { UserDefaults.standard.set(interatlasAppPath, forKey: "interatlasAppPath") }
+    }
+    #endif
     /// The folder the Digest distills — the user's documents, granted
     /// in Settings ▸ Library — and its scan's standing.
     var digestSourceURL: URL?

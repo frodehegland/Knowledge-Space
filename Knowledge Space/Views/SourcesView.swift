@@ -546,7 +546,7 @@ struct SourcesView: View {
     private var emptyShelf: some View {
         VStack(spacing: 12) {
             placeholder("The Shelf",
-                        message: "Sources are documents like everything else: one file per work, its BibTeX aboard, quotes and annotations standing on it. Add works by pasting BibTeX, or drop a PDF here — and the Reader Library, once granted in Settings ▸ Library, fills the shelf from its Visual-Meta PDFs.")
+                        message: "Sources are documents like everything else: one file per work, its BibTeX aboard, quotes and annotations standing on it. Add works by pasting BibTeX, or drop a PDF or EPUB here — an Origami EPUB arrives whole, text, glossary, and images — and the Reader Library, once granted in Settings ▸ Library, fills the shelf from its Visual-Meta PDFs.")
                 .frame(maxHeight: 280, alignment: .bottom)
             Button("Add Sources (BibTeX)…") { addingBibTeX = true }
                 .buttonStyle(.borderedProminent)
@@ -578,11 +578,18 @@ struct SourcesView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    /// A dropped file becomes a sidecar source, wherever it lands.
+    /// A dropped file becomes a sidecar source, wherever it lands — an
+    /// EPUB is read whole instead: its text, glossary, references, and
+    /// images minted as a full document, the EPUB kept beside it.
     private func handleDrop(_ urls: [URL]) -> Bool {
         var added = false
         for url in urls where url.isFileURL {
-            if let doc = state.createSource(wrapping: url) {
+            if url.pathExtension.lowercased() == "epub" {
+                // Read whole, off the main actor; the shelf refreshes
+                // when the book lands.
+                state.importOrigamiEPUB(from: url)
+                added = true
+            } else if let doc = state.createSource(wrapping: url) {
                 selectedSourceID = doc.id
                 added = true
             }
@@ -603,7 +610,7 @@ struct SourcesView: View {
             Divider()
             HStack {
                 Button("Add Sources…") { addingBibTeX = true }
-                    .help("Paste BibTeX — every entry becomes a source document. A PDF can simply be dropped on the list.")
+                    .help("Paste BibTeX — every entry becomes a source document. A PDF or EPUB can simply be dropped on the list; an Origami EPUB arrives whole.")
                 Button(analyzeButtonLabel) {
                     state.analyzeNewSources()
                 }
@@ -779,11 +786,15 @@ struct SourcesView: View {
 
 /// One source: its citation, its record, the work when wrapped, and
 /// everything standing on it — quotes, annotations, notes — each a
-/// document of its own, gathered by backlinks.
-private struct SourcePageView: View {
+/// document of its own, gathered by backlinks. Internal, not private:
+/// the EPUB shelf shows the same page for its works.
+struct SourcePageView: View {
     @Environment(AppState.self) private var state
     let doc: LiquidDoc
     let record: BibTeXRecord?
+    /// Where Read leads: a context that can read in place (the EPUB
+    /// shelf) hands its own door; nil opens in the library.
+    var readAction: (() -> Void)? = nil
 
     @State private var quoting = false
     @State private var annotating = false
@@ -809,9 +820,33 @@ private struct SourcePageView: View {
                 HStack(spacing: 8) {
                     Button("Copy to Cite") { state.copyCitation(for: doc) }
                         .help("The citation sentence with this source's address — paste it into any note and the address becomes a live link on save")
+                    // A work whose text is aboard — an imported EPUB —
+                    // reads whole in the reader, not on this card.
+                    if (doc.body?.count ?? 0) > 4 {
+                        Button("Read") {
+                            if let readAction {
+                                readAction()
+                            } else {
+                                state.openInLibrary(doc)
+                            }
+                        }
+                        .help("The whole work in the reader — its text is aboard the document itself")
+                    }
                     if let wraps = doc.wraps {
                         Button("Open \(wraps.file)") { openWrapped(wraps) }
                     }
+                    #if os(macOS)
+                    if let epub = state.epubCompanionURL(for: doc) {
+                        Button("Show EPUB") {
+                            NSWorkspace.shared.activateFileViewerSelecting([epub])
+                        }
+                        .help("The EPUB this document arrived from — in the EPUB Library, or beside the document where no EPUB Library is chosen")
+                    }
+                    if doc.body != nil {
+                        Button("Export EPUB…") { state.exportOrigamiEPUB(doc) }
+                            .help("Writes the document as an Origami-profile EPUB — a valid EPUB anywhere, whole to any Origami reader")
+                    }
+                    #endif
                     if let pdf = pdfPointer {
                         Button("Open PDF") {
                             state.openSourcePDF(named: pdf.name, recordedFolder: pdf.folder)
@@ -822,6 +857,22 @@ private struct SourcePageView: View {
                     Button("Annotate…") { annotating = true }
                     Button("New Note") { _ = state.createSourceNote(on: doc) }
                         .help("An ordinary note standing on this source — it lives the note's life, connected by its link")
+                    // A work with sections offers each as an excerpt: the
+                    // section carved out as a document of its own, its
+                    // citations still addressing the original.
+                    let headings = (doc.body ?? []).filter { $0.heading != nil }
+                    if !headings.isEmpty {
+                        Menu("Excerpt") {
+                            ForEach(headings) { heading in
+                                Button(heading.displayText) {
+                                    state.excerptSection(of: doc, headingID: heading.id)
+                                }
+                            }
+                        }
+                        .menuStyle(.button)
+                        .fixedSize()
+                        .help("Carve a section out as a document of its own — paragraph ids kept, so citations from the excerpt address the original")
+                    }
                 }
                 .buttonStyle(GreyColumnButtonStyle())
                 .fixedSize()
@@ -861,8 +912,15 @@ private struct SourcePageView: View {
                 }
                 if !bodyLines.isEmpty {
                     Divider()
-                    ForEach(Array(bodyLines)) { paragraph in
-                        ParagraphView(paragraph: paragraph)
+                    // The card shows a work's opening; a whole book
+                    // reads in the reader, where Read leads.
+                    ForEach(Array(bodyLines.prefix(60))) { paragraph in
+                        ParagraphView(paragraph: paragraph, origami: doc)
+                    }
+                    if bodyLines.count > 60 {
+                        Text("The card shows the opening — Read opens the whole work.")
+                            .font(.caption)
+                            .foregroundStyle(.tertiary)
                     }
                 }
 

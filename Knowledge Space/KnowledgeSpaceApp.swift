@@ -1,4 +1,5 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// Knowledge Space: a reader for Origami Documents (`.liquid.json`) —
 /// the community-folder library presented as a browsable, linked space.
@@ -11,15 +12,16 @@ import SwiftUI
 /// cards hang anywhere in the room — backed by the same `.liquid.json`
 /// files.
 #if os(macOS)
-/// Catches files handed to the app itself — an email dropped on the
-/// Dock icon, or an .eml opened with Knowledge Space — and turns each
-/// into a document. ContentView points `state` here on appearance.
+/// Catches files handed to the app itself — an email or an EPUB
+/// dropped on the Dock icon, or opened with Knowledge Space from the
+/// Finder — and turns each into a document. ContentView points
+/// `state` here on appearance.
 final class MailOpenDelegate: NSObject, NSApplicationDelegate {
     @MainActor static weak var state: AppState?
 
     func application(_ application: NSApplication, open urls: [URL]) {
         Task { @MainActor in
-            Self.state?.handleEmailFiles(urls)
+            Self.state?.openFiles(urls)
         }
     }
 }
@@ -158,6 +160,15 @@ struct KnowledgeSpaceApp: App {
             // Old-name documents (.origamitext) come home by conversion —
             // the same JSON, renamed to .liquid.json in the library folder.
             CommandGroup(after: .newItem) {
+                // The Open dialog: the kinds the app adopts — EPUBs
+                // (read whole into the library) and emails — through
+                // the same door the Finder and the Dock icon use.
+                Button("Open…") {
+                    openFiles()
+                }
+                .keyboardShortcut("o", modifiers: .command)
+                .disabled(state.index.folderURL == nil)
+                Divider()
                 // A meeting's words become a transcript document: every
                 // statement addressable, every speaker known to People.
                 Button("Import Transcript…") {
@@ -169,7 +180,44 @@ struct KnowledgeSpaceApp: App {
                 }
                 .disabled(state.index.folderURL == nil)
             }
+            // The View menu carries the ways of seeing the notes —
+            // the same toggles the note's options column offers, here
+            // with the menu's checkmarks and shortcuts.
+            CommandGroup(after: .toolbar) {
+                Divider()
+                Toggle("Flow", isOn: Binding(
+                    get: { state.flowReading },
+                    set: { state.flowReading = $0 }))
+                    .keyboardShortcut("f", modifiers: [.command, .shift])
+                Toggle("Visual-Meta", isOn: Binding(
+                    get: { state.showsVisualMeta },
+                    set: { state.showsVisualMeta = $0 }))
+                    .keyboardShortcut("m", modifiers: [.command, .shift])
+                Toggle("Show Superseded", isOn: Binding(
+                    get: { state.showsSuperseded },
+                    set: { state.showsSuperseded = $0 }))
+                Divider()
+                Button("Make Text Bigger") {
+                    state.listTextSize = min(state.listTextSize + 1, 36)
+                }
+                .keyboardShortcut("+", modifiers: .command)
+                Button("Make Text Smaller") {
+                    state.listTextSize = max(state.listTextSize - 1, 9)
+                }
+                .keyboardShortcut("-", modifiers: .command)
+            }
         }
+
+        // A work in a window of its own: double-clicking a book on the
+        // EPUB shelf, or opening an EPUB from the Finder, reads here —
+        // as many windows as there are books open.
+        WindowGroup("Reading", id: "reading", for: String.self) { $docID in
+            ReadingWindowView(docID: docID)
+                .environment(state)
+                .foregroundStyle(AppGreys.text)
+                .preferredColorScheme(state.theme.enforcedScheme)
+        }
+        .defaultSize(width: 760, height: 900)
 
         Settings {
             SettingsView()
@@ -179,7 +227,53 @@ struct KnowledgeSpaceApp: App {
         }
         #endif
     }
+
+    #if os(macOS)
+    /// File ▸ Open… — the kinds the app adopts, several at once.
+    private func openFiles() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = true
+        panel.allowedContentTypes = [
+            UTType.epub,
+            UTType("com.apple.mail.email"),
+            UTType("public.email-message"),
+        ].compactMap { $0 }
+        panel.message = "Open EPUBs and emails into the library — an Origami EPUB arrives whole, text, glossary, and images."
+        guard panel.runModal() == .OK else { return }
+        state.openFiles(panel.urls)
+    }
+    #endif
 }
+
+#if os(macOS)
+/// One document read in its own window, found in the index by id —
+/// the whole reader: citations resolved, images, tables, daggers.
+private struct ReadingWindowView: View {
+    @Environment(AppState.self) private var state
+    let docID: String?
+
+    var body: some View {
+        if let docID, let doc = state.index.allByID[docID]?.doc {
+            ScrollView {
+                DocumentReaderView(doc: doc, inline: true)
+                    .frame(maxWidth: 720)
+                    .padding(24)
+                    .frame(maxWidth: .infinity)
+            }
+            .background(AppGreys.page)
+            .navigationTitle(doc.title)
+        } else {
+            Text("The document is not in the library yet — it appears here once its import lands.")
+                .foregroundStyle(.secondary)
+                .padding(40)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(AppGreys.page)
+        }
+    }
+}
+#endif
 
 #if os(visionOS)
 /// Turns a widget's tap — a `knowledgespace://list/<kind>` URL — into an

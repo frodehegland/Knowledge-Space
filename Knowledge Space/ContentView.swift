@@ -12,6 +12,7 @@ import AppKit
 struct ContentView: View {
     @Environment(AppState.self) private var state
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.openWindow) private var openWindow
     @State private var showingFolderPicker = false
     #if os(macOS)
     /// The Timeline calendar sheet: choose a year, month, or day to be
@@ -71,7 +72,7 @@ struct ContentView: View {
                 // Its own identity: switching between split-view
                 // shapes must rebuild, not leave a ghost column.
                 .id("split-module")
-            } else if showsSourceShelf || state.notesOpenInList {
+            } else if showsSourceShelf || showsAuthorLibrary || showsFileShelf || state.notesOpenInList {
                 // One two-column split view for the Library shelves and
                 // the "In the list" notes: only the detail's content
                 // swaps, so moving between them never rebuilds the
@@ -86,6 +87,22 @@ struct ContentView: View {
                 } detail: {
                     if case .sourceShelf(let shelf) = state.sidebarSelection {
                         SourcesView(shelf: shelf)
+                    } else if showsAuthorLibrary {
+                        #if os(macOS)
+                        AuthorDocumentsView()
+                        #endif
+                    } else if case .pdfShelf(let listing) = state.sidebarSelection {
+                        #if os(macOS)
+                        // Fresh state per listing: Alphabetical's
+                        // selection must not linger into Authors.
+                        PDFLibraryView(listing: listing)
+                            .id(listing)
+                        #endif
+                    } else if case .epubShelf(let listing) = state.sidebarSelection {
+                        #if os(macOS)
+                        EPUBLibraryView(listing: listing)
+                            .id(listing)
+                        #endif
                     } else {
                         contentPane
                             .scrollContentBackground(.hidden)
@@ -157,6 +174,15 @@ struct ContentView: View {
         .onChange(of: scenePhase) { _, phase in
             if phase == .active { state.index.rescan() }
         }
+        #if os(macOS)
+        // An EPUB opened from the Finder reads at once: the import
+        // lands, the book takes a window of its own.
+        .onChange(of: state.pendingReaderDocID) { _, docID in
+            guard let docID else { return }
+            openWindow(id: "reading", value: docID)
+            state.pendingReaderDocID = nil
+        }
+        #endif
         // Once the library has been read, old folder-style actions
         // migrate into the notes themselves — and the Reader Library
         // gets its one quiet scan for Visual-Meta PDFs.
@@ -291,6 +317,20 @@ struct ContentView: View {
     /// Whether the sidebar stands on a Library shelf.
     private var showsSourceShelf: Bool {
         if case .sourceShelf = state.sidebarSelection { return true }
+        return false
+    }
+
+    /// Whether the sidebar stands on the Author documents section —
+    /// two columns, like the shelves.
+    private var showsAuthorLibrary: Bool {
+        state.sidebarSelection == .authorDocuments
+    }
+
+    /// Whether the sidebar stands on a file library shelf — PDF or
+    /// EPUB, any listing — two columns, like the rest of the Library.
+    private var showsFileShelf: Bool {
+        if case .pdfShelf = state.sidebarSelection { return true }
+        if case .epubShelf = state.sidebarSelection { return true }
         return false
     }
 

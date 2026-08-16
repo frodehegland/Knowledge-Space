@@ -85,6 +85,18 @@ nonisolated struct LiquidDoc: Identifiable, Hashable, Sendable {
     var mapConnections: [MapConnection] = []
     /// External citation records — see `Reference`.
     var references: [Reference] = []
+    /// Live tables the body refers to by `Paragraph.tableID`; the
+    /// paragraph's own text keeps a pipe-table rendering as the
+    /// plain-text fallback, per the format's degradation rule.
+    var tables: [Table] = []
+    /// Binary assets (images) the body refers to by a markdown image
+    /// marker `![alt](asset:<id>)` — carried in the JSON so the
+    /// document stays whole on its own.
+    var assets: [Asset] = []
+    /// Set when this document is an excerpt of another — the original's
+    /// identity and the extracted section, so citations made from the
+    /// excerpt address the original.
+    var excerptOf: ExcerptOf? = nil
     /// Where a captured AI conversation came from and how — surface,
     /// URL, the vendor's own conversation id, and the honest time of
     /// capture. Absent on documents that were not captured this way.
@@ -254,6 +266,18 @@ nonisolated struct LiquidDoc: Identifiable, Hashable, Sendable {
         /// with this field styles the name and hides the prefix, exactly as
         /// heading levels pair with # prefixes.
         var speaker: String? = nil
+        /// When this element is a table, the identifier of the `Table` in
+        /// the document's `tables` pool it stands for; the paragraph's
+        /// `text` keeps a pipe-table rendering as a plain-text fallback.
+        var tableID: String? = nil
+        /// When this paragraph is stretchtext — expandable detail folded
+        /// behind a toggle, closed by default — the id of the stretch
+        /// block it belongs to. Consecutive paragraphs sharing an id
+        /// open and close together.
+        var stretchID: String? = nil
+        /// The section's own writer, when a heading credits one —
+        /// Author's attribution, carried from the export.
+        var contributingAuthors: String? = nil
         /// How these words came to be, for AI conversations: "human" for a
         /// person's turn, "generated" for a model's. Absent on ordinary
         /// documents. Lifted extracts inherit it, so "where did this claim
@@ -291,6 +315,69 @@ nonisolated struct LiquidDoc: Identifiable, Hashable, Sendable {
         let file: String
         let sha256: String
         let mediaType: String?
+    }
+
+    /// What an excerpt remembers of its source: the original document,
+    /// its credit, and the extracted section — so citations made from
+    /// the excerpt address the original, and a reader holding the
+    /// original can open it at the right place. (Field names match
+    /// Augmented Library's, so the JSON interchanges.)
+    struct ExcerptOf: Hashable, Sendable {
+        /// The original document's id.
+        let id: String
+        var title: String
+        var author: String
+        var date: String?
+        /// The extracted heading's paragraph id in the original.
+        var headingID: String
+        var headingText: String
+    }
+
+    /// One live table: a row-major grid of cells, each a pre-computed
+    /// `value` and an optional spreadsheet `formula`.
+    struct Table: Identifiable, Hashable, Sendable {
+        struct Cell: Hashable, Sendable {
+            var value: String
+            var formula: String? = nil
+        }
+        /// Matches `Paragraph.tableID` and an EPUB body's
+        /// `<table data-table-id>`.
+        let identifier: String
+        var rowCount: Int
+        var columnCount: Int
+        /// Row-major: `cells[row][column]`.
+        var cells: [[Cell]]
+        var id: String { identifier }
+    }
+
+    /// A binary asset (an image) carried with the document. The body
+    /// refers to it by `![alt](asset:<id>)`; the id is stable so the
+    /// reference and an exported EPUB's file line up.
+    struct Asset: Identifiable, Hashable, Sendable {
+        let id: String
+        /// The file name used inside an EPUB's images folder.
+        var filename: String
+        /// e.g. "image/jpeg".
+        var mediaType: String
+        /// The bytes, base64-encoded so the asset lives in the JSON.
+        var dataBase64: String
+        /// Alt text, when known.
+        var alt: String?
+
+        var data: Data? { Data(base64Encoded: dataBase64) }
+    }
+
+    /// The asset id a body paragraph's text points at, when the paragraph
+    /// is a lone image marker `![alt](asset:<id>)`. Returns the alt too.
+    nonisolated static func imageReference(in text: String) -> (id: String, alt: String)? {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let regex = try? NSRegularExpression(
+            pattern: "^!\\[([^\\]]*)\\]\\(asset:([^)]+)\\)$"),
+              let match = regex.firstMatch(
+                in: trimmed, range: NSRange(trimmed.startIndex..., in: trimmed)),
+              let altRange = Range(match.range(at: 1), in: trimmed),
+              let idRange = Range(match.range(at: 2), in: trimmed) else { return nil }
+        return (String(trimmed[idRange]), String(trimmed[altRange]))
     }
 
     /// A citation record: one work this document rests on, carried as
@@ -493,6 +580,9 @@ extension LiquidDoc {
                 }
                 return Paragraph(id: paragraphID, heading: heading, text: text,
                                  speaker: (speaker?.isEmpty ?? true) ? nil : speaker,
+                                 tableID: cleaned(rawParagraph.tableID),
+                                 stretchID: cleaned(rawParagraph.stretchID),
+                                 contributingAuthors: cleaned(rawParagraph.contributingAuthors),
                                  provenance: cleaned(rawParagraph.provenance),
                                  verification: cleaned(rawParagraph.verification),
                                  elicitedBy: cleaned(rawParagraph.elicitedBy))
@@ -574,6 +664,29 @@ extension LiquidDoc {
             return Reference(id: referenceID, bibtex: bibtex)
         }
 
+        // Tolerant, like the rest: a table or asset missing its
+        // essentials is skipped, never fatal.
+        let tables: [Table] = (raw.tables ?? []).compactMap { rawTable in
+            guard let identifier = rawTable.identifier, !identifier.isEmpty else { return nil }
+            let cells = (rawTable.cells ?? []).map { row in
+                row.map { Table.Cell(value: $0.value ?? "", formula: $0.formula) }
+            }
+            return Table(identifier: identifier,
+                         rowCount: rawTable.rowCount ?? cells.count,
+                         columnCount: rawTable.columnCount ?? (cells.first?.count ?? 0),
+                         cells: cells)
+        }
+
+        let assets: [Asset] = (raw.assets ?? []).compactMap { rawAsset in
+            guard let assetID = rawAsset.id, !assetID.isEmpty,
+                  let dataBase64 = rawAsset.dataBase64, !dataBase64.isEmpty else { return nil }
+            return Asset(id: assetID,
+                         filename: rawAsset.filename ?? assetID,
+                         mediaType: rawAsset.mediaType ?? "application/octet-stream",
+                         dataBase64: dataBase64,
+                         alt: rawAsset.alt)
+        }
+
         // Open vocabulary, like documentType: any token survives.
         let action = raw.action
             .map { $0.trimmingCharacters(in: .whitespaces).lowercased() }
@@ -602,7 +715,7 @@ extension LiquidDoc {
                          modelConfidence: rawAgent.modelConfidence)
         }
 
-        return LiquidDoc(format: format, id: id, title: title, author: author,
+        var document = LiquidDoc(format: format, id: id, title: title, author: author,
                          created: created, body: body, links: links, wraps: wraps,
                          attention: attention, date: date,
                          aiOnBehalf: raw.aiOnBehalf ?? false,
@@ -617,9 +730,22 @@ extension LiquidDoc {
                          layouts: layouts,
                          mapConnections: mapConnections,
                          references: references,
+                         tables: tables,
+                         assets: assets,
                          aiSource: aiSource,
                          agents: agents,
                          fileURL: fileURL)
+        if let rawExcerpt = raw.excerptOf,
+           let originalID = rawExcerpt.id, !originalID.isEmpty,
+           let headingID = rawExcerpt.headingID, !headingID.isEmpty {
+            document.excerptOf = ExcerptOf(id: originalID,
+                                           title: rawExcerpt.title ?? "",
+                                           author: rawExcerpt.author ?? "",
+                                           date: rawExcerpt.date,
+                                           headingID: headingID,
+                                           headingText: rawExcerpt.headingText ?? "")
+        }
+        return document
     }
 
     /// Some producers emit fractional seconds; try both.
@@ -656,8 +782,40 @@ extension LiquidDoc {
         var layouts: [RawLayout]?
         var connections: [RawConnection]?
         var references: [RawReference]?
+        var tables: [RawTable]?
+        var assets: [RawAsset]?
+        var excerptOf: RawExcerptOf?
         var aiSource: RawAISource?
         var agents: [RawAgent]?
+    }
+
+    private nonisolated struct RawTable: Decodable {
+        var identifier: String?
+        var rowCount: Int?
+        var columnCount: Int?
+        var cells: [[RawTableCell]]?
+    }
+
+    private nonisolated struct RawTableCell: Decodable {
+        var value: String?
+        var formula: String?
+    }
+
+    private nonisolated struct RawAsset: Decodable {
+        var id: String?
+        var filename: String?
+        var mediaType: String?
+        var dataBase64: String?
+        var alt: String?
+    }
+
+    private nonisolated struct RawExcerptOf: Decodable {
+        var id: String?
+        var title: String?
+        var author: String?
+        var date: String?
+        var headingID: String?
+        var headingText: String?
     }
 
     private nonisolated struct RawAISource: Decodable {
@@ -696,6 +854,9 @@ extension LiquidDoc {
         var heading: Int?
         var text: String?
         var speaker: String?
+        var tableID: String?
+        var stretchID: String?
+        var contributingAuthors: String?
         var provenance: String?
         var verification: String?
         var elicitedBy: String?

@@ -2,13 +2,6 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-	<!-- The Map's forearm menus ride hand-joint anchors, which need a
-	     hand-tracking session; visionOS requires this usage string or the
-	     session fails silently and no arm controls appear. -->
-	<key>NSHandsTrackingUsageDescription</key>
-	<string>Knowledge Space places the Map’s menus along your forearms, so it tracks your hands to know where your wrists are. Nothing about your hands is recorded or leaves the device.</string>
-	<!-- Emails: the Dock icon and Open With accept messages dragged
-	     from Mail and .eml files; each becomes a document. -->
 	<key>CFBundleDocumentTypes</key>
 	<array>
 		<dict>
@@ -22,6 +15,18 @@
 			<array>
 				<string>com.apple.mail.email</string>
 				<string>public.email-message</string>
+			</array>
+		</dict>
+		<dict>
+			<key>CFBundleTypeName</key>
+			<string>EPUB Publication</string>
+			<key>CFBundleTypeRole</key>
+			<string>Viewer</string>
+			<key>LSHandlerRank</key>
+			<string>Alternate</string>
+			<key>LSItemContentTypes</key>
+			<array>
+				<string>org.idpf.epub-container</string>
 			</array>
 		</dict>
 	</array>

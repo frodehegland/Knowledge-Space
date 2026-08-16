@@ -7,6 +7,13 @@ enum SourceShelf: String, Hashable {
     case all, books, articles, authors, quotes
 }
 
+/// How a file library lists its works: every title A–Z, the authors
+/// with their works under them, or the journals and proceedings the
+/// works appeared in (read from each record's BibTeX).
+enum FileShelfListing: String, Hashable {
+    case alphabetical, authors, journals
+}
+
 enum SidebarItem: Hashable {
     case library      // the Inbox: what is new and unread
     case timeline     // every note, by time, latest on top
@@ -20,6 +27,9 @@ enum SidebarItem: Hashable {
     case action(LiquidDoc.Action)  // notes by standing: To Do, Done…
     case importantToDo  // To Do notes marked Important — the orange head of the column
     case sourceShelf(SourceShelf)  // the Library: sources, authors, quotes
+    case pdfShelf(FileShelfListing)   // the Reader Library's PDFs, by a listing
+    case epubShelf(FileShelfListing)  // the EPUB Library's works, by a listing
+    case authorDocuments  // Author's .liquid documents, read in place
     case filedFolder(String)  // one filing folder, straight from the sidebar
     case view(String)
 
@@ -104,6 +114,36 @@ enum SidebarCatalog {
         ]
     }
 
+    /// The Author section: Author's .liquid documents, read in place
+    /// from the Author folder and opened into Author itself — the way
+    /// PDFs open into Reader. macOS only; Author lives there.
+    static let author: [SidebarPlace] = [
+        SidebarPlace(name: "Documents", systemImage: "doc.richtext",
+                     item: .authorDocuments),
+    ]
+
+    /// The file libraries' sections: the Reader Library's PDFs and the
+    /// EPUB Library's works, each offered three ways — every title
+    /// A–Z, by author, and by the journal or proceedings it appeared
+    /// in (read from each record's BibTeX).
+    static let pdfShelves: [SidebarPlace] = [
+        SidebarPlace(name: "Alphabetical", systemImage: "textformat",
+                     item: .pdfShelf(.alphabetical)),
+        SidebarPlace(name: "Authors", systemImage: "person.text.rectangle",
+                     item: .pdfShelf(.authors)),
+        SidebarPlace(name: "Journals", systemImage: "newspaper",
+                     item: .pdfShelf(.journals)),
+    ]
+
+    static let epubShelves: [SidebarPlace] = [
+        SidebarPlace(name: "Alphabetical", systemImage: "textformat",
+                     item: .epubShelf(.alphabetical)),
+        SidebarPlace(name: "Authors", systemImage: "person.text.rectangle",
+                     item: .epubShelf(.authors)),
+        SidebarPlace(name: "Journals", systemImage: "newspaper",
+                     item: .epubShelf(.journals)),
+    ]
+
     /// The Digest: a different set of data — the user's own documents
     /// folder distilled — so it stands as its own section, and its
     /// notes appear nowhere else.
@@ -184,6 +224,14 @@ enum SidebarCatalog {
                       ("Digest", digest),
                       ("Filed", filed(filedFolders, displayName: folderDisplayName)),
                       ("Views", views)]
+            #if os(macOS)
+            // The file libraries and Author's documents stand as their
+            // own sections after the Library — the works as files, and
+            // the documents read here but written in Author.
+            result.insert(("PDF Library", pdfShelves), at: 2)
+            result.insert(("EPUB Library", epubShelves), at: 3)
+            result.insert(("Author", author), at: 4)
+            #endif
         case .small:
             // The pared-down default: Timeline on top, unnamed, then
             // every filing folder under Files — Thoughts, Inspirations,
@@ -199,6 +247,13 @@ enum SidebarCatalog {
             if !filedFolders.isEmpty {
                 small.append(("Files", filed(filedFolders, displayName: folderDisplayName)))
             }
+            #if os(macOS)
+            // The file libraries: the Reader Library's PDFs and the
+            // EPUB Library's works, each by title, author, or journal.
+            small.append(("PDF Library", pdfShelves))
+            small.append(("EPUB Library", epubShelves))
+            small.append(("Author", author))
+            #endif
             small.append(("Views", smallViews))
             result = small
         }

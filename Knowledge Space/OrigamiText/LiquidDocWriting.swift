@@ -173,7 +173,7 @@ extension LiquidDoc {
         let doc: LiquidDoc
         init(_ doc: LiquidDoc) { self.doc = doc }
 
-        enum CodingKeys: String, CodingKey { case about, format, id, title, author, created, date, body, links, wraps, attention, aiOnBehalf, draft, action, important, onBehalfOf, documentType, location, filedUnder, concepts, layouts, connections, references, aiSource, agents }
+        enum CodingKeys: String, CodingKey { case about, format, id, title, author, created, date, body, links, wraps, excerptOf, attention, aiOnBehalf, draft, action, important, onBehalfOf, documentType, location, filedUnder, concepts, layouts, connections, references, tables, assets, aiSource, agents }
 
         func encode(to encoder: Encoder) throws {
             var container = encoder.container(keyedBy: CodingKeys.self)
@@ -198,6 +198,9 @@ extension LiquidDoc {
             }
             if let wraps = doc.wraps {
                 try container.encode(OutputWrapped(wraps), forKey: .wraps)
+            }
+            if let excerpt = doc.excerptOf {
+                try container.encode(OutputExcerptOf(excerpt), forKey: .excerptOf)
             }
             if !doc.attention.isEmpty {
                 try container.encode(doc.attention, forKey: .attention)
@@ -237,6 +240,12 @@ extension LiquidDoc {
             }
             if !doc.references.isEmpty {
                 try container.encode(doc.references.map(OutputReference.init), forKey: .references)
+            }
+            if !doc.tables.isEmpty {
+                try container.encode(doc.tables.map(OutputTable.init), forKey: .tables)
+            }
+            if !doc.assets.isEmpty {
+                try container.encode(doc.assets.map(OutputAsset.init), forKey: .assets)
             }
             if let aiSource = doc.aiSource {
                 try container.encode(OutputAISource(aiSource), forKey: .aiSource)
@@ -369,7 +378,7 @@ extension LiquidDoc {
         let paragraph: Paragraph
         init(_ paragraph: Paragraph) { self.paragraph = paragraph }
 
-        enum CodingKeys: String, CodingKey { case id, heading, text, speaker }
+        enum CodingKeys: String, CodingKey { case id, heading, text, speaker, tableID, stretchID, contributingAuthors, provenance, verification, elicitedBy }
 
         func encode(to encoder: Encoder) throws {
             var container = encoder.container(keyedBy: CodingKeys.self)
@@ -377,6 +386,76 @@ extension LiquidDoc {
             try container.encodeIfPresent(paragraph.heading, forKey: .heading)
             try container.encode(paragraph.text, forKey: .text)
             try container.encodeIfPresent(paragraph.speaker, forKey: .speaker)
+            try container.encodeIfPresent(paragraph.tableID, forKey: .tableID)
+            try container.encodeIfPresent(paragraph.stretchID, forKey: .stretchID)
+            try container.encodeIfPresent(paragraph.contributingAuthors, forKey: .contributingAuthors)
+            // Provenance fields were decoded but never re-encoded before —
+            // a full re-serialization silently stripped an AI conversation's
+            // markings. They travel now.
+            try container.encodeIfPresent(paragraph.provenance, forKey: .provenance)
+            try container.encodeIfPresent(paragraph.verification, forKey: .verification)
+            try container.encodeIfPresent(paragraph.elicitedBy, forKey: .elicitedBy)
+        }
+    }
+
+    private nonisolated struct OutputExcerptOf: Encodable {
+        let excerpt: ExcerptOf
+        init(_ excerpt: ExcerptOf) { self.excerpt = excerpt }
+
+        enum CodingKeys: String, CodingKey { case id, title, author, date, headingID, headingText }
+
+        func encode(to encoder: Encoder) throws {
+            var container = encoder.container(keyedBy: CodingKeys.self)
+            try container.encode(excerpt.id, forKey: .id)
+            try container.encode(excerpt.title, forKey: .title)
+            try container.encode(excerpt.author, forKey: .author)
+            try container.encodeIfPresent(excerpt.date, forKey: .date)
+            try container.encode(excerpt.headingID, forKey: .headingID)
+            try container.encode(excerpt.headingText, forKey: .headingText)
+        }
+    }
+
+    private nonisolated struct OutputTable: Encodable {
+        let table: Table
+        init(_ table: Table) { self.table = table }
+
+        enum CodingKeys: String, CodingKey { case identifier, rowCount, columnCount, cells }
+
+        struct OutputCell: Encodable {
+            let cell: Table.Cell
+            init(_ cell: Table.Cell) { self.cell = cell }
+
+            enum CodingKeys: String, CodingKey { case value, formula }
+
+            func encode(to encoder: Encoder) throws {
+                var container = encoder.container(keyedBy: CodingKeys.self)
+                try container.encode(cell.value, forKey: .value)
+                try container.encodeIfPresent(cell.formula, forKey: .formula)
+            }
+        }
+
+        func encode(to encoder: Encoder) throws {
+            var container = encoder.container(keyedBy: CodingKeys.self)
+            try container.encode(table.identifier, forKey: .identifier)
+            try container.encode(table.rowCount, forKey: .rowCount)
+            try container.encode(table.columnCount, forKey: .columnCount)
+            try container.encode(table.cells.map { $0.map(OutputCell.init) }, forKey: .cells)
+        }
+    }
+
+    private nonisolated struct OutputAsset: Encodable {
+        let asset: Asset
+        init(_ asset: Asset) { self.asset = asset }
+
+        enum CodingKeys: String, CodingKey { case id, filename, mediaType, dataBase64, alt }
+
+        func encode(to encoder: Encoder) throws {
+            var container = encoder.container(keyedBy: CodingKeys.self)
+            try container.encode(asset.id, forKey: .id)
+            try container.encode(asset.filename, forKey: .filename)
+            try container.encode(asset.mediaType, forKey: .mediaType)
+            try container.encode(asset.dataBase64, forKey: .dataBase64)
+            try container.encodeIfPresent(asset.alt, forKey: .alt)
         }
     }
 

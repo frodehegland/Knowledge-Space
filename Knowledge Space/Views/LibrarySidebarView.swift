@@ -9,9 +9,11 @@ struct LibrarySidebarView: View {
     @Environment(\.openSettings) private var openSettings
     #endif
     @State private var editingViews = false
-    /// The named sections folded away under their headings. Views —
-    /// now home to Timeline, People, and the Map — starts open.
-    @State private var collapsed: Set<String> = []
+    /// The named sections folded away under their headings — the
+    /// reader's own arrangement, remembered between launches. Views
+    /// starts closed; a fresh install opens everything else.
+    @State private var collapsed: Set<String> =
+        Set(UserDefaults.standard.stringArray(forKey: "collapsedSidebarSections") ?? ["Views"])
     #if os(macOS)
     /// The place the pointer is resting on — People answers with its
     /// reveal triangle.
@@ -162,9 +164,12 @@ struct LibrarySidebarView: View {
             // The app's name stands over the list, above Library.
             .safeAreaInset(edge: .top, spacing: 0) {
                 Text("Knowledge Space")
+                    // The app's name in the headings' own ink, its
+                    // regular weight — the headline face alone carries
+                    // enough emphasis unbolded.
                     .font(.headline)
-                    .fontWeight(.bold)
-                    .foregroundStyle(AppGreys.buttonText)
+                    .fontWeight(.regular)
+                    .foregroundStyle(AppInks.sidebarHeading)
                     .lineLimit(1)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal, 16)
@@ -221,10 +226,11 @@ struct LibrarySidebarView: View {
                     collapsed.insert(title)
                 }
             }
+            UserDefaults.standard.set(Array(collapsed), forKey: "collapsedSidebarSections")
         } label: {
             HStack(spacing: 4) {
                 Text(title)
-                    .foregroundStyle(AppGreys.buttonText)
+                    .foregroundStyle(AppInks.sidebarHeading)
                 // A small triangle just past the title, not out at the
                 // column's edge: turned down when open, on its side
                 // when closed.
@@ -370,6 +376,14 @@ extension Color {
 /// writing page #ebebeb, every other word black. High Contrast:
 /// everything white, all text black. Warm and Cool are tinted and
 /// adapt to the system's light or dark appearance.
+/// The inks beyond the greys: the deep burgundy (#711A20) the
+/// sidebar's section headings wear — Frode's choice, 16 Aug 2026.
+enum AppInks {
+    static let sidebarHeading = Color(red: 0x71 / 255.0,
+                                      green: 0x1A / 255.0,
+                                      blue: 0x20 / 255.0)
+}
+
 enum AppGreys {
     // Warm: #dcd7ce in light, #2d2a26 in dark.
     private static let warmPage = Color.adaptive(

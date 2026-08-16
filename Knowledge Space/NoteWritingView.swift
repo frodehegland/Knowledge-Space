@@ -247,7 +247,10 @@ struct NoteWritingView: View {
     private var flowedColumn: some View {
         VStack(alignment: .leading, spacing: 12) {
             ForEach(LiquidDoc.parseBody(from: text)) { paragraph in
-                ParagraphView(paragraph: paragraph, flowed: true)
+                // Flowed, the note keeps the open note's rule: one
+                // point over its list rows, not the reader's measure.
+                ParagraphView(paragraph: paragraph, flowed: true,
+                              bodySize: CGFloat(state.listTextSize) + 1)
             }
         }
         .frame(maxWidth: measure ?? .infinity, alignment: .leading)

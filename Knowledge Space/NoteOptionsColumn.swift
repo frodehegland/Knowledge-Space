@@ -373,6 +373,16 @@ struct NoteOptionsColumn: View {
             }
             .buttonStyle(GreyColumnButtonStyle())
             .help("The note's Visual-Meta under its words — the appendix the file carries, or the block its own fields derive.")
+            #if os(macOS)
+            Button {
+                state.exportOrigamiEPUB(doc)
+            } label: {
+                Text("Export EPUB…")
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .buttonStyle(GreyColumnButtonStyle())
+            .help("Writes the note as an Origami-profile EPUB — a valid EPUB anywhere, whole to Origami Text, Augmented Library, and this app")
+            #endif
         }
     }
 

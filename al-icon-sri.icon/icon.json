@@ -1,0 +1,69 @@
+{
+  "fill" : "automatic",
+  "groups" : [
+    {
+      "layers" : [
+        {
+          "image-name" : "Frode_Make_this_logo_head_on_not_on_its_side_43264085-9b89-43aa-9f61-b6f130e7d26d.png",
+          "name" : "Frode_Make_this_logo_head_on_not_on_its_side_43264085-9b89-43aa-9f61-b6f130e7d26d",
+          "position" : {
+            "scale" : 1.23,
+            "translation-in-points" : [
+              0,
+              0
+            ]
+          }
+        },
+        {
+          "fill" : "none",
+          "glass" : true,
+          "hidden" : true,
+          "image-name" : "altext.png",
+          "name" : "altext"
+        },
+        {
+          "hidden" : true,
+          "image-name" : "ks-glow.png",
+          "name" : "ks-glow",
+          "opacity" : 0.61,
+          "position" : {
+            "scale" : 1.45,
+            "translation-in-points" : [
+              0,
+              0
+            ]
+          }
+        },
+        {
+          "blend-mode" : "normal",
+          "fill" : "none",
+          "glass" : true,
+          "hidden" : true,
+          "image-name" : "bgr-red.png",
+          "name" : "bgr-red",
+          "position" : {
+            "scale" : 1.34,
+            "translation-in-points" : [
+              0,
+              0
+            ]
+          }
+        }
+      ],
+      "shadow" : {
+        "kind" : "neutral",
+        "opacity" : 0.5
+      },
+      "translucency" : {
+        "enabled" : true,
+        "value" : 0.5
+      }
+    }
+  ],
+  "supported-platforms" : {
+    "circles" : [
+      "watchOS"
+    ],
+    "squares" : "shared"
+  }
+}

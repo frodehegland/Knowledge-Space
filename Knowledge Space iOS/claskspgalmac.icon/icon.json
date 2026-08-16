@@ -1,0 +1,33 @@
+{
+  "fill" : {
+    "solid" : "display-p3:0.16776,0.26801,0.50448,0.00000"
+  },
+  "groups" : [
+    {
+      "blur-material" : null,
+      "layers" : [
+        {
+          "glass" : false,
+          "image-name" : "k.png",
+          "name" : "k"
+        },
+        {
+          "image-name" : "bgr.png",
+          "name" : "bgr"
+        }
+      ],
+      "shadow" : {
+        "kind" : "neutral",
+        "opacity" : 0.5
+      },
+      "specular" : true,
+      "translucency" : {
+        "enabled" : true,
+        "value" : 0.5
+      }
+    }
+  ],
+  "supported-platforms" : {
+    "squares" : "shared"
+  }
+}

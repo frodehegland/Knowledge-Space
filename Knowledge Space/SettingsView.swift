@@ -557,67 +557,100 @@ private struct LibrarySettingsView: View {
     @Environment(AppState.self) private var state
 
     var body: some View {
-        Form {
-            Section {
-                LabeledContent("Community Folder") {
-                    Text(state.index.folderURL?.path ?? "Not set")
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                        .foregroundStyle(.secondary)
-                }
-                Button("Choose Community Folder…") { chooseFolder() }
-            } footer: {
-                Text("The shared folder of Origami Documents that is the library — typically an iCloud folder your community publishes into. The folder of documents is the library; choosing a different folder changes what the whole app shows.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+        // Controls at the left, their explanation beside them — the
+        // pane reads as rows, not as a tower of paragraphs.
+        VStack(alignment: .leading, spacing: 0) {
+            folderRow("Community Folder",
+                      path: state.index.folderURL?.path ?? "Not set",
+                      explanation: "The shared folder of Origami Documents that is the library — typically an iCloud folder your community publishes into. Choosing a different folder changes what the whole app shows.") {
+                Button("Choose…") { chooseFolder() }
             }
-            Section {
-                LabeledContent("Reader Library") {
-                    Text(state.readerLibraryURL?.path ?? "Not set")
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                        .foregroundStyle(.secondary)
-                }
-                Button("Choose Reader Library…") { chooseReaderLibrary() }
+            Divider()
+            folderRow("Reader Library",
+                      path: state.readerLibraryURL?.path ?? "Not set",
+                      explanation: "Where Reader keeps its PDFs. Each PDF's Visual-Meta becomes a source on the shelf, opening back into Reader; Re-scan refreshes titles, abstracts, and margin notes. The PDFs are never moved or changed.") {
+                Button("Choose…") { chooseReaderLibrary() }
                 Button("Scan Now") { state.scanReaderLibrary() }
                     .disabled(state.readerLibraryURL == nil)
                 Button("Re-scan Shelf") { state.reharvestSources() }
                     .disabled(state.readerLibraryURL == nil)
-                    .help("Re-reads every shelved source's PDF, refreshing titles, authors, abstracts, and margin notes the first scans may have missed")
-            } footer: {
-                Text("Where Reader keeps its PDFs. Knowledge Space reads each PDF's Visual-Meta — parsed from the end, as the format instructs — and every find becomes a source on the shelf, pointing back at its PDF so it opens in Reader. Scanned quietly at launch and on Scan Now; the PDFs themselves are never moved or changed.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
             }
-            Section {
-                LabeledContent("Digest Folder") {
-                    Text(state.digestSourceURL?.path ?? "Not set")
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                        .foregroundStyle(.secondary)
+            Divider()
+            folderRow("EPUB Library",
+                      path: state.epubLibraryURL?.path
+                          ?? "Not set — EPUBs stay beside their records",
+                      explanation: "Where your EPUBs live — the Reader Library's twin. The EPUB shelf lists this folder; an import reads the work whole into the library and keeps the file here, paired with its record by name. Your files are never moved or renamed.") {
+                Button("Choose…") { chooseEPUBLibrary() }
+            }
+            Divider()
+            folderRow("Author Documents",
+                      path: state.effectiveAuthorFolderURL.path,
+                      explanation: "Author's own iCloud folder, unless another is chosen. Each document is read in place — name, dates, glossary terms, text — for the sidebar's Author section. They open in Author and are never changed.") {
+                Button("Choose…") { chooseAuthorFolder() }
+                Button(state.authorScanRunning ? "Scanning…" : "Scan Now") {
+                    state.scanAuthorLibrary()
                 }
-                Button("Choose Folder to Digest…") { chooseDigestSource() }
+                .disabled(state.authorScanRunning)
+            }
+            Divider()
+            folderRow("Digest Folder",
+                      path: state.digestSourceURL?.path ?? "Not set",
+                      explanation: "Any folder of your own documents. Each readable file (PDF, text, Markdown, RTF, HTML, Word) becomes a digest note by the on-device model, Open Original a click away. The originals are only read; nothing leaves the Mac.") {
+                Button("Choose…") { chooseDigestSource() }
                 Button(digestButtonLabel) { state.scanDigestSource() }
                     .disabled(state.digestSourceURL == nil || state.digestScanRunning)
-            } footer: {
-                Text("Any folder of your own documents — Documents itself, or narrower. Each readable file (PDF, text, Markdown, RTF, HTML, Word) becomes a digest note: a summary by the on-device model where it can read the words, with Open Original always a click away. Digests live in the community folder's Digest folder and appear only in the sidebar's Digest section. The originals are read, never moved or changed; nothing leaves the Mac.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
             }
-            Section {
+            Divider()
+            folderRow("Interatlas Links",
+                      path: state.interatlasAppPath.map {
+                          ($0 as NSString).lastPathComponent
+                      } ?? "Not set — links open in the browser",
+                      explanation: "Which app receives an Interatlas link — Open Source on an image's citation hands over the URL that recreates the very scene (layers, camera, zoom, all of it). Until Interatlas registers its link domain, choosing the app here routes around the browser.") {
+                Button("Choose App…") { chooseInteratlasApp() }
+                Button("Use Browser") { state.interatlasAppPath = nil }
+                    .disabled(state.interatlasAppPath == nil)
+            }
+            Divider()
+            folderRow("Archive",
+                      path: nil,
+                      explanation: "Filing a note under Archived hides it without removing it. This empties the Archive: all \(state.archivedCount) currently archived move to the Trash — recoverable there, but gone for everyone who syncs the folder.") {
                 Button("Delete All Archived…", role: .destructive) {
                     state.deleteAllArchived()
                 }
                 .disabled(state.archivedCount == 0)
-            } header: {
-                Text("Archive")
-            } footer: {
-                Text("Filing a note under Archived hides it without removing it. This empties the Archive: all \(state.archivedCount) currently archived move to the Trash — recoverable there, but gone from the shared folder for everyone who syncs it.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
             }
         }
-        .formStyle(.grouped)
+        .padding(20)
+    }
+
+    /// One folder's row: its name, its path, and its buttons standing
+    /// together at the left; what it all means in a quiet column beside
+    /// them, not a paragraph beneath.
+    @ViewBuilder
+    private func folderRow(_ title: String, path: String?, explanation: String,
+                           @ViewBuilder controls: () -> some View) -> some View {
+        HStack(alignment: .top, spacing: 16) {
+            VStack(alignment: .leading, spacing: 7) {
+                Text(title)
+                    .font(.headline)
+                if let path {
+                    Text(path)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+                HStack(spacing: 6) { controls() }
+                    .controlSize(.small)
+            }
+            .frame(width: 290, alignment: .leading)
+            Text(explanation)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .topLeading)
+        }
+        .padding(.vertical, 12)
     }
 
     /// The Digest button wears its own progress while it works.
@@ -637,6 +670,42 @@ private struct LibrarySettingsView: View {
         panel.prompt = "Grant"
         guard panel.runModal() == .OK, let url = panel.url else { return }
         state.chooseDigestSource(url)
+    }
+
+    private func chooseEPUBLibrary() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.message = "Choose the folder where your EPUBs live (the EPUB Library)."
+        panel.prompt = "Grant"
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        state.chooseEPUBLibrary(url)
+    }
+
+    private func chooseInteratlasApp() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        panel.allowedContentTypes = [.application]
+        panel.directoryURL = URL(fileURLWithPath: "/Applications")
+        panel.message = "Choose the app that opens Interatlas links."
+        panel.prompt = "Choose"
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        state.interatlasAppPath = url.path
+    }
+
+    private func chooseAuthorFolder() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.directoryURL = AuthorLibraryScanner.defaultFolder
+        panel.message = "Choose the folder where Author keeps its .liquid documents."
+        panel.prompt = "Grant"
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        state.chooseAuthorLibrary(url)
     }
 
     private func chooseReaderLibrary() {
@@ -660,6 +729,12 @@ private struct LibrarySettingsView: View {
         guard panel.runModal() == .OK, let url = panel.url else { return }
         state.chooseFolder(url)
     }
+}
+
+#Preview("Library settings") {
+    LibrarySettingsView()
+        .environment(AppState())
+        .frame(width: 576)
 }
 
 /// The prompts behind the AI views, fully user-owned. Every AI view runs

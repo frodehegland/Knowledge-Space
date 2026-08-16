@@ -1,4 +1,7 @@
 import SwiftUI
+#if canImport(UIKit)
+import UIKit
+#endif
 
 /// The reading view for one Origami Document: serif typography, heading
 /// scale, live address links, the Visual-Meta appendix de-emphasized, and
@@ -55,12 +58,38 @@ struct DocumentReaderView: View {
                     if let name = Self.photoFileName(in: paragraph.text) {
                         photoView(name)
                             .id(paragraph.id)
+                    } else if let image = LiquidDoc.imageReference(in: paragraph.text),
+                              let asset = doc.assets.first(where: { $0.id == image.id }) {
+                        // An imported EPUB's figure: the image travels in
+                        // the document itself, base64 in the JSON. An
+                        // Interatlas screenshot carries its citation
+                        // aboard — or beside it, as Author's export
+                        // writes it — and answers a click with it.
+                        OrigamiAssetView(asset: asset,
+                                         fallback: Self.imageCitation(after: paragraph, in: doc))
+                            .id(paragraph.id)
+                    } else if let tableID = paragraph.tableID,
+                              let table = doc.tables.first(where: { $0.identifier == tableID }) {
+                        // A live table from the document's pool; the
+                        // paragraph's own pipe-text stands in elsewhere.
+                        OrigamiTableView(table: table)
+                            .id(paragraph.id)
                     } else {
                         ParagraphView(paragraph: paragraph,
                                       isAppendix: appendixIDs.contains(paragraph.id),
                                       isHighlighted: paragraph.id == state.pendingFragment,
                                       flowed: state.flowReading,
-                                      transcript: paragraph.speaker == nil ? nil : doc)
+                                      transcript: paragraph.speaker == nil ? nil : doc,
+                                      origami: doc)
+                            // Stretchtext — expandable detail from the
+                            // export — reads inset behind a quiet rule,
+                            // open: the words are never folded away here.
+                            .padding(.leading, paragraph.stretchID == nil ? 0 : 16)
+                            .overlay(alignment: .leading) {
+                                if paragraph.stretchID != nil {
+                                    Rectangle().fill(.quaternary).frame(width: 2)
+                                }
+                            }
                             .id(paragraph.id)
                     }
                 }
@@ -230,6 +259,40 @@ struct DocumentReaderView: View {
             .font(.callout)
             .foregroundStyle(.secondary)
         #endif
+    }
+
+    // MARK: Image citations
+
+    /// The record an image cites when its citation stands beside it:
+    /// Author's export wraps a figure in a citation anchor and repeats
+    /// the key in the caption paragraph, so the nearest `[cite:]`
+    /// within the two paragraphs after the image is the image's own.
+    /// Failing that, a document with exactly one Interatlas-linked
+    /// reference gives its images that one — never a guess between
+    /// several.
+    static func imageCitation(after paragraph: LiquidDoc.Paragraph,
+                              in doc: LiquidDoc) -> BibTeXRecord? {
+        func record(forKey key: String) -> BibTeXRecord? {
+            doc.references.first { $0.id == key }
+                .flatMap { BibTeXRecord.records(in: $0.bibtex).first }
+        }
+        if let body = doc.body,
+           let index = body.firstIndex(where: { $0.id == paragraph.id }) {
+            for next in body[(index + 1)...].prefix(2) {
+                guard let match = next.text.range(of: #"\[cite:([^\]]+)\]"#,
+                                                  options: .regularExpression) else { continue }
+                let token = String(next.text[match])
+                let key = String(token.dropFirst("[cite:".count).dropLast())
+                if let found = record(forKey: key) { return found }
+            }
+        }
+        let interatlas = doc.references.compactMap { reference -> BibTeXRecord? in
+            guard let parsed = BibTeXRecord.records(in: reference.bibtex).first,
+                  let url = parsed.fields["url"],
+                  InteratlasLink.isInteratlasLink(url) else { return nil }
+            return parsed
+        }
+        return interatlas.count == 1 ? interatlas.first : nil
     }
 
     // MARK: Sidecar
@@ -409,17 +472,91 @@ struct ParagraphView: View {
     /// paragraph continuing the turn above it, so a long turn shows its
     /// speaker once rather than before every paragraph.
     var showsSpeakerLabel = true
+    /// The document whose pools resolve the Origami reading conventions —
+    /// `[cite:key]` to (Author Year) from its references, `[note:id]` to
+    /// a dagger, `==marked==` to Author's orange. Nil (or a paragraph
+    /// without those tokens) keeps the existing rendering exactly.
+    var origami: LiquidDoc? = nil
+    /// The body point size to render at, when the context sets one — a
+    /// note opened in the list reads one point over its rows. Headings
+    /// scale with it; nil keeps the reader's own measure.
+    var bodySize: CGFloat? = nil
 
     private var isRule: Bool {
         let text = paragraph.displayText
         return text.count >= 3 && text.allSatisfy { $0 == "-" }
     }
 
-    private var shownText: AttributedString {
-        if flowed, !isAppendix, paragraph.effectiveHeading == nil {
-            return FlowBreaker.flowed(paragraph.renderedText)
+    /// Whether the text speaks the imported conventions at all — the
+    /// cheap gate that keeps every ordinary note on its familiar path.
+    private static func hasOrigamiTokens(_ text: String) -> Bool {
+        text.contains("[cite:") || text.contains("[note:")
+            || text.components(separatedBy: "==").count >= 3
+    }
+
+    /// The conventions resolved, then the ordinary inline pipeline —
+    /// markdown, live addresses, web links — with marked spans painted
+    /// in Author's orange.
+    private static func origamiRendered(_ text: String, in doc: LiquidDoc) -> AttributedString {
+        var resolved = OrigamiReading.citationsResolved(text, in: doc, style: .authorDate)
+        // Endnote tokens become clickable daggers on the origami-note:
+        // scheme — a click opens the note in a popover, right where the
+        // dagger stands; the notes also read whole at the document's
+        // foot, under their Notes heading.
+        resolved = OrigamiReading.noteTokensResolved(resolved)
+        let parts = resolved.components(separatedBy: "==")
+        guard parts.count >= 3, parts.count % 2 == 1 else {
+            return LiquidDoc.Paragraph.inlineMarkdown(resolved)
         }
-        return paragraph.renderedText
+        var out = AttributedString()
+        for (index, part) in parts.enumerated() {
+            var piece = LiquidDoc.Paragraph.inlineMarkdown(part)
+            if index % 2 == 1 {
+                piece.foregroundColor = OrigamiReading.markColor
+            }
+            out += piece
+        }
+        return out
+    }
+
+    private var shownText: AttributedString {
+        let rendered: AttributedString
+        if let origami, Self.hasOrigamiTokens(paragraph.displayText) {
+            rendered = Self.origamiRendered(paragraph.displayText, in: origami)
+        } else {
+            rendered = paragraph.renderedText
+        }
+        if flowed, !isAppendix, paragraph.effectiveHeading == nil {
+            return FlowBreaker.flowed(rendered)
+        }
+        return rendered
+    }
+
+    /// The endnote a clicked dagger opens, shown in a popover on this
+    /// paragraph. Nil between clicks.
+    @State private var openNote: LiquidDoc.Paragraph?
+
+    /// Catches a dagger's origami-note: link; everything else passes
+    /// through to the window's own handling (origamitext://, the web).
+    private func handleReaderURL(_ url: URL) -> OpenURLAction.Result {
+        guard let origami, let id = OrigamiReading.noteID(from: url) else {
+            return .systemAction
+        }
+        openNote = OrigamiReading.endnote(withID: id, in: origami)
+        return .handled
+    }
+
+    /// The dagger's popover: the note's own words, its conventions
+    /// resolved like any paragraph's.
+    @ViewBuilder private func notePopover(_ note: LiquidDoc.Paragraph) -> some View {
+        Text(origami.map { Self.hasOrigamiTokens(note.displayText)
+                ? Self.origamiRendered(note.displayText, in: $0)
+                : note.renderedText } ?? note.renderedText)
+            .font(.system(size: 14, design: .serif))
+            .lineSpacing(4)
+            .textSelection(.enabled)
+            .padding(14)
+            .frame(minWidth: 220, maxWidth: 380, alignment: .leading)
     }
 
     var body: some View {
@@ -443,6 +580,8 @@ struct ParagraphView: View {
                     .font(font)
                     .lineSpacing(6 * scale)
                     .textSelection(.enabled)
+                    .environment(\.openURL, OpenURLAction { handleReaderURL($0) })
+                    .popover(item: $openNote) { note in notePopover(note) }
                 Spacer(minLength: 0)
             }
             .padding(4)
@@ -462,6 +601,8 @@ struct ParagraphView: View {
                     Text(shownText)
                         .font(font)
                         .lineSpacing((paragraph.effectiveHeading == nil ? 6 : 3) * scale)
+                        .environment(\.openURL, OpenURLAction { handleReaderURL($0) })
+                        .popover(item: $openNote) { note in notePopover(note) }
                 }
             }
             .padding(4)
@@ -549,9 +690,184 @@ struct ParagraphView: View {
         case 3: 19
         default: 17
         }
-        return .system(size: size * scale,
+        // A context-set body size scales the whole scheme, headings in
+        // proportion.
+        let factor = (bodySize ?? 17) / 17
+        return .system(size: size * factor * scale,
                        weight: paragraph.effectiveHeading == nil ? .regular : .bold,
                        design: .serif)
+    }
+}
+
+/// An image a document carries aboard (an imported EPUB's figure),
+/// its alt text as a quiet caption. An Interatlas screenshot carries
+/// its View Citation inside the PNG itself; such an image answers a
+/// click with the citation and Open Source — the Interatlas Link that
+/// recreates the very scene.
+struct OrigamiAssetView: View {
+    @Environment(AppState.self) private var state
+    let asset: LiquidDoc.Asset
+    /// The citation standing beside the image in the document, for a
+    /// PNG whose own embedded copy did not survive its export.
+    var fallback: BibTeXRecord? = nil
+
+    /// The citation read out of the PNG, once, on appearance.
+    @State private var record: BibTeXRecord?
+    @State private var showsCitation = false
+
+    /// Open Source, each platform through its own door: the Mac probes
+    /// the interatlas:// scheme then the chosen app (Settings ▸
+    /// Library); iOS and visionOS try the scheme and fall back to the
+    /// https link — the browser until Interatlas registers its domain.
+    private func openSource(_ url: URL) {
+        #if os(macOS)
+        if InteratlasLink.isInteratlasLink(url) {
+            state.openInteratlasLink(url)
+        } else {
+            NSWorkspace.shared.open(url)
+        }
+        #else
+        if InteratlasLink.isInteratlasLink(url),
+           let schemed = InteratlasLink.schemed(url) {
+            UIApplication.shared.open(schemed, options: [:]) { accepted in
+                if !accepted {
+                    UIApplication.shared.open(url)
+                }
+            }
+        } else {
+            UIApplication.shared.open(url)
+        }
+        #endif
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            if record != nil {
+                Button {
+                    showsCitation = true
+                } label: {
+                    imageContent
+                }
+                .buttonStyle(.plain)
+                .help("This image carries its citation — click for the record and Open Source")
+                .popover(isPresented: $showsCitation) { citationPopover }
+            } else {
+                imageContent
+            }
+            if let alt = asset.alt, !alt.isEmpty {
+                Text(alt)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .task {
+            // The PNG's own embedded citation first; the one standing
+            // beside the image in the document otherwise.
+            if asset.mediaType == "image/png",
+               let data = asset.data,
+               let text = PNGCitation.citationText(inPNGData: data),
+               let found = BibTeXRecord.records(in: text).first {
+                record = found
+            } else {
+                record = fallback
+            }
+        }
+    }
+
+    @ViewBuilder private var imageContent: some View {
+        #if os(macOS)
+        if let data = asset.data, let image = NSImage(data: data) {
+            Image(nsImage: image)
+                .resizable()
+                .scaledToFit()
+                .frame(maxWidth: 480, maxHeight: 480, alignment: .leading)
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+        } else {
+            Label(asset.filename, systemImage: "photo")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+        }
+        #else
+        if let data = asset.data, let image = UIImage(data: data) {
+            Image(uiImage: image)
+                .resizable()
+                .scaledToFit()
+                .frame(maxWidth: 480, maxHeight: 480, alignment: .leading)
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+        } else {
+            Label(asset.filename, systemImage: "photo")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+        }
+        #endif
+    }
+
+    /// The citation as the source pages speak it, with its doors.
+    @ViewBuilder private var citationPopover: some View {
+        if let record {
+            VStack(alignment: .leading, spacing: 10) {
+                Text(record.citationSentence)
+                    .font(.system(size: 14, design: .serif))
+                    .textSelection(.enabled)
+                if let abstract = record.fields["abstract"], !abstract.isEmpty {
+                    Text(abstract)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                }
+                HStack(spacing: 8) {
+                    if let urlText = record.fields["url"],
+                       let url = URL(string: urlText.trimmingCharacters(in: .whitespaces)) {
+                        Button("Open Source") { openSource(url) }
+                            .help(InteratlasLink.isInteratlasLink(url)
+                                  ? "Opens this very scene in Interatlas — the link carries the whole view state"
+                                  : "Opens the cited source")
+                    }
+                    Button("Copy Citation") {
+                        #if os(macOS)
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(record.raw, forType: .string)
+                        #else
+                        UIPasteboard.general.string = record.raw
+                        #endif
+                    }
+                    .help("The full BibTeX record, onto the clipboard")
+                }
+            }
+            .padding(14)
+            .frame(minWidth: 260, maxWidth: 420, alignment: .leading)
+        }
+    }
+}
+
+/// A live table from an imported document's pool: the computed cell
+/// values in a plain grid, first row read as the header. The paragraph
+/// standing for the table keeps a pipe-text rendering, so nothing is
+/// lost where this view is not used.
+struct OrigamiTableView: View {
+    let table: LiquidDoc.Table
+
+    var body: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            Grid(alignment: .leading, horizontalSpacing: 18, verticalSpacing: 5) {
+                ForEach(Array(table.cells.enumerated()), id: \.offset) { row, cells in
+                    GridRow {
+                        ForEach(Array(cells.enumerated()), id: \.offset) { _, cell in
+                            Text(cell.value)
+                                .font(.system(size: 14,
+                                              weight: row == 0 ? .semibold : .regular,
+                                              design: .serif))
+                        }
+                    }
+                    if row == 0 && table.cells.count > 1 {
+                        Divider()
+                    }
+                }
+            }
+            .padding(10)
+        }
+        .background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 8))
+        .textSelection(.enabled)
     }
 }
 
