@@ -35,24 +35,34 @@ struct SettingsView: View {
 }
 
 /// The window's look: a theme picked once, painting the columns, the
-/// list, and the writing page together.
+/// list, and the writing page together — Author's themes, chosen from
+/// the same pop-up as Author's settings, whose last item opens the
+/// individual colours.
 private struct AppearanceSettingsView: View {
     @Environment(AppState.self) private var state
+    /// The colour editor the pop-up's last item opens, on the theme
+    /// chosen at that moment — Author's Edit Theme Colors….
+    @State private var editingColors = false
+
+    /// The sentinel the pop-up's last item carries, as Author tags it.
+    private static let editColorsTag = "__editThemeColors"
 
     var body: some View {
         @Bindable var state = state
         Form {
             Section {
-                Picker("Theme", selection: $state.theme) {
+                Picker("Theme", selection: themeSelection) {
                     ForEach(AppTheme.allCases) { theme in
-                        Text(theme.label).tag(theme)
+                        Text(theme.label).tag(theme.rawValue)
                     }
+                    Divider()
+                    Text("Edit Theme Colors…").tag(Self.editColorsTag)
                 }
-                .pickerStyle(.inline)
+                .pickerStyle(.menu)
             } header: {
                 Text("Appearance")
             } footer: {
-                Text("Gentle is the design's quiet greys — soft columns, grey buttons, an off-white page. Darker keeps the same design a shade deeper throughout. Warm and Cool are tinted — a soft ivory or a cool slate — and bring their own dark mode, following the system between a light and a dark shade. High Contrast is black text on white throughout, the buttons outlined.")
+                Text("Author's themes, carried across — the same colours documents are written in. Every theme has a light and a dark side and follows the system appearance. Edit Theme Colors…, the menu's last item, sets the chosen theme's colours individually.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -120,6 +130,98 @@ private struct AppearanceSettingsView: View {
             }
         }
         .formStyle(.grouped)
+        .sheet(isPresented: $editingColors) {
+            ThemeColorEditorView(theme: state.theme)
+        }
+    }
+
+    /// The pop-up's selection: a theme sets it; the last item opens the
+    /// editor and leaves the theme as it stood — exactly Author's popup.
+    private var themeSelection: Binding<String> {
+        Binding(
+            get: { state.theme.rawValue },
+            set: { value in
+                if value == Self.editColorsTag {
+                    editingColors = true
+                } else if let theme = AppTheme(rawValue: value) {
+                    state.theme = theme
+                }
+            })
+    }
+}
+
+/// Author's theme colour editor, carried across: the chosen theme's
+/// four roles in a grid, a light and a dark well each. Changes are
+/// stored as overrides on the theme and applied live; Reset restores
+/// the built-in colour.
+private struct ThemeColorEditorView: View {
+    @Environment(AppState.self) private var state
+    @Environment(\.dismiss) private var dismiss
+    let theme: AppTheme
+
+    /// Snaps the wells back after a Reset; live edits need no remount.
+    @State private var resetCount = 0
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("\(theme.label) Theme Colors")
+                .font(.system(size: 15, weight: .bold))
+            Text("Changes apply immediately. Reset restores the built-in color.")
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+            Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 8) {
+                GridRow {
+                    Text("")
+                    Text("Light").font(.system(size: 11, weight: .bold))
+                    Text("Dark").font(.system(size: 11, weight: .bold))
+                }
+                ForEach(ThemeRole.allCases) { role in
+                    GridRow {
+                        Text(role.label)
+                            .font(.system(size: 12))
+                            .gridColumnAlignment(.trailing)
+                        ColorPicker("", selection: well(role, dark: false))
+                            .labelsHidden()
+                        ColorPicker("", selection: well(role, dark: true))
+                            .labelsHidden()
+                        Button("Reset") { reset(role) }
+                            .controlSize(.small)
+                    }
+                }
+            }
+            .id(resetCount)
+            HStack {
+                Button("Reset All") {
+                    for role in ThemeRole.allCases { reset(role) }
+                }
+                Spacer()
+                Button("Done") { dismiss() }
+                    .keyboardShortcut(.defaultAction)
+            }
+            .padding(.top, 6)
+        }
+        .padding(20)
+        .frame(width: 340)
+    }
+
+    /// One colour well: reads the colour in force, writes an override.
+    private func well(_ role: ThemeRole, dark: Bool) -> Binding<Color> {
+        Binding(
+            get: { theme.effective(role, dark: dark).color },
+            set: { color in
+                let ns = NSColor(color).usingColorSpace(.sRGB) ?? NSColor(color)
+                theme.setOverride(
+                    ThemeRGB(ns.redComponent, ns.greenComponent, ns.blueComponent),
+                    for: role, dark: dark)
+                state.themeVersion += 1
+            })
+    }
+
+    private func reset(_ role: ThemeRole) {
+        theme.setOverride(nil, for: role, dark: false)
+        theme.setOverride(nil, for: role, dark: true)
+        state.themeVersion += 1
+        resetCount += 1
     }
 }
 

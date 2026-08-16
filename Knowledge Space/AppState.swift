@@ -83,11 +83,16 @@ final class AppState {
     var pendingFragment: String?
     /// Superseded documents are hidden by default; history stays reachable.
     var showsSuperseded = false
-    /// The window's appearance — Gentle greys or High Contrast — chosen
-    /// in Settings ▸ Appearance; the window rebuilds when it changes.
+    /// The window's appearance — Author's themes — chosen in Settings ▸
+    /// Appearance; the window rebuilds when it changes.
     var theme: AppTheme = AppTheme.current {
         didSet { UserDefaults.standard.set(theme.rawValue, forKey: AppTheme.key) }
     }
+    /// Bumped when Edit Theme Colors… changes a colour, so the windows
+    /// repaint around the new values (which live in UserDefaults).
+    var themeVersion = 0
+    /// What the windows key their repaint on: the theme and its edits.
+    var themeStamp: String { "\(theme.rawValue)#\(themeVersion)" }
     /// How much of the sidebar shows — Small (the pared-down default) or
     /// Full — chosen in Settings ▸ Appearance; the column rebuilds when
     /// it changes.
@@ -326,14 +331,6 @@ final class AppState {
         // The full map, so a note picked from the Archived list still
         // opens in the reader to be retrieved.
         selectedDocID.flatMap { index.allByID[$0]?.doc }
-    }
-
-    /// Whether any To Do note is also marked Important — the condition
-    /// for the orange To Do row at the head of the sidebar. Read from
-    /// the index (not the search-filtered list), so the row's presence
-    /// does not come and go with a search.
-    var hasImportantToDo: Bool {
-        index.timeline.contains { $0.doc.actionValue == .toDo && $0.doc.important }
     }
 
     /// The span of days the Timeline shows, chosen from its calendar —

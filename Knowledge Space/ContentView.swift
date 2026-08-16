@@ -722,8 +722,8 @@ struct ContentView: View {
             DocumentListView(draftLettersOnly: true)
         } else if case .action(let action)? = state.sidebarSelection {
             DocumentListView(action: action)
-        } else if state.sidebarSelection == .importantToDo {
-            DocumentListView(importantToDoOnly: true)
+        } else if state.sidebarSelection == .important {
+            DocumentListView(importantOnly: true)
         } else {
             // The Inbox: the reader's notes plus anything unread.
             DocumentListView(inboxOnly: true)

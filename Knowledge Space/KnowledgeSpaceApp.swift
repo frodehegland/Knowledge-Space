@@ -137,13 +137,11 @@ struct KnowledgeSpaceApp: App {
                 // AppGreys.text); secondary and quieter styles keep
                 // their own greys.
                 .foregroundStyle(AppGreys.text)
-                // The theme sets the window's scheme: the light designs
-                // (Gentle, Darker, High Contrast) pin it to light, so
-                // every divider resolves to the same separator grey
-                // whatever the system appearance; Warm and Cool bring
-                // their own dark mode and follow the system. Reading
-                // `state.theme` re-evaluates this when the theme changes.
-                .preferredColorScheme(state.theme.enforcedScheme)
+                // Every theme has a light and a dark side and follows
+                // the system appearance. Reading the stamp re-paints
+                // the window when the theme — or one of its colours,
+                // in Edit Theme Colors… — changes.
+                .id(state.themeStamp)
         }
         // ⌘N is a new note — the core act — displacing New Window.
         .commands {
@@ -215,7 +213,7 @@ struct KnowledgeSpaceApp: App {
             ReadingWindowView(docID: docID)
                 .environment(state)
                 .foregroundStyle(AppGreys.text)
-                .preferredColorScheme(state.theme.enforcedScheme)
+                .id(state.themeStamp)
         }
         .defaultSize(width: 760, height: 900)
 
@@ -223,7 +221,9 @@ struct KnowledgeSpaceApp: App {
             SettingsView()
                 .environment(state)
                 .foregroundStyle(AppGreys.text)
-                .preferredColorScheme(state.theme.enforcedScheme)
+                // The theme alone, not its colour edits: a repaint
+                // mid-edit would close the editor's sheet.
+                .id(state.theme)
         }
         #endif
     }

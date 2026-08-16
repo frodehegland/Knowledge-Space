@@ -20,6 +20,17 @@ struct DocumentReaderView: View {
     /// view — or fragment scrolling — of its own.
     var inline: Bool = false
 
+    /// The stretch blocks open in this reading — stretchtext is closed
+    /// by default, the words folded behind their `»` until asked for.
+    @State private var openStretch: Set<String> = []
+    /// How the opened detail reads — a callout behind a quiet rule, or
+    /// inline in the flow — per the setting shared across platforms.
+    @AppStorage("stretchtextDisplay") private var stretchDisplayRaw =
+        StretchtextDisplay.callout.rawValue
+    private var stretchDisplay: StretchtextDisplay {
+        StretchtextDisplay(rawValue: stretchDisplayRaw) ?? .callout
+    }
+
     var body: some View {
         if inline {
             readerColumn
@@ -49,48 +60,37 @@ struct DocumentReaderView: View {
             if let body = doc.body {
                 let appendixIDs = doc.visualMetaParagraphIDs
                     .union(doc.analysisParagraphIDs)
-                ForEach(body.filter {
+                // The flow walks the body with its stretch blocks
+                // grouped: consecutive paragraphs sharing a stretchID —
+                // the expandable detail Author's EPUB export writes —
+                // fold behind one toggle, closed by default.
+                let items = OrigamiFlowItem.build(body.filter {
                     state.showsVisualMeta || !appendixIDs.contains($0.id)
-                }) { paragraph in
-                    // A "Photo: <name>" line names an image beside the
-                    // note in the folder (a scan's capture) — shown as
-                    // the picture itself, clickable to open full size.
-                    if let name = Self.photoFileName(in: paragraph.text) {
-                        photoView(name)
-                            .id(paragraph.id)
-                    } else if let image = LiquidDoc.imageReference(in: paragraph.text),
-                              let asset = doc.assets.first(where: { $0.id == image.id }) {
-                        // An imported EPUB's figure: the image travels in
-                        // the document itself, base64 in the JSON. An
-                        // Interatlas screenshot carries its citation
-                        // aboard — or beside it, as Author's export
-                        // writes it — and answers a click with it.
-                        OrigamiAssetView(asset: asset,
-                                         fallback: Self.imageCitation(after: paragraph, in: doc))
-                            .id(paragraph.id)
-                    } else if let tableID = paragraph.tableID,
-                              let table = doc.tables.first(where: { $0.identifier == tableID }) {
-                        // A live table from the document's pool; the
-                        // paragraph's own pipe-text stands in elsewhere.
-                        OrigamiTableView(table: table)
-                            .id(paragraph.id)
-                    } else {
-                        ParagraphView(paragraph: paragraph,
-                                      isAppendix: appendixIDs.contains(paragraph.id),
-                                      isHighlighted: paragraph.id == state.pendingFragment,
-                                      flowed: state.flowReading,
-                                      transcript: paragraph.speaker == nil ? nil : doc,
-                                      origami: doc)
-                            // Stretchtext — expandable detail from the
-                            // export — reads inset behind a quiet rule,
-                            // open: the words are never folded away here.
-                            .padding(.leading, paragraph.stretchID == nil ? 0 : 16)
-                            .overlay(alignment: .leading) {
-                                if paragraph.stretchID != nil {
-                                    Rectangle().fill(.quaternary).frame(width: 2)
-                                }
-                            }
-                            .id(paragraph.id)
+                })
+                ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
+                    switch item {
+                    case .paragraph(let paragraph):
+                        // The `»` toggle rides inline at the end of the
+                        // paragraph the stretch follows — where Author
+                        // writes it — when that paragraph is running text.
+                        let trailing: (id: String, run: [LiquidDoc.Paragraph])? = {
+                            guard Self.canHostStretch(paragraph),
+                                  index + 1 < items.count,
+                                  case .stretch(let id, let run) = items[index + 1]
+                            else { return nil }
+                            return (id, run)
+                        }()
+                        paragraphRow(paragraph, appendixIDs: appendixIDs,
+                                     trailingStretch: trailing)
+                    case .stretch(let id, let run):
+                        let hosted: Bool = {
+                            guard index > 0,
+                                  case .paragraph(let host) = items[index - 1]
+                            else { return false }
+                            return Self.canHostStretch(host)
+                        }()
+                        stretchBlock(id: id, run: run, hosted: hosted,
+                                     appendixIDs: appendixIDs)
                     }
                 }
             } else if let wraps = doc.wraps {
@@ -117,11 +117,133 @@ struct DocumentReaderView: View {
 
     private func scrollToPendingFragment(_ proxy: ScrollViewProxy) {
         guard let fragment = state.pendingFragment else { return }
-        withAnimation { proxy.scrollTo(fragment, anchor: .center) }
+        // A fragment inside a closed stretch opens the stretch first,
+        // so its paragraph exists to scroll to.
+        if let target = doc.body?.first(where: { $0.id == fragment }),
+           let stretchID = target.stretchID, !openStretch.contains(stretchID) {
+            openStretch.insert(stretchID)
+            DispatchQueue.main.async {
+                withAnimation { proxy.scrollTo(fragment, anchor: .center) }
+            }
+        } else {
+            withAnimation { proxy.scrollTo(fragment, anchor: .center) }
+        }
         Task {
             try? await Task.sleep(for: .seconds(2.5))
             if state.pendingFragment == fragment {
                 state.pendingFragment = nil
+            }
+        }
+    }
+
+    // MARK: Stretchtext
+
+    /// One paragraph of the flow, rendered per its kind — photo line,
+    /// carried image, live table, or text. A `trailingStretch` puts the
+    /// stretch toggle at the text's end; `closeStretch` marks a revealed
+    /// paragraph, a click anywhere in it folding the stretch again.
+    @ViewBuilder
+    private func paragraphRow(_ paragraph: LiquidDoc.Paragraph,
+                              appendixIDs: Set<String>,
+                              trailingStretch: (id: String, run: [LiquidDoc.Paragraph])? = nil,
+                              closeStretch: (id: String, isLast: Bool)? = nil) -> some View {
+        // A "Photo: <name>" line names an image beside the note in the
+        // folder (a scan's capture) — shown as the picture itself,
+        // clickable to open full size.
+        if let name = Self.photoFileName(in: paragraph.text) {
+            photoView(name)
+                .id(paragraph.id)
+        } else if let image = LiquidDoc.imageReference(in: paragraph.text),
+                  let asset = doc.assets.first(where: { $0.id == image.id }) {
+            // An imported EPUB's figure: the image travels in the
+            // document itself, base64 in the JSON. An Interatlas
+            // screenshot carries its citation aboard — or beside it, as
+            // Author's export writes it — and answers a click with it.
+            OrigamiAssetView(asset: asset,
+                             fallback: Self.imageCitation(after: paragraph, in: doc))
+                .id(paragraph.id)
+        } else if let tableID = paragraph.tableID,
+                  let table = doc.tables.first(where: { $0.identifier == tableID }) {
+            // A live table from the document's pool; the paragraph's
+            // own pipe-text stands in elsewhere.
+            OrigamiTableView(table: table)
+                .id(paragraph.id)
+        } else {
+            ParagraphView(paragraph: paragraph,
+                          isAppendix: appendixIDs.contains(paragraph.id),
+                          isHighlighted: paragraph.id == state.pendingFragment,
+                          flowed: state.flowReading,
+                          transcript: paragraph.speaker == nil ? nil : doc,
+                          origami: doc,
+                          trailingStretch: trailingStretch,
+                          closeStretch: closeStretch,
+                          openStretchIDs: openStretch,
+                          stretchDisplay: stretchDisplay,
+                          onToggleStretch: { toggleStretch($0) })
+                .id(paragraph.id)
+        }
+    }
+
+    /// Whether a paragraph is running text — something an inline stretch
+    /// toggle can end. Photo lines, images, tables, rules, and multi-line
+    /// markdown blocks are not.
+    private static func canHostStretch(_ paragraph: LiquidDoc.Paragraph) -> Bool {
+        let text = paragraph.displayText
+        return paragraph.tableID == nil
+            && photoFileName(in: paragraph.text) == nil
+            && LiquidDoc.imageReference(in: paragraph.text) == nil
+            && !MarkdownBlock.needsRendering(paragraph.text)
+            && !(text.count >= 3 && text.allSatisfy { $0 == "-" })
+    }
+
+    /// One stretchtext block's detail. Its toggle lives inline in the
+    /// host paragraph; only a stretch with no text before it (rare)
+    /// gets a toggle of its own here. Open, the detail reads set apart
+    /// as a callout behind a quiet rule, or as ordinary paragraphs,
+    /// per the shared stretchtext display setting.
+    @ViewBuilder
+    private func stretchBlock(id: String, run: [LiquidDoc.Paragraph],
+                              hosted: Bool, appendixIDs: Set<String>) -> some View {
+        let isOpen = openStretch.contains(id)
+        if !hosted {
+            Button {
+                toggleStretch(id)
+            } label: {
+                Text(isOpen ? "\u{2039}" : "\u{00BB}")
+                    .font(.system(size: 17, weight: .bold, design: .serif))
+            }
+            .buttonStyle(.plain)
+            .help(isOpen ? "Close the stretchtext" : "Open the stretchtext")
+        }
+        // Inline display continues in the host paragraph itself, no
+        // break — the block below only renders for callout (or for a
+        // hostless stretch, which has no line to continue).
+        if isOpen, !(hosted && stretchDisplay == .inline) {
+            let content = VStack(alignment: .leading, spacing: 14) {
+                ForEach(run) { paragraph in
+                    paragraphRow(paragraph, appendixIDs: appendixIDs,
+                                 closeStretch: (id, paragraph.id == run.last?.id))
+                }
+            }
+            switch stretchDisplay {
+            case .callout:
+                content
+                    .padding(.leading, 16)
+                    .overlay(alignment: .leading) {
+                        Rectangle().fill(.quaternary).frame(width: 2)
+                    }
+            case .inline:
+                content
+            }
+        }
+    }
+
+    private func toggleStretch(_ id: String) {
+        withAnimation(.easeInOut(duration: 0.15)) {
+            if openStretch.contains(id) {
+                openStretch.remove(id)
+            } else {
+                openStretch.insert(id)
             }
         }
     }
@@ -482,6 +604,20 @@ struct ParagraphView: View {
     /// scale with it; nil keeps the reader's own measure.
     var bodySize: CGFloat? = nil
 
+    /// A stretch block following this paragraph: the `»` toggle rides
+    /// inline at the paragraph's end, where Author writes it. Open, the
+    /// frame reads ‹ … ›; inline display continues the revealed words
+    /// in this same paragraph.
+    var trailingStretch: (id: String, run: [LiquidDoc.Paragraph])? = nil
+    /// Set on a revealed callout paragraph: a click anywhere in it
+    /// folds the stretch again; the last one carries the frame's `›`.
+    var closeStretch: (id: String, isLast: Bool)? = nil
+    /// The reader's open stretch ids, how open stretchtext displays,
+    /// and the reader's answer to a toggle's click.
+    var openStretchIDs: Set<String> = []
+    var stretchDisplay: StretchtextDisplay = .callout
+    var onToggleStretch: ((String) -> Void)? = nil
+
     private var isRule: Bool {
         let text = paragraph.displayText
         return text.count >= 3 && text.allSatisfy { $0 == "-" }
@@ -520,25 +656,80 @@ struct ParagraphView: View {
     }
 
     private var shownText: AttributedString {
-        let rendered: AttributedString
+        var rendered: AttributedString
         if let origami, Self.hasOrigamiTokens(paragraph.displayText) {
             rendered = Self.origamiRendered(paragraph.displayText, in: origami)
         } else {
             rendered = paragraph.renderedText
         }
         if flowed, !isAppendix, paragraph.effectiveHeading == nil {
-            return FlowBreaker.flowed(rendered)
+            rendered = FlowBreaker.flowed(rendered)
         }
-        return rendered
+        return withStretchAffordances(rendered)
+    }
+
+    /// A revealed paragraph's rendered words, for inline display —
+    /// the same pipeline as `shownText`, without the affordances.
+    private func renderedRun(_ paragraph: LiquidDoc.Paragraph) -> AttributedString {
+        if let origami, Self.hasOrigamiTokens(paragraph.displayText) {
+            return Self.origamiRendered(paragraph.displayText, in: origami)
+        }
+        return paragraph.renderedText
+    }
+
+    /// The stretch affordances folded into the paragraph's text: the
+    /// inline `»`/`‹` toggle when a stretch block follows, the revealed
+    /// words themselves for inline display, and — on a revealed callout
+    /// paragraph — a click anywhere folding the stretch again. Stretch
+    /// links are controls, not references: they keep the body ink.
+    private func withStretchAffordances(_ text: AttributedString) -> AttributedString {
+        var out = text
+        if let stretch = trailingStretch,
+           let url = URL(string: OrigamiReading.stretchScheme + ":" + stretch.id) {
+            let isOpen = openStretchIDs.contains(stretch.id)
+            let inlineOpen = isOpen && stretchDisplay == .inline
+            // Inline and open: the revealed words keep their ink; the
+            // host's own words step back so the detail reads apart.
+            if inlineOpen { out.foregroundColor = .secondary }
+            out += AttributedString(" ")
+            var toggle = AttributedString(isOpen ? "\u{2039}" : "\u{00BB}")
+            toggle.link = url
+            out += toggle
+            if inlineOpen {
+                for (index, paragraph) in stretch.run.enumerated() {
+                    out += AttributedString(" ")
+                    out += OrigamiReading.stretchRevealed(
+                        renderedRun(paragraph), id: stretch.id,
+                        closing: index == stretch.run.count - 1)
+                }
+            }
+        }
+        if let closeStretch {
+            out = OrigamiReading.stretchRevealed(out, id: closeStretch.id,
+                                                 closing: closeStretch.isLast)
+        }
+        let plain = out.runs.compactMap { run in
+            run.link?.scheme == OrigamiReading.stretchScheme
+                && run.foregroundColor == nil ? run.range : nil
+        }
+        for range in plain { out[range].foregroundColor = .primary }
+        return out
     }
 
     /// The endnote a clicked dagger opens, shown in a popover on this
     /// paragraph. Nil between clicks.
     @State private var openNote: LiquidDoc.Paragraph?
 
-    /// Catches a dagger's origami-note: link; everything else passes
-    /// through to the window's own handling (origamitext://, the web).
+    /// Catches a stretch toggle's origami-stretch: link and a dagger's
+    /// origami-note: link; everything else passes through to the
+    /// window's own handling (origamitext://, the web).
     private func handleReaderURL(_ url: URL) -> OpenURLAction.Result {
+        if url.scheme == OrigamiReading.stretchScheme, let onToggleStretch {
+            let raw = String(url.absoluteString.dropFirst(
+                OrigamiReading.stretchScheme.count + 1))
+            onToggleStretch(raw.removingPercentEncoding ?? raw)
+            return .handled
+        }
         guard let origami, let id = OrigamiReading.noteID(from: url) else {
             return .systemAction
         }
@@ -600,6 +791,10 @@ struct ParagraphView: View {
                 } else {
                     Text(shownText)
                         .font(font)
+                        // Headings wear the theme's own heading ink,
+                        // as Author paints them.
+                        .foregroundStyle(paragraph.effectiveHeading == nil
+                            ? AppGreys.text : AppGreys.heading)
                         .lineSpacing((paragraph.effectiveHeading == nil ? 6 : 3) * scale)
                         .environment(\.openURL, OpenURLAction { handleReaderURL($0) })
                         .popover(item: $openNote) { note in notePopover(note) }

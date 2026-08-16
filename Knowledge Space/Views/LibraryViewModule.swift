@@ -25,7 +25,7 @@ enum SidebarItem: Hashable {
     case draftLetters // letters still being written
     case digests      // the granted documents folder, distilled
     case action(LiquidDoc.Action)  // notes by standing: To Do, Done…
-    case importantToDo  // To Do notes marked Important — the orange head of the column
+    case important  // everything marked Important — those also standing To Do on top
     case sourceShelf(SourceShelf)  // the Library: sources, authors, quotes
     case pdfShelf(FileShelfListing)   // the Reader Library's PDFs, by a listing
     case epubShelf(FileShelfListing)  // the EPUB Library's works, by a listing
@@ -79,6 +79,9 @@ enum SidebarCatalog {
     /// seeing the correspondence, with New Note (added by the sidebar
     /// view) closing the list.
     static let top: [SidebarPlace] = [
+        // Important leads the column: everything marked with the orange
+        // bullet, the To Do standing on top.
+        SidebarPlace(name: "Important", systemImage: "circle.fill", item: .important),
         SidebarPlace(name: "Inbox", systemImage: "tray", item: .library),
         SidebarPlace(name: "Timeline", systemImage: "clock", item: .timeline),
         SidebarPlace(name: "Places", systemImage: "mappin.and.ellipse", item: .place),
@@ -241,8 +244,12 @@ enum SidebarCatalog {
             // with them To Do) live in the column at the list's right
             // edge; New lives in ⌘N and the toolbar.
             var small: [(title: String, places: [SidebarPlace])] = []
-            if let timeline = top.first(where: { $0.item == .timeline }) {
-                small.append(("", [timeline]))
+            // The unnamed head: Important first, then Timeline.
+            let head = [SidebarItem.important, .timeline].compactMap { item in
+                top.first { $0.item == item }
+            }
+            if !head.isEmpty {
+                small.append(("", head))
             }
             if !filedFolders.isEmpty {
                 small.append(("Files", filed(filedFolders, displayName: folderDisplayName)))
@@ -499,8 +506,9 @@ struct DocumentListView: View {
     var digestsOnly = false
     /// Narrows the list to notes with one action standing.
     var action: LiquidDoc.Action? = nil
-    /// The orange head of the column: To Do notes marked Important.
-    var importantToDoOnly = false
+    /// The orange head of the column: everything marked Important,
+    /// the notes also standing To Do on top.
+    var importantOnly = false
 
     /// Whether the inline note's controls are unfolded — each newly
     /// opened note starts with them tucked away.
@@ -519,10 +527,12 @@ struct DocumentListView: View {
     /// The entries this list speaks for: the Inbox's, one standing's,
     /// one folder's, or everything.
     private var scopedEntries: [IndexEntry] {
-        if importantToDoOnly {
-            return state.filteredEntries.filter {
-                $0.doc.actionValue == .toDo && $0.doc.important
-            }
+        if importantOnly {
+            // Everything marked Important, the To Do standing on top —
+            // each band keeping the list's own newest-first order.
+            let important = state.filteredEntries.filter { $0.doc.important }
+            return important.filter { $0.doc.actionValue == .toDo }
+                + important.filter { $0.doc.actionValue != .toDo }
         }
         if let action {
             return state.filteredEntries.filter { $0.doc.actionValue == action }
@@ -838,11 +848,11 @@ struct DocumentListView: View {
                             "No Notes",
                             systemImage: "note.text",
                             description: Text("A note is the quickest kind — ⌘N, or New Note in the sidebar — and every one you write lists here."))
-                    } else if importantToDoOnly {
+                    } else if importantOnly {
                         ContentUnavailableView(
-                            "No Important To Do",
-                            systemImage: "checklist",
-                            description: Text("A To Do note marked Important lists here."))
+                            "Nothing Marked Important",
+                            systemImage: "circle.fill",
+                            description: Text("A note marked Important lists here — any also standing To Do on top."))
                     } else if let action {
                         ContentUnavailableView(
                             "Nothing \(action.displayName)",
@@ -1007,10 +1017,22 @@ struct DocumentListView: View {
     // MARK: Grouping
 
     private var groups: [(label: String, entries: [IndexEntry])] {
+        // The Important list keeps its own two shelves — To Do on top,
+        // the rest of Important beneath — instead of day headings.
+        if importantOnly { return importantGroups(displayedEntries) }
         switch grouping {
         case .place: return placeGroups(displayedEntries)
         case .time: return timeGroups(displayedEntries)
         }
+    }
+
+    private func importantGroups(_ entries: [IndexEntry]) -> [(label: String, entries: [IndexEntry])] {
+        let toDo = entries.filter { $0.doc.actionValue == .toDo }
+        let rest = entries.filter { $0.doc.actionValue != .toDo }
+        var groups: [(label: String, entries: [IndexEntry])] = []
+        if !toDo.isEmpty { groups.append((label: "To Do", entries: toDo)) }
+        if !rest.isEmpty { groups.append((label: "Important", entries: rest)) }
+        return groups
     }
 
     /// Newest first, one section per day, spoken relatively where the
