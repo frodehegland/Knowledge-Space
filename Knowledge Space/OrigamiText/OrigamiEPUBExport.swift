@@ -270,6 +270,24 @@ nonisolated enum OrigamiEPUBExporter {
                 html += tableHTML(paragraph: paragraph, tableID: tableID, doc: doc)
             } else if paragraph.text == "---" {
                 html += "<hr/>\n"
+            } else if let speaker = paragraph.speaker,
+                      paragraph.text.hasPrefix("\(speaker):") {
+                // Attribution travels in the markup, as a heading's credit
+                // does in data-contributing-authors: the name wrapped in
+                // the speaker strong the importer reads back into
+                // `speaker`, so who said what survives the round trip.
+                let statement = paragraph.text.dropFirst(speaker.count + 1)
+                    .trimmingCharacters(in: .whitespaces)
+                html += "<p id=\"\(escape(paragraph.id))\">"
+                    + "<strong class=\"speaker\">\(escape(speaker)):</strong> "
+                    + inlineHTML(statement, doc: doc) + "</p>\n"
+            } else if let speaker = paragraph.speaker {
+                // A turn's continuation paragraph: attributed, but the name
+                // leads the turn's first paragraph only — so the credit
+                // rides an attribute, like a heading's.
+                html += "<p id=\"\(escape(paragraph.id))\""
+                    + " data-speaker=\"\(escape(speaker))\">"
+                    + inlineHTML(paragraph.text, doc: doc) + "</p>\n"
             } else {
                 html += "<p id=\"\(escape(paragraph.id))\">"
                     + inlineHTML(paragraph.text, doc: doc) + "</p>\n"

@@ -43,6 +43,46 @@ nonisolated enum InteratlasLink {
     }
 }
 
+/// The Liquid view link: the same link domain, path `/liquid/…`, minted
+/// by Author's 3D view export ("View: …" citations). The URL carries the
+/// whole view state; the receiving app is Liquid, not Interatlas —
+/// recognition is the known host plus the /liquid/ path, still never
+/// parsing deeper than needed to recognise.
+nonisolated enum LiquidViewLink {
+
+    /// Whether a URL is a Liquid view link — the shared link domain
+    /// carrying the /liquid/ path.
+    static func isLiquidViewLink(_ url: URL) -> Bool {
+        guard InteratlasLink.isInteratlasLink(url) else { return false }
+        return url.path.lowercased().hasPrefix("/liquid/")
+    }
+
+    /// Convenience for link fields kept as text on records.
+    static func isLiquidViewLink(_ text: String) -> Bool {
+        guard let url = URL(string: text.trimmingCharacters(in: .whitespaces)) else { return false }
+        return isLiquidViewLink(url)
+    }
+
+    /// The link in its scheme forms, newest first: `liquidinfo://` —
+    /// the scheme Liquid Information declares — then the older
+    /// `liquid://` that LiquidView claimed, so a receiver is offered
+    /// whichever door it actually has.
+    static func schemedForms(_ url: URL) -> [URL] {
+        ["liquidinfo", "liquid"].compactMap { scheme in
+            guard var components = URLComponents(url: url, resolvingAgainstBaseURL: false)
+            else { return nil }
+            components.scheme = scheme
+            return components.url
+        }
+    }
+
+    /// The primary scheme form (`liquidinfo://`), for the platforms
+    /// that try one scheme and fall back to the https link.
+    static func schemed(_ url: URL) -> URL? {
+        schemedForms(url).first
+    }
+}
+
 /// Reads the citation Interatlas embeds in its screenshots: the BibTeX
 /// entry carried in a PNG iTXt chunk under the keyword `visual-meta`,
 /// mirrored in XMP. Walks the PNG's chunk structure directly — ImageIO

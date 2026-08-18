@@ -172,6 +172,7 @@ struct KnowledgeSpaceApp: App {
                 Button("Import Transcript…") {
                     state.importTranscripts()
                 }
+                .keyboardShortcut("i", modifiers: [.command, .shift])
                 .disabled(state.index.folderURL == nil)
                 Button("Convert Old Documents…") {
                     state.importLegacyDocuments()

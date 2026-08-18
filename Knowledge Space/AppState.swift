@@ -417,8 +417,8 @@ final class AppState {
     /// standing, Important, or filing set right after typing can no
     /// longer overwrite the words. Returns whether it wrote.
     @discardableResult
-    private func mutateNoteFile(_ doc: LiquidDoc,
-                               _ change: (inout LiquidDoc) -> Void) -> Bool {
+    func mutateNoteFile(_ doc: LiquidDoc,
+                        _ change: (inout LiquidDoc) -> Void) -> Bool {
         let fresh = (try? Data(contentsOf: doc.fileURL))
             .flatMap { try? LiquidDoc.decode(data: $0, fileURL: doc.fileURL) }
         var updated = fresh ?? doc
@@ -1212,6 +1212,14 @@ final class AppState {
     var interatlasAppPath: String? =
         UserDefaults.standard.string(forKey: "interatlasAppPath") {
         didSet { UserDefaults.standard.set(interatlasAppPath, forKey: "interatlasAppPath") }
+    }
+    /// The app that opens Liquid view links — Author's 3D view
+    /// citations on the same link domain, path /liquid/ (Settings ▸
+    /// Library). Nil falls back to the system default until Liquid
+    /// registers its universal link.
+    var liquidAppPath: String? =
+        UserDefaults.standard.string(forKey: "liquidAppPath") {
+        didSet { UserDefaults.standard.set(liquidAppPath, forKey: "liquidAppPath") }
     }
     #endif
     /// The folder the Digest distills — the user's documents, granted

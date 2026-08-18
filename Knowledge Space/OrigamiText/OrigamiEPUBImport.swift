@@ -107,6 +107,15 @@ nonisolated enum OrigamiEPUBImporter {
         var addressByCitationID: [String: String] = [:]
         var bibtexByAddress: [String: String] = [:]
         var references: [LiquidDoc.Reference] = []
+        // A reference minted from a figure's own citation anchor stands
+        // in only when the pool holds no record under that key — the
+        // pool's verbatim BibTeX always wins.
+        func adoptFigureReferences(_ minted: [LiquidDoc.Reference]) {
+            for reference in minted
+            where !references.contains(where: { $0.id == reference.id }) {
+                references.append(reference)
+            }
+        }
         // The current Author export's reference pool: a dictionary keyed
         // by citation key, each entry carrying BibTeX (and CSL). The
         // body's biblioref anchors cite these keys.
@@ -245,7 +254,7 @@ nonisolated enum OrigamiEPUBImporter {
                     imageBudget -= bytes.count
                     return bytes
                 }
-                guard let (part, partAssets) = try? bodyParagraphs(
+                guard let (part, partAssets, partReferences) = try? bodyParagraphs(
                     fromXHTML: String(decoding: data, as: UTF8.self),
                     documentTitle: index == 0 ? documentTitle : nil,
                     addressByCitationID: [:],
@@ -253,13 +262,18 @@ nonisolated enum OrigamiEPUBImporter {
                     idPrefix: "s\(index + 1)-") else { continue }
                 body += part
                 bodyAssets += partAssets
+                adoptFigureReferences(partReferences)
             }
             guard !body.isEmpty else { throw OrigamiEPUBImportError.missingContent }
         } else {
-            (body, bodyAssets) = try bodyParagraphs(fromXHTML: html,
-                                                    documentTitle: documentTitle,
-                                                    addressByCitationID: addressByCitationID,
-                                                    resolveImage: resolveImage)
+            let (part, partAssets, partReferences) = try bodyParagraphs(
+                fromXHTML: html,
+                documentTitle: documentTitle,
+                addressByCitationID: addressByCitationID,
+                resolveImage: resolveImage)
+            body = part
+            bodyAssets = partAssets
+            adoptFigureReferences(partReferences)
         }
 
         // Endnotes travel in the metadata (the body only carries their
@@ -503,7 +517,8 @@ nonisolated enum OrigamiEPUBImporter {
                                        addressByCitationID: [String: String],
                                        resolveImage: (String) -> Data?,
                                        idPrefix: String = "")
-        throws -> (paragraphs: [LiquidDoc.Paragraph], assets: [LiquidDoc.Asset]) {
+        throws -> (paragraphs: [LiquidDoc.Paragraph], assets: [LiquidDoc.Asset],
+                   figureReferences: [LiquidDoc.Reference]) {
         let root = try XMLTree.parse(Data(html.utf8))
         // The older export wraps the flow in <main>; the current Author
         // export writes its sections straight into <body>.
@@ -514,6 +529,7 @@ nonisolated enum OrigamiEPUBImporter {
 
         var paragraphs: [LiquidDoc.Paragraph] = []
         var assets: [LiquidDoc.Asset] = []
+        var figureReferences: [LiquidDoc.Reference] = []
         var assetOrdinal = 0
         var fallbackOrdinal = 0
 
@@ -555,6 +571,36 @@ nonisolated enum OrigamiEPUBImporter {
                 }
                 let alt = image.attributes["alt"] ?? ""
                 let paragraphID = stableID()
+                // Author wraps a cited figure in a biblioref anchor whose
+                // href is the scene link (an Interatlas or Liquid view
+                // URL). The export can omit the cited key from the pool
+                // (an empty backmatter), which would lose the link with
+                // the anchor — so the anchor minds a reference of its
+                // own, standing in only where the pool has no record.
+                if element.name == "figure",
+                   let anchor = element.firstDescendant(named: "a"),
+                   let rawHref = anchor.attributes["href"], rawHref.hasPrefix("http") {
+                    // Braces would end the BibTeX field early; they are
+                    // illegal in a URL anyway, so percent-encoding them
+                    // keeps both the record and the link intact. Other
+                    // URL characters pass verbatim, as the ecosystem's
+                    // own records write them.
+                    let href = xmlUnescaped(rawHref)
+                        .replacingOccurrences(of: "\\", with: "%5C")
+                        .replacingOccurrences(of: "{", with: "%7B")
+                        .replacingOccurrences(of: "}", with: "%7D")
+                    let isCitation = anchor.attributes["data-citation-key"] != nil
+                        || (anchor.attributes["epub:type"] ?? "").contains("biblioref")
+                        || InteratlasLink.isInteratlasLink(href)
+                    if isCitation {
+                        let key = anchor.attributes["data-citation-key"]
+                            .flatMap { $0.isEmpty ? nil : $0 } ?? "fig-\(paragraphID)"
+                        let title = alt.isEmpty ? "Cited figure" : alt
+                        figureReferences.append(LiquidDoc.Reference(
+                            id: key,
+                            bibtex: "@misc{\(key),\n  title = {\(VisualMeta.bibtexEscaped(title))},\n  url = {\(href)},\n}"))
+                    }
+                }
                 if let data = resolveImage(src), !data.isEmpty {
                     assetOrdinal += 1
                     let assetID = "\(idPrefix)img\(assetOrdinal)"
@@ -625,13 +671,18 @@ nonisolated enum OrigamiEPUBImporter {
                 var paragraph = LiquidDoc.Paragraph(id: stableID(), heading: nil, text: text,
                                                     stretchID: stretchID)
                 // The exporter marks attribution with a speaker strong;
-                // the name also leads the text, per the format.
+                // the name also leads the text, per the format. A turn's
+                // continuation paragraph carries the name as an attribute
+                // instead, like a heading's contributing author.
                 if let first = element.elements.first,
                    first.name == "strong", first.attributes["class"] == "speaker" {
                     let name = first.plainText.trimmingCharacters(in: .whitespaces)
                     if name.hasSuffix(":") {
                         paragraph.speaker = String(name.dropLast())
                     }
+                } else if let name = element.attributes["data-speaker"]?
+                    .trimmingCharacters(in: .whitespacesAndNewlines), !name.isEmpty {
+                    paragraph.speaker = name
                 }
                 paragraphs.append(paragraph)
             default:
@@ -639,7 +690,7 @@ nonisolated enum OrigamiEPUBImporter {
             }
         }
         for child in main.elements { visit(child) }
-        return (paragraphs, assets)
+        return (paragraphs, assets, figureReferences)
     }
 
     /// Appends inline-marked content with the whitespace hoisted outside

@@ -916,14 +916,20 @@ struct OrigamiAssetView: View {
     /// https link — the browser until Interatlas registers its domain.
     private func openSource(_ url: URL) {
         #if os(macOS)
-        if InteratlasLink.isInteratlasLink(url) {
+        // The Liquid check first: a Liquid view link lives on the same
+        // link domain as Interatlas, told apart by its /liquid/ path.
+        if LiquidViewLink.isLiquidViewLink(url) {
+            state.openLiquidViewLink(url)
+        } else if InteratlasLink.isInteratlasLink(url) {
             state.openInteratlasLink(url)
         } else {
             NSWorkspace.shared.open(url)
         }
         #else
-        if InteratlasLink.isInteratlasLink(url),
-           let schemed = InteratlasLink.schemed(url) {
+        let schemed = LiquidViewLink.isLiquidViewLink(url)
+            ? LiquidViewLink.schemed(url)
+            : InteratlasLink.isInteratlasLink(url) ? InteratlasLink.schemed(url) : nil
+        if let schemed {
             UIApplication.shared.open(schemed, options: [:]) { accepted in
                 if !accepted {
                     UIApplication.shared.open(url)
@@ -1014,7 +1020,9 @@ struct OrigamiAssetView: View {
                     if let urlText = record.fields["url"],
                        let url = URL(string: urlText.trimmingCharacters(in: .whitespaces)) {
                         Button("Open Source") { openSource(url) }
-                            .help(InteratlasLink.isInteratlasLink(url)
+                            .help(LiquidViewLink.isLiquidViewLink(url)
+                                  ? "Opens this very view in Liquid — the link carries the whole view state"
+                                  : InteratlasLink.isInteratlasLink(url)
                                   ? "Opens this very scene in Interatlas — the link carries the whole view state"
                                   : "Opens the cited source")
                     }

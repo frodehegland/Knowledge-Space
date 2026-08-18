@@ -713,6 +713,16 @@ private struct LibrarySettingsView: View {
                     .disabled(state.interatlasAppPath == nil)
             }
             Divider()
+            folderRow("Liquid View Links",
+                      path: state.liquidAppPath.map {
+                          ($0 as NSString).lastPathComponent
+                      } ?? "Not set — links open in the browser",
+                      explanation: "Which app receives a Liquid view link — Author's 3D view citations carry a URL that recreates the very view. Open Source on such an image hands the link here; until the receiving app registers its link domain, choosing it routes around the browser.") {
+                Button("Choose App…") { chooseLiquidApp() }
+                Button("Use Browser") { state.liquidAppPath = nil }
+                    .disabled(state.liquidAppPath == nil)
+            }
+            Divider()
             folderRow("Archive",
                       path: nil,
                       explanation: "Filing a note under Archived hides it without removing it. This empties the Archive: all \(state.archivedCount) currently archived move to the Trash — recoverable there, but gone for everyone who syncs the folder.") {
@@ -786,16 +796,29 @@ private struct LibrarySettingsView: View {
     }
 
     private func chooseInteratlasApp() {
+        if let path = chooseLinkApp(message: "Choose the app that opens Interatlas links.") {
+            state.interatlasAppPath = path
+        }
+    }
+
+    private func chooseLiquidApp() {
+        if let path = chooseLinkApp(message: "Choose the app that opens Liquid view links (Author, or Liquid).") {
+            state.liquidAppPath = path
+        }
+    }
+
+    /// One app-picker for every link kind; only the words differ.
+    private func chooseLinkApp(message: String) -> String? {
         let panel = NSOpenPanel()
         panel.canChooseFiles = true
         panel.canChooseDirectories = false
         panel.allowsMultipleSelection = false
         panel.allowedContentTypes = [.application]
         panel.directoryURL = URL(fileURLWithPath: "/Applications")
-        panel.message = "Choose the app that opens Interatlas links."
+        panel.message = message
         panel.prompt = "Choose"
-        guard panel.runModal() == .OK, let url = panel.url else { return }
-        state.interatlasAppPath = url.path
+        guard panel.runModal() == .OK, let url = panel.url else { return nil }
+        return url.path
     }
 
     private func chooseAuthorFolder() {

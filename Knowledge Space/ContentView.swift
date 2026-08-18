@@ -710,8 +710,8 @@ struct ContentView: View {
             DocumentListView(grouping: .place)
         } else if state.sidebarSelection == .people {
             PeopleListView()
-        } else if state.sidebarSelection == .transcripts {
-            DocumentListView(transcriptsOnly: true)
+        } else if case .transcripts(let scope)? = state.sidebarSelection {
+            DocumentListView(transcripts: scope)
         } else if state.sidebarSelection == .notes {
             DocumentListView(notesOnly: true)
         } else if state.sidebarSelection == .aiChats {
@@ -996,6 +996,19 @@ struct DocumentRow: View {
     /// date as its title, wherever it is listed.
     private var isTranscript: Bool { DocumentListView.isTranscript(entry.doc) }
 
+    /// A transcript's row wears its day and its heading: the title as
+    /// it stands when it already leads with the date ("17 August 2026 —
+    /// Planning the venue"), "date — title" when it does not (an AI
+    /// conversation's "AI: …"), and the bare date when the title says
+    /// nothing more than the day.
+    private var transcriptLabel: String {
+        let date = entry.doc.listedDateText
+        let title = entry.doc.title.trimmingCharacters(in: .whitespaces)
+        if title.isEmpty || title == date { return date }
+        if title.hasPrefix(date) { return title }
+        return "\(date) — \(title)"
+    }
+
     /// The row's words when the list is the page ("In the list"): the
     /// body itself, its first forty words — rules and the metadata
     /// blocks skipped — with an ellipsis where more follows. An empty
@@ -1072,7 +1085,7 @@ struct DocumentRow: View {
             // words — no separate title line — in the body's type (New
             // York, the system serif), the window's black.
             if state.notesOpenInList {
-                Text(isTranscript ? entry.doc.listedDateText : bodyOpening)
+                Text(isTranscript ? transcriptLabel : bodyOpening)
                     // Bold until read; opening the note ends the bolding.
                     .fontWeight(state.isUnread(entry.doc) ? .bold : .regular)
                     // Tight leading draws the note's own lines a little
@@ -1081,7 +1094,7 @@ struct DocumentRow: View {
                     // At most four lines, an ellipsis where more follows.
                     .lineLimit(4)
             } else {
-                Text(isTranscript ? entry.doc.listedDateText : entry.doc.title)
+                Text(isTranscript ? transcriptLabel : entry.doc.title)
                     .font(state.listTitleFont)
                     // Bold until read; opening the note ends the bolding.
                     .fontWeight(state.isUnread(entry.doc) ? .bold : .regular)

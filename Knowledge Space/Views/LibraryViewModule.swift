@@ -14,12 +14,18 @@ enum FileShelfListing: String, Hashable {
     case alphabetical, authors, journals
 }
 
+/// Which transcripts a Transcripts place lists: every kind together,
+/// the AI conversations, or the human meetings.
+enum TranscriptScope: String, Hashable {
+    case all, ai, meetings
+}
+
 enum SidebarItem: Hashable {
     case library      // the Inbox: what is new and unread
     case timeline     // every note, by time, latest on top
     case place        // the same notes, grouped by country and town
     case people       // the same notes, grouped by author
-    case transcripts  // meetings' words, every statement attributed
+    case transcripts(TranscriptScope)  // meetings' and AI conversations' words
     case aiChats      // AI conversations captured from the web
     case notes        // only notes proper — not journals or other kinds
     case draftLetters // letters still being written
@@ -89,14 +95,22 @@ enum SidebarCatalog {
         // with the other views.
         SidebarPlace(name: "Map", systemImage: "map", item: .view("places")),
         SidebarPlace(name: "People", systemImage: "person.2", item: .people),
-        SidebarPlace(name: "Transcripts", systemImage: "text.bubble", item: .transcripts),
         SidebarPlace(name: "Draft Letters", systemImage: "envelope.open", item: .draftLetters),
+    ]
+
+    /// The Transcripts section: every meeting's and AI conversation's
+    /// words under All, and each kind in a place of its own.
+    static let transcriptShelves: [SidebarPlace] = [
+        SidebarPlace(name: "All", systemImage: "text.bubble", item: .transcripts(.all)),
+        SidebarPlace(name: "AI", systemImage: "sparkles", item: .transcripts(.ai)),
+        SidebarPlace(name: "Meetings", systemImage: "person.3", item: .transcripts(.meetings)),
     ]
 
     /// The Small layout's Views: People (the contacts list — photos and
     /// all) and the Map lead — Timeline has moved to the head of the
-    /// column — then every installed view module. Inbox, Places,
-    /// Transcripts, and Draft Letters are set aside for now.
+    /// column — then every installed view module. Inbox, Places, and
+    /// Draft Letters are set aside for now; Transcripts stand as their
+    /// own section.
     static var smallViews: [SidebarPlace] {
         let order: [SidebarItem] = [.people, .view("places")]
         return order.compactMap { item in top.first { $0.item == item } } + views
@@ -223,6 +237,7 @@ enum SidebarCatalog {
             // list's right edge (ActionFilterColumn), where they filter
             // instead of navigate.
             result = [("", top),
+                      ("Transcripts", transcriptShelves),
                       ("Library", shelves(articlesLabel: articlesLabel)),
                       ("Digest", digest),
                       ("Filed", filed(filedFolders, displayName: folderDisplayName)),
@@ -231,9 +246,9 @@ enum SidebarCatalog {
             // The file libraries and Author's documents stand as their
             // own sections after the Library — the works as files, and
             // the documents read here but written in Author.
-            result.insert(("PDF Library", pdfShelves), at: 2)
-            result.insert(("EPUB Library", epubShelves), at: 3)
-            result.insert(("Author", author), at: 4)
+            result.insert(("PDF Library", pdfShelves), at: 3)
+            result.insert(("EPUB Library", epubShelves), at: 4)
+            result.insert(("Author", author), at: 5)
             #endif
         case .small:
             // The pared-down default: Timeline on top, unnamed, then
@@ -254,6 +269,10 @@ enum SidebarCatalog {
             if !filedFolders.isEmpty {
                 small.append(("Files", filed(filedFolders, displayName: folderDisplayName)))
             }
+            // Transcripts stand as their own section in both layouts:
+            // every kind under All, the AI conversations and the human
+            // meetings each in a place of their own.
+            small.append(("Transcripts", transcriptShelves))
             #if os(macOS)
             // The file libraries: the Reader Library's PDFs and the
             // EPUB Library's works, each by title, author, or journal.
@@ -494,8 +513,9 @@ struct DocumentListView: View {
     var inboxOnly = false
     /// The Draft Letters list: letters still being written.
     var draftLettersOnly = false
-    /// The Transcripts list: every meeting's words, newest meeting first.
-    var transcriptsOnly = false
+    /// The Transcripts places: All, the AI conversations, or the human
+    /// meetings — newest first either way.
+    var transcripts: TranscriptScope? = nil
     /// The AI Chat list: conversations captured from the web, newest first.
     var aiChatsOnly = false
     /// The Notes list: notes proper only — the quick own-hand kind,
@@ -567,8 +587,20 @@ struct DocumentListView: View {
                     && state.isDraft($0.doc)
             }
         }
-        if transcriptsOnly {
-            return state.filteredEntries.filter { Self.isTranscript($0.doc) }
+        if let transcripts {
+            // The human meetings read the filtered timeline; the AI
+            // conversations are often drafts (captures land that way)
+            // and so read the index directly. The two sets are disjoint
+            // — a meeting is a transcript that is not an AI conversation.
+            let meetings = state.filteredEntries.filter {
+                Self.isTranscript($0.doc) && !$0.doc.isAIConversation
+            }
+            switch transcripts {
+            case .meetings: return meetings
+            case .ai: return aiConversationEntries
+            case .all: return (meetings + aiConversationEntries)
+                .sorted { $0.doc.listedDate > $1.doc.listedDate }
+            }
         }
         if notesOnly {
             // Notes proper: the `note` document type alone — journals,
@@ -578,17 +610,7 @@ struct DocumentListView: View {
             }
         }
         if aiChatsOnly {
-            // Captured conversations land as drafts; read the index
-            // directly so they list here whatever their draft or filing
-            // state, the way Digests do.
-            let entries = state.index.timeline.reversed().filter {
-                $0.doc.documentType == LiquidDoc.DocumentType.aiConversation.rawValue
-            }
-            guard !state.searchText.isEmpty else { return Array(entries) }
-            return entries.filter {
-                $0.doc.title.localizedCaseInsensitiveContains(state.searchText)
-                    || $0.doc.bodyEditingText.localizedCaseInsensitiveContains(state.searchText)
-            }
+            return aiConversationEntries
         }
         if digestsOnly {
             // Digests are excluded from listedEntries (and so from
@@ -622,6 +644,21 @@ struct DocumentListView: View {
                     entry.doc.title.trimmingCharacters(in: .whitespaces)
                         .caseInsensitiveCompare($0) == .orderedSame
                 }
+        }
+    }
+
+    /// The AI conversations, newest first: captured chats land as
+    /// drafts and stay out of the main lists, so this reads the index
+    /// directly — whatever a conversation's draft or filing state,
+    /// the way Digests do.
+    private var aiConversationEntries: [IndexEntry] {
+        let entries = state.index.timeline.reversed().filter {
+            $0.doc.documentType == LiquidDoc.DocumentType.aiConversation.rawValue
+        }
+        guard !state.searchText.isEmpty else { return Array(entries) }
+        return entries.filter {
+            $0.doc.title.localizedCaseInsensitiveContains(state.searchText)
+                || $0.doc.bodyEditingText.localizedCaseInsensitiveContains(state.searchText)
         }
     }
 
@@ -707,16 +744,19 @@ struct DocumentListView: View {
                                     // and the list resumes.
                                     VStack(spacing: 0) {
                                         openNoteRule
-                                        // An unmarked close spot stands
-                                        // left of the first line — a
-                                        // click there folds the note
-                                        // away, known to the hand, not
-                                        // drawn on the page. At the
-                                        // top right, Show Column
-                                        // brings the note's controls in
-                                        // as a column beside the words.
+                                        // The close spot stands left of
+                                        // the first line — a click there
+                                        // folds the document away. A
+                                        // read document (a transcript, a
+                                        // source) wears the chevron; a
+                                        // note's writing page keeps the
+                                        // spot unmarked, known to the
+                                        // hand. At the top right, Show
+                                        // Column brings the note's
+                                        // controls in as a column beside
+                                        // the words.
                                         HStack(alignment: .top, spacing: 4) {
-                                            closeToggle
+                                            closeToggle(visible: !ContentView.isWritable(entry.doc))
                                             // The open note wears the same
                                             // orange Important bullet its
                                             // closed row does, so the mark
@@ -843,6 +883,24 @@ struct DocumentListView: View {
                             "No AI Chats",
                             systemImage: "bubble.left.and.bubble.right",
                             description: Text("Capture a conversation from claude.ai, ChatGPT, or Gemini with the Safari extension’s “Send to Knowledge Space” — it lands here as a draft."))
+                    } else if let transcripts {
+                        switch transcripts {
+                        case .all:
+                            ContentUnavailableView(
+                                "No Transcripts",
+                                systemImage: "text.bubble",
+                                description: Text("Import a transcript with File ▸ Import Transcript… — meetings and AI conversations both list here."))
+                        case .ai:
+                            ContentUnavailableView(
+                                "No AI Transcripts",
+                                systemImage: "sparkles",
+                                description: Text("Import an AI conversation with File ▸ Import Transcript…, or capture one with the Safari extension, and it lists here."))
+                        case .meetings:
+                            ContentUnavailableView(
+                                "No Meetings",
+                                systemImage: "person.3",
+                                description: Text("Import a meeting transcript with File ▸ Import Transcript… — speaker names before statements — and it lists here."))
+                        }
                     } else if notesOnly {
                         ContentUnavailableView(
                             "No Notes",
@@ -923,27 +981,35 @@ struct DocumentListView: View {
             .frame(height: 0.5)
     }
 
-    /// The open document's disclosure, left of its first line: the
-    /// down-pointing triangle says "open"; clicking folds the document
-    /// back into its row. Closed rows wear no triangle — clicking the
-    /// row is the way in.
-    private var closeToggle: some View {
+    /// The open document's disclosure, left of its first line: clicking
+    /// folds the document back into its row. On a read document — a
+    /// transcript, a source — the down-pointing chevron shows the way
+    /// shut; on a note's writing page the same spot stays unmarked —
+    /// there the fold-away is for hands that know it, not a mark on
+    /// the page. Closed rows wear no mark; clicking the row is the
+    /// way in.
+    private func closeToggle(visible: Bool) -> some View {
         Button {
             withAnimation(.snappy) { state.selectedDocID = nil }
         } label: {
-            // An invisible dot: the control keeps its place, its click,
-            // and its tooltip, but paints nothing — the fold-away is for
-            // hands that know it, not a mark on the page.
-            Circle()
-                .fill(.clear)
-                .frame(width: 8, height: 8)
-                .padding(.vertical, 10)
-                .padding(.horizontal, 2)
-                .contentShape(Rectangle())
+            Group {
+                if visible {
+                    Image(systemName: "chevron.down")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                } else {
+                    Circle()
+                        .fill(.clear)
+                        .frame(width: 8, height: 8)
+                }
+            }
+            .padding(.vertical, 10)
+            .padding(.horizontal, 2)
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .accessibilityLabel("Close")
-        .help("Close — the note folds back into the list")
+        .help("Close — the document folds back into the list")
     }
 
     /// Show Column, at the open note's top right: resting the pointer

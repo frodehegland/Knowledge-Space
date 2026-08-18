@@ -308,35 +308,73 @@ extension AppState {
     /// at all — today's Interatlas — the link goes to the clipboard
     /// and the app comes forward, rather than a dead system alert.
     func openInteratlasLink(_ url: URL) {
-        if let schemed = InteratlasLink.schemed(url),
-           NSWorkspace.shared.urlForApplication(toOpen: schemed) != nil {
+        openSceneLink(url, schemedForms: [InteratlasLink.schemed(url)].compactMap { $0 },
+                      appPath: interatlasAppPath,
+                      cantReceiveNote: "Interatlas can’t receive links yet — the scene link is on the clipboard, ready to paste there. INTERATLAS-URL-SCHEME.md carries the one-entry fix.")
+    }
+
+    /// Opens a Liquid view link — Author's 3D view citation on the
+    /// same link domain, path /liquid/ — by the same ladder, through
+    /// Liquid's own doors (`liquidinfo://`, the old `liquid://`, or
+    /// the chosen app).
+    func openLiquidViewLink(_ url: URL) {
+        openSceneLink(url, schemedForms: LiquidViewLink.schemedForms(url),
+                      appPath: liquidAppPath,
+                      cantReceiveNote: "That app can’t receive links yet — the view link is on the clipboard, ready to paste there.")
+    }
+
+    /// The one ladder every scene-link kind climbs. The chosen app
+    /// (Settings ▸ Library) always wins: an explicit choice outranks
+    /// whatever app happens to have claimed a scheme — stale archive
+    /// builds do, and Launch Services remembers them. Only without a
+    /// choice do the schemes' registered handlers get the link, newest
+    /// scheme first, and failing those the browser.
+    private func openSceneLink(_ url: URL, schemedForms: [URL], appPath: String?,
+                               cantReceiveNote: String) {
+        if let appPath, FileManager.default.fileExists(atPath: appPath) {
+            openSceneLink(url, schemedForms: schemedForms,
+                          withApplicationAt: URL(fileURLWithPath: appPath),
+                          cantReceiveNote: cantReceiveNote)
+            return
+        }
+        for schemed in schemedForms
+        where NSWorkspace.shared.urlForApplication(toOpen: schemed) != nil {
             NSWorkspace.shared.open(schemed)
             return
         }
-        guard let path = interatlasAppPath,
-              FileManager.default.fileExists(atPath: path) else {
-            NSWorkspace.shared.open(url)
+        NSWorkspace.shared.open(url)
+    }
+
+    /// The chosen app's own doors, in order: whichever scheme form the
+    /// app claims; the https link when Launch Services agrees the app
+    /// can take it — a forced hand-off the app never declared makes
+    /// macOS itself throw the "cannot open" alert, before any
+    /// completion handler hears of it; and failing both, the link to
+    /// the clipboard and the app to the front, with the truth on the
+    /// status line.
+    private func openSceneLink(_ url: URL, schemedForms: [URL],
+                               withApplicationAt appURL: URL,
+                               cantReceiveNote: String) {
+        let appPath = appURL.standardizedFileURL.path
+        func claims(_ candidate: URL) -> Bool {
+            NSWorkspace.shared.urlsForApplications(toOpen: candidate)
+                .contains { $0.standardizedFileURL.path == appPath }
+        }
+        for schemed in schemedForms where claims(schemed) {
+            NSWorkspace.shared.open([schemed], withApplicationAt: appURL,
+                                    configuration: NSWorkspace.OpenConfiguration())
             return
         }
-        let appURL = URL(fileURLWithPath: path)
-        // The https link goes to the app only when Launch Services
-        // agrees the app can take it — a forced hand-off the app never
-        // declared makes macOS itself throw the "cannot open" alert,
-        // before any completion handler hears of it.
-        let handlers = NSWorkspace.shared.urlsForApplications(toOpen: url)
-            .map { $0.standardizedFileURL.path }
-        if handlers.contains(appURL.standardizedFileURL.path) {
+        if claims(url) {
             NSWorkspace.shared.open([url], withApplicationAt: appURL,
                                     configuration: NSWorkspace.OpenConfiguration())
             return
         }
-        // No door yet (today's Interatlas): the link to the clipboard,
-        // the app to the front, and the truth on the status line.
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(url.absoluteString, forType: .string)
         NSWorkspace.shared.openApplication(at: appURL,
                                            configuration: NSWorkspace.OpenConfiguration())
-        showNote("Interatlas can’t receive links yet — the scene link is on the clipboard, ready to paste there. INTERATLAS-URL-SCHEME.md carries the one-entry fix.")
+        showNote(cantReceiveNote)
     }
 
     /// Files arriving from File ▸ Open…, the Finder, or the Dock icon,
