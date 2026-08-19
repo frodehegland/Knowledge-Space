@@ -549,7 +549,9 @@ struct EPUBLibraryView: View {
             }
             .padding(10)
             Divider()
-            DocumentReaderView(doc: doc)
+            // The book reader — Scroll | Horizontal, the fold, the
+            // reading menu — the same reading the library gives.
+            OrigamiReadingView(doc: doc)
         }
         .background(AppGreys.page)
     }

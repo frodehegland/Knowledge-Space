@@ -677,8 +677,9 @@ extension AppState {
 
     /// The source's PDF on this Mac, resolved like Open PDF: the
     /// granted Reader Library first, the recorded folder second, a
-    /// wrapped file beside the sidecar third.
-    private func sourcePDFURL(for doc: LiquidDoc) -> URL? {
+    /// wrapped file beside the sidecar third. Also how a clicked
+    /// citation's Open finds the work when the shelf holds its PDF.
+    func sourcePDFURL(for doc: LiquidDoc) -> URL? {
         var candidates: [URL] = []
         if let line = (doc.body ?? []).first(where: { $0.text.hasPrefix("PDF: ") })?.text {
             let rest = line.dropFirst("PDF: ".count)

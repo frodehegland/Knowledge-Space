@@ -1,6 +1,7 @@
 #if os(macOS)
 import Foundation
 import AppKit
+import QuickLookThumbnailing
 
 // The Author library: the folder where Author keeps its .liquid
 // documents — the iCloud Author folder unless another is chosen —
@@ -51,6 +52,61 @@ nonisolated struct AuthorDocument: Identifiable, Codable, Sendable {
     /// The document's name as Author shows it: the file's own.
     var displayTitle: String {
         fileURL.deletingPathExtension().lastPathComponent
+    }
+}
+
+// MARK: - The document's own icon
+
+/// The icon Author now writes with each saved document: the package's
+/// `QuickLook/Preview.pdf` — the classic document-package preview
+/// convention. The icon shown is the system's own **icon-view**
+/// rendering of the document (QLThumbnailGenerator's `.icon`
+/// representation — the decorated face the Finder's icon view draws),
+/// never the small generic list-view file icon: a document whose
+/// package carries no preview answers nil and shows nothing. Icons
+/// are cached against the preview's modification stamp, so a re-save
+/// in Author shows its new face without a rescan.
+@MainActor
+enum AuthorDocumentIcon {
+    private static let cache: NSCache<NSString, NSImage> = {
+        let cache = NSCache<NSString, NSImage>()
+        cache.countLimit = 400
+        return cache
+    }()
+
+    /// Whether Author wrote an icon with this document at all — only
+    /// then is the system asked for one.
+    static func hasIcon(_ document: AuthorDocument) -> Bool {
+        previewStamp(of: document) != nil
+    }
+
+    static func icon(for document: AuthorDocument, height: CGFloat) async -> NSImage? {
+        guard let stamp = previewStamp(of: document) else { return nil }
+        let key = "\(document.path)|\(stamp)|\(Int(height))" as NSString
+        if let cached = cache.object(forKey: key) { return cached }
+        // The content thumbnail in icon mode is the Finder icon-view
+        // face; the `.icon` representation would be the generic
+        // file-type badge — the list-view icon — which must never
+        // stand in. A document whose thumbnail cannot be generated
+        // shows nothing.
+        let request = QLThumbnailGenerator.Request(
+            fileAt: document.fileURL,
+            size: CGSize(width: height, height: height),
+            scale: NSScreen.main?.backingScaleFactor ?? 2,
+            representationTypes: .thumbnail)
+        request.iconMode = true
+        guard let representation = try? await QLThumbnailGenerator.shared
+            .generateBestRepresentation(for: request) else { return nil }
+        let image = representation.nsImage
+        cache.setObject(image, forKey: key)
+        return image
+    }
+
+    private static func previewStamp(of document: AuthorDocument) -> TimeInterval? {
+        let preview = document.fileURL.appendingPathComponent("QuickLook/Preview.pdf")
+        let modified = (try? FileManager.default
+            .attributesOfItem(atPath: preview.path))?[.modificationDate] as? Date
+        return modified?.timeIntervalSinceReferenceDate
     }
 }
 

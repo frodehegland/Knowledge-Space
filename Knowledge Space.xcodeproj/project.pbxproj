@@ -560,7 +560,7 @@
 				ENABLE_PREVIEWS = YES;
 				ENABLE_RESOURCE_ACCESS_AUDIO_INPUT = NO;
 				ENABLE_RESOURCE_ACCESS_BLUETOOTH = NO;
-				ENABLE_RESOURCE_ACCESS_CALENDARS = NO;
+				ENABLE_RESOURCE_ACCESS_CALENDARS = YES;
 				ENABLE_RESOURCE_ACCESS_CAMERA = NO;
 				ENABLE_RESOURCE_ACCESS_CONTACTS = YES;
 				ENABLE_RESOURCE_ACCESS_LOCATION = YES;
@@ -572,6 +572,7 @@
 				INFOPLIST_FILE = "Knowledge-Space-Info.plist";
 				INFOPLIST_KEY_CFBundleDisplayName = "Knowledge Space";
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.productivity";
+				INFOPLIST_KEY_NSCalendarsFullAccessUsageDescription = "Knowledge Space shows your Apple Calendar events alongside your notes. It only reads them; nothing is changed or written back.";
 				INFOPLIST_KEY_NSContactsUsageDescription = "Knowledge Space reads Contacts only when you use “Find in Contacts…” to fill a person’s record. Nothing is ever written back to Contacts.";
 				INFOPLIST_KEY_NSHandsTrackingUsageDescription = "Knowledge Space places the Map’s menus along your forearms, so it tracks your hands to know where your wrists are. Nothing about your hands is recorded or leaves the device.";
 				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "A note carries the place it was made. Your location is used once, when a note is created, to name that place — it is never stored as coordinates.";
@@ -645,6 +646,7 @@
 				INFOPLIST_FILE = "Knowledge-Space-Info.plist";
 				INFOPLIST_KEY_CFBundleDisplayName = "Knowledge Space";
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.productivity";
+				INFOPLIST_KEY_NSCalendarsFullAccessUsageDescription = "Knowledge Space shows your Apple Calendar events alongside your notes. It only reads them; nothing is changed or written back.";
 				INFOPLIST_KEY_NSContactsUsageDescription = "Knowledge Space reads Contacts only when you use “Find in Contacts…” to fill a person’s record. Nothing is ever written back to Contacts.";
 				INFOPLIST_KEY_NSHandsTrackingUsageDescription = "Knowledge Space places the Map’s menus along your forearms, so it tracks your hands to know where your wrists are. Nothing about your hands is recorded or leaves the device.";
 				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "A note carries the place it was made. Your location is used once, when a note is created, to name that place — it is never stored as coordinates.";

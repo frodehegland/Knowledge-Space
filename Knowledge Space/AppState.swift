@@ -57,6 +57,34 @@ final class AppState {
     /// persisted: a filter that survives a relaunch reads as lost notes.
     var listActionFilter: LiquidDoc.Action? = nil
 
+    /// Show Cal, in the Actions column: whether the Timeline weaves
+    /// Apple Calendar's events — today's and the future's — among its
+    /// notes. On until switched off; remembered between launches.
+    var showCalendarInTimeline: Bool =
+        (UserDefaults.standard.object(forKey: "showCalendarInTimeline") as? Bool) ?? true {
+        didSet {
+            UserDefaults.standard.set(showCalendarInTimeline, forKey: "showCalendarInTimeline")
+        }
+    }
+    /// The Journal's own Show Cal: the day's events — today's and the
+    /// past's — above each day's notes. Off until asked for.
+    var showCalendarInJournal: Bool =
+        UserDefaults.standard.bool(forKey: "showCalendarInJournal") {
+        didSet {
+            UserDefaults.standard.set(showCalendarInJournal, forKey: "showCalendarInJournal")
+        }
+    }
+    /// Ticks when the sidebar's Timeline row is clicked — the open
+    /// Timeline answers by returning its list to Today.
+    var timelineTodayPulse = 0
+    /// Ticks when a highlight or comment is written or removed, so the
+    /// book reader re-reads its sidecar (see OrigamiReadingView).
+    var annotationsStamp = 0
+    /// Author-export citation metadata (origami.json), parsed per EPUB
+    /// and cached by the file's digest — nil caches a miss. See
+    /// SourceCitations.swift.
+    @ObservationIgnored var origamiMetadataByDigest: [String: OrigamiMetadata?] = [:]
+
     /// The document open in the reader. Opening a note is reading it —
     /// its bolding in the list ends here; Mark Unread restores it.
     var selectedDocID: String? {
@@ -108,6 +136,10 @@ final class AppState {
         if sidebarSelection == .authorDocuments { return false }
         if case .pdfShelf = sidebarSelection { return false }
         if case .epubShelf = sidebarSelection { return false }
+        // A book reads in its own pane — the reader with Author's foot
+        // — so in the main window the sidebar and the list stand
+        // beside it whenever the window is not full screen.
+        if let doc = selectedDoc, epubCompanionURL(for: doc) != nil { return false }
         return noteLayout == .inList
             && parallelDoc == nil
             && sidebarSelection != .people
@@ -213,7 +245,7 @@ final class AppState {
     func setInitialSidebarSelection() {
         guard !hasSetInitialSelection else { return }
         hasSetInitialSelection = true
-        sidebarSelection = .timeline
+        sidebarSelection = .timelineToday
     }
     /// The person picked in the People list — their mentions fill the
     /// reading column while no document is open.
@@ -309,7 +341,7 @@ final class AppState {
             // The view being read leaves the sidebar: land somewhere
             // real — the Timeline, which has a row in every layout
             // (the Inbox no longer stands in the small column).
-            if sidebarSelection == .view(id) { sidebarSelection = .timeline }
+            if sidebarSelection == .view(id) { sidebarSelection = .timelineToday }
         } else {
             hiddenViewIDs.remove(id)
         }
@@ -743,7 +775,7 @@ final class AppState {
         // Timeline, which has a row in every layout.
         if case .filedFolder(let selected) = sidebarSelection,
            selected.caseInsensitiveCompare(name) == .orderedSame {
-            sidebarSelection = .timeline
+            sidebarSelection = .timelineToday
         }
     }
 

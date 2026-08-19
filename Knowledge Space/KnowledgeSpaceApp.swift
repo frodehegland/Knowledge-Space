@@ -178,6 +178,14 @@ struct KnowledgeSpaceApp: App {
                     state.importLegacyDocuments()
                 }
                 .disabled(state.index.folderURL == nil)
+                Divider()
+                // Temporary, for exercising Author's citation-sources
+                // metadata (EPUB / PDF / web manifestations) — most
+                // likely removed when shipping. See SourceCitations.swift.
+                Button("PDF-EPUB for Testing…") {
+                    state.importPDFEPUBForTesting()
+                }
+                .disabled(state.index.folderURL == nil)
             }
             // The View menu carries the ways of seeing the notes —
             // the same toggles the note's options column offers, here
@@ -196,15 +204,12 @@ struct KnowledgeSpaceApp: App {
                     get: { state.showsSuperseded },
                     set: { state.showsSuperseded = $0 }))
                 Divider()
-                Button("Make Text Bigger") {
-                    state.listTextSize = min(state.listTextSize + 1, 36)
-                }
-                .keyboardShortcut("+", modifiers: .command)
-                Button("Make Text Smaller") {
-                    state.listTextSize = max(state.listTextSize - 1, 9)
-                }
-                .keyboardShortcut("-", modifiers: .command)
             }
+            // ⌘＋/⌘－ answer to what is front: over a reading whose
+            // document has headings they unfold and fold its outline —
+            // as in Author — and otherwise they size the notes list's
+            // text, as they always have.
+            TextSizeOrOutlineCommands(state: state)
         }
 
         // A work in a window of its own: double-clicking a book on the
@@ -257,14 +262,11 @@ private struct ReadingWindowView: View {
 
     var body: some View {
         if let docID, let doc = state.index.allByID[docID]?.doc {
-            ScrollView {
-                DocumentReaderView(doc: doc, inline: true)
-                    .frame(maxWidth: 720)
-                    .padding(24)
-                    .frame(maxWidth: .infinity)
-            }
-            .background(AppGreys.page)
-            .navigationTitle(doc.title)
+            // The book reader: Author's and Augmented Library's view
+            // styles — article, outline, focus, transcript — with the
+            // reading menu, glossary, folding, and annotations.
+            OrigamiReadingView(doc: doc)
+                .id(doc.id)
         } else {
             Text("The document is not in the library yet — it appears here once its import lands.")
                 .foregroundStyle(.secondary)
@@ -291,3 +293,58 @@ private struct KSWidgetDeepLink: ViewModifier {
     }
 }
 #endif
+
+/// The View menu's folding and sizing: ⌘－/⌘＋ fold the front reading
+/// into its outline and open it whole — as in Author — standing
+/// disabled while no reading with headings is front. Text sizing
+/// lives at ⌘⇧－/⌘⇧＋. The reader publishes its fold actions through
+/// the focused scene (see DocumentReaderView).
+private struct TextSizeOrOutlineCommands: Commands {
+    let state: AppState
+    @FocusedValue(\.outlineFold) private var outlineFold
+    @FocusedValue(\.readingTypography) private var readingType
+
+    var body: some Commands {
+        CommandGroup(after: .toolbar) {
+            Button("Fold Into Outline") {
+                outlineFold?.fold()
+            }
+            .keyboardShortcut("-", modifiers: .command)
+            .disabled(outlineFold == nil)
+            Button("Unfold Outline") {
+                outlineFold?.unfold()
+            }
+            .keyboardShortcut("+", modifiers: .command)
+            .disabled(outlineFold == nil)
+            Divider()
+            // ⌘⇧± size whatever text is front: the book reader's page
+            // when a reading is front, the notes list otherwise.
+            Button("Make Text Bigger") {
+                if let readingType {
+                    readingType.bigger()
+                } else {
+                    state.listTextSize = min(state.listTextSize + 1, 36)
+                }
+            }
+            .keyboardShortcut("+", modifiers: [.command, .shift])
+            Button("Make Text Smaller") {
+                if let readingType {
+                    readingType.smaller()
+                } else {
+                    state.listTextSize = max(state.listTextSize - 1, 9)
+                }
+            }
+            .keyboardShortcut("-", modifiers: [.command, .shift])
+            Button("Looser Lines") {
+                readingType?.looser()
+            }
+            .keyboardShortcut("+", modifiers: [.command, .option])
+            .disabled(readingType == nil)
+            Button("Tighter Lines") {
+                readingType?.tighter()
+            }
+            .keyboardShortcut("-", modifiers: [.command, .option])
+            .disabled(readingType == nil)
+        }
+    }
+}

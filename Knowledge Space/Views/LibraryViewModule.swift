@@ -22,7 +22,9 @@ enum TranscriptScope: String, Hashable {
 
 enum SidebarItem: Hashable {
     case library      // the Inbox: what is new and unread
-    case timeline     // every note, by time, latest on top
+    case timeline     // the Journal: every note, by time, latest on top
+    case timelineToday // the Timeline: the same notes anchored on today,
+                       // Apple Calendar's future standing above
     case place        // the same notes, grouped by country and town
     case people       // the same notes, grouped by author
     case transcripts(TranscriptScope)  // meetings' and AI conversations' words
@@ -89,7 +91,11 @@ enum SidebarCatalog {
         // bullet, the To Do standing on top.
         SidebarPlace(name: "Important", systemImage: "circle.fill", item: .important),
         SidebarPlace(name: "Inbox", systemImage: "tray", item: .library),
-        SidebarPlace(name: "Timeline", systemImage: "clock", item: .timeline),
+        // The Timeline stands anchored on today — the calendar's future
+        // above, the notes' record below. The Journal is that record
+        // whole: every note, by time, the latest on top.
+        SidebarPlace(name: "Timeline", systemImage: "calendar.day.timeline.left", item: .timelineToday),
+        SidebarPlace(name: "Journal", systemImage: "clock", item: .timeline),
         SidebarPlace(name: "Places", systemImage: "mappin.and.ellipse", item: .place),
         // The Map view module, seated here under Places rather than
         // with the other views.
@@ -259,8 +265,9 @@ enum SidebarCatalog {
             // with them To Do) live in the column at the list's right
             // edge; New lives in ⌘N and the toolbar.
             var small: [(title: String, places: [SidebarPlace])] = []
-            // The unnamed head: Important first, then Timeline.
-            let head = [SidebarItem.important, .timeline].compactMap { item in
+            // The unnamed head: Important first, then the Timeline and
+            // the Journal.
+            let head = [SidebarItem.important, .timelineToday, .timeline].compactMap { item in
                 top.first { $0.item == item }
             }
             if !head.isEmpty {
@@ -368,6 +375,7 @@ enum LibraryViewRegistry {
         WeaveView.module,
         AuthorsCircleView.module,
         PlacesView.module,
+        CalendarEventsView.module,
         AttentionsView.module,
         StrangerView.module,
         TrailsView.module,
@@ -439,6 +447,17 @@ struct ActionFilterColumn: View {
             ForEach(LiquidDoc.Action.allCases, id: \.self) { action in
                 row(action)
             }
+            // Show Cal: the Timeline and the Journal can weave Apple
+            // Calendar's events among their notes — ahead of today in
+            // the Timeline, behind it in the Journal. A toggle, not a
+            // filter: it adds a kind, it never narrows. Each list
+            // remembers its own choice.
+            if showsCalToggle {
+                Divider()
+                    .padding(.vertical, 8)
+                    .padding(.horizontal, 8)
+                calRow
+            }
             Spacer(minLength: 0)
         }
         .padding(.top, 12)
@@ -495,6 +514,42 @@ struct ActionFilterColumn: View {
         }
         #endif
     }
+
+    /// The toggle stands only where it has events to offer: the
+    /// Timeline and the Journal.
+    private var showsCalToggle: Bool {
+        state.sidebarSelection == .timelineToday
+            || state.sidebarSelection == .timeline
+    }
+
+    private var calRow: some View {
+        let inTimeline = state.sidebarSelection == .timelineToday
+        let on = inTimeline ? state.showCalendarInTimeline
+                            : state.showCalendarInJournal
+        return Button {
+            withAnimation(.snappy) {
+                if inTimeline {
+                    state.showCalendarInTimeline.toggle()
+                } else {
+                    state.showCalendarInJournal.toggle()
+                }
+            }
+        } label: {
+            Label("Show Cal", systemImage: "calendar")
+                .font(.callout)
+                .foregroundStyle(on ? Color.primary : SidebarCatalog.iconTint)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.vertical, 5)
+                .padding(.horizontal, 8)
+                .background(
+                    RoundedRectangle(cornerRadius: 6)
+                        .fill(on ? Color.primary.opacity(0.08) : .clear))
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help(on ? "Hide Apple Calendar's events from this list"
+              : "Show Apple Calendar's events in this list")
+    }
 }
 
 /// The library's document list, as the content column: what the modules'
@@ -529,6 +584,10 @@ struct DocumentListView: View {
     /// The orange head of the column: everything marked Important,
     /// the notes also standing To Do on top.
     var importantOnly = false
+    /// The Timeline: the same list anchored on Today — Apple Calendar's
+    /// events from today forward woven in above the notes (Show Cal),
+    /// and the sidebar's Timeline click returning the scroll to Today.
+    var timelineToday = false
 
     /// Whether the inline note's controls are unfolded — each newly
     /// opened note starts with them tucked away.
@@ -708,6 +767,7 @@ struct DocumentListView: View {
 
     private var listColumn: some View {
         VStack(spacing: 0) {
+            ScrollViewReader { proxy in
             List(selection: listSelection) {
                 // A bare place the search has placed awaits the reader's
                 // word before it groups under that country.
@@ -731,6 +791,13 @@ struct DocumentListView: View {
                             .listRowSeparator(.hidden)
                             .padding(.top, 6)
                             .opacity(state.dimsListWhileEditing && state.editingInList ? 0.3 : 1)
+                            .id("day-\(group.label)")
+                        // The day's appointments above its notes: Apple
+                        // Calendar's events, quiet rows that read but
+                        // never open.
+                        ForEach(group.events) { item in
+                            calendarRow(item)
+                        }
                         ForEach(group.entries) { entry in
                             Group {
                                 // "In the list" (Settings ▸ Appearance):
@@ -928,6 +995,19 @@ struct DocumentListView: View {
                     }
                 }
             }
+            // The Timeline opens on Today, and its sidebar row clicked
+            // again returns the list there.
+            .onAppear {
+                if timelineToday { scrollToToday(proxy, animated: false) }
+            }
+            .onChange(of: state.timelineTodayPulse) {
+                if timelineToday { scrollToToday(proxy, animated: true) }
+            }
+            }
+        }
+        // The calendar wakes only for a list that shows its events.
+        .task(id: showsCalendar) {
+            if showsCalendar { CalendarFeed.shared.begin() }
         }
         // Every location the library holds gets its one search, so bare
         // places can be confirmed and the map can stand its pins.
@@ -1072,6 +1152,44 @@ struct DocumentListView: View {
         .padding(.vertical, 2)
     }
 
+    /// One calendar event in the notes' list: its hour, its calendar's
+    /// colour, its words — a quiet row that reads but never opens.
+    private func calendarRow(_ item: CalendarFeed.Item) -> some View {
+        let location = item.location?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Text(item.isAllDay ? "all day"
+                 : item.start.formatted(date: .omitted, time: .shortened))
+                .font(.caption.monospacedDigit())
+                .foregroundStyle(.secondary)
+                .frame(width: 56, alignment: .trailing)
+            Circle()
+                .fill(item.color)
+                .frame(width: 7, height: 7)
+                .alignmentGuide(.firstTextBaseline) { $0[VerticalAlignment.center] + 2.5 }
+            Text(item.title)
+                .font(.callout)
+                .lineLimit(1)
+            Spacer(minLength: 8)
+            Text(item.calendarName)
+                .font(.caption)
+                .foregroundStyle(.tertiary)
+        }
+        .listRowSeparator(.hidden)
+        .selectionDisabled()
+        .opacity(state.dimsListWhileEditing && state.editingInList ? 0.3 : 1)
+        .help(location.isEmpty ? item.title : "\(item.title) — \(location)")
+    }
+
+    /// The Timeline's landing: Today's heading to the top of the list.
+    private func scrollToToday(_ proxy: ScrollViewProxy, animated: Bool) {
+        guard groups.contains(where: { $0.label == "Today" }) else { return }
+        if animated {
+            withAnimation { proxy.scrollTo("day-Today", anchor: .top) }
+        } else {
+            proxy.scrollTo("day-Today", anchor: .top)
+        }
+    }
+
     // MARK: The standing notes
 
     /// "To Do" and "Done" — ordinary notes the library keeps standing
@@ -1082,39 +1200,100 @@ struct DocumentListView: View {
 
     // MARK: Grouping
 
-    private var groups: [(label: String, entries: [IndexEntry])] {
+    /// One shelf of the list: a day (or a place, or a standing) with
+    /// its notes — and, when Show Cal asked for them, the day's
+    /// calendar events standing above the notes.
+    private struct DayGroup {
+        let label: String
+        var date: Date
+        var entries: [IndexEntry] = []
+        var events: [CalendarFeed.Item] = []
+    }
+
+    private var groups: [DayGroup] {
         // The Important list keeps its own two shelves — To Do on top,
         // the rest of Important beneath — instead of day headings.
         if importantOnly { return importantGroups(displayedEntries) }
         switch grouping {
         case .place: return placeGroups(displayedEntries)
-        case .time: return timeGroups(displayedEntries)
+        case .time: return withCalendar(timeGroups(displayedEntries))
         }
     }
 
-    private func importantGroups(_ entries: [IndexEntry]) -> [(label: String, entries: [IndexEntry])] {
+    private func importantGroups(_ entries: [IndexEntry]) -> [DayGroup] {
         let toDo = entries.filter { $0.doc.actionValue == .toDo }
         let rest = entries.filter { $0.doc.actionValue != .toDo }
-        var groups: [(label: String, entries: [IndexEntry])] = []
-        if !toDo.isEmpty { groups.append((label: "To Do", entries: toDo)) }
-        if !rest.isEmpty { groups.append((label: "Important", entries: rest)) }
+        var groups: [DayGroup] = []
+        if !toDo.isEmpty { groups.append(DayGroup(label: "To Do", date: .now, entries: toDo)) }
+        if !rest.isEmpty { groups.append(DayGroup(label: "Important", date: .now, entries: rest)) }
         return groups
     }
 
     /// Newest first, one section per day, spoken relatively where the
     /// day is near: Today, Yesterday, then the day itself — the year
     /// joining once the day is not this year's.
-    private func timeGroups(_ entries: [IndexEntry]) -> [(label: String, entries: [IndexEntry])] {
-        var groups: [(label: String, entries: [IndexEntry])] = []
+    private func timeGroups(_ entries: [IndexEntry]) -> [DayGroup] {
+        var groups: [DayGroup] = []
         for entry in entries {
             let label = dayLabel(for: entry.doc)
             if groups.last?.label == label {
                 groups[groups.count - 1].entries.append(entry)
             } else {
-                groups.append((label: label, entries: [entry]))
+                groups.append(DayGroup(label: label, date: entry.doc.listedDate,
+                                       entries: [entry]))
             }
         }
         return groups
+    }
+
+    /// Whether this list weaves calendar events among its notes: the
+    /// Timeline and the Journal alone, each by its own Show Cal choice
+    /// in the Actions column.
+    private var showsCalendar: Bool {
+        if timelineToday { return state.showCalendarInTimeline }
+        return state.sidebarSelection == .timeline && state.showCalendarInJournal
+    }
+
+    /// Apple Calendar's days, folded into the notes' days. The Timeline
+    /// looks ahead — today's events and the future's; the Journal looks
+    /// back — today's and the past's. Days the notes never touched are
+    /// stood up for their events alone. In the Timeline, Today always
+    /// stands, even empty: the seam between the future above and the
+    /// record below, and the landing the sidebar's click returns to.
+    private func withCalendar(_ groups: [DayGroup]) -> [DayGroup] {
+        let calendar = Calendar.current
+        let today = calendar.startOfDay(for: Date())
+        var result = groups
+        if showsCalendar {
+            var byDay: [Date: [CalendarFeed.Item]] = [:]
+            for item in CalendarFeed.shared.items {
+                let day = calendar.startOfDay(for: item.start)
+                guard timelineToday ? day >= today : day <= today else { continue }
+                byDay[day, default: []].append(item)
+            }
+            for (day, items) in byDay.sorted(by: { $0.key > $1.key }) {
+                let sorted = items.sorted {
+                    if $0.isAllDay != $1.isAllDay { return $0.isAllDay }
+                    return $0.start < $1.start
+                }
+                let label = dayLabel(for: day)
+                if let i = result.firstIndex(where: { $0.label == label }) {
+                    result[i].events = sorted
+                } else {
+                    let at = result.firstIndex {
+                        calendar.startOfDay(for: $0.date) < day
+                    } ?? result.count
+                    result.insert(DayGroup(label: label, date: day, events: sorted), at: at)
+                }
+            }
+        }
+        if timelineToday, !result.contains(where: { $0.label == "Today" }) {
+            let at = result.firstIndex {
+                calendar.startOfDay(for: $0.date) < today
+            } ?? result.count
+            result.insert(DayGroup(label: "Today", date: today), at: at)
+        }
+        return result
     }
 
     private func dayLabel(for doc: LiquidDoc) -> String {
@@ -1122,10 +1301,14 @@ struct DocumentListView: View {
         if let date = doc.date, date.day == nil {
             return date.monthYearText
         }
-        let day = doc.listedDate
+        return dayLabel(for: doc.listedDate)
+    }
+
+    private func dayLabel(for day: Date) -> String {
         let calendar = Calendar.current
         if calendar.isDateInToday(day) { return "Today" }
         if calendar.isDateInYesterday(day) { return "Yesterday" }
+        if calendar.isDateInTomorrow(day) { return "Tomorrow" }
         if calendar.isDate(day, equalTo: .now, toGranularity: .year) {
             return day.formatted(.dateTime.weekday(.wide).day().month(.wide))
         }
@@ -1135,7 +1318,7 @@ struct DocumentListView: View {
     /// One section per country (the location's last part, per the
     /// format's place convention), the town on the row; notes that
     /// carried no place gather at the end.
-    private func placeGroups(_ entries: [IndexEntry]) -> [(label: String, entries: [IndexEntry])] {
+    private func placeGroups(_ entries: [IndexEntry]) -> [DayGroup] {
         var byCountry: [String: [IndexEntry]] = [:]
         var placeless: [IndexEntry] = []
         for entry in entries {
@@ -1145,9 +1328,11 @@ struct DocumentListView: View {
                 placeless.append(entry)
             }
         }
-        var groups = byCountry.keys.sorted().map { (label: $0, entries: byCountry[$0]!) }
+        var groups = byCountry.keys.sorted().map {
+            DayGroup(label: $0, date: .now, entries: byCountry[$0]!)
+        }
         if !placeless.isEmpty {
-            groups.append((label: "Unspecified", entries: placeless))
+            groups.append(DayGroup(label: "Unspecified", date: .now, entries: placeless))
         }
         return groups
     }

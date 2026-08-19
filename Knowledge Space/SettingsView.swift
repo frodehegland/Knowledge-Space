@@ -18,6 +18,10 @@ struct SettingsView: View {
                 .tabItem { Label("Author", systemImage: "person.text.rectangle") }
             AppearanceSettingsView()
                 .tabItem { Label("Appearance", systemImage: "paintpalette") }
+            TablesSettingsView()
+                .tabItem { Label("Tables", systemImage: "tablecells") }
+            LaTeXSettingsView()
+                .tabItem { Label("LaTeX", systemImage: "textformat") }
             LibrarySettingsView()
                 .tabItem { Label("Library", systemImage: "books.vertical") }
             LocationsSettingsView()
@@ -43,6 +47,19 @@ private struct AppearanceSettingsView: View {
     /// The colour editor the pop-up's last item opens, on the theme
     /// chosen at that moment — Author's Edit Theme Colors….
     @State private var editingColors = false
+    /// How citations read in a document — as written, numbered, or
+    /// superscript. Applies live to whatever is open; the citation's
+    /// click is the same in every style.
+    @AppStorage("origamiCitationStyle") private var citationStyleRaw =
+        OrigamiCitationStyle.authorDate.rawValue
+    /// The reading page's faces — the body's and the headings' — and
+    /// Author's full-screen measure: the text column as a percentage
+    /// of the display's width, one value for the built-in display and
+    /// one for an external.
+    @AppStorage("readingBodyFont") private var readingBodyFont = "New York"
+    @AppStorage("readingHeadingFont") private var readingHeadingFont = "New York"
+    @AppStorage("fullScreenWidthInternal") private var fullScreenWidthInternal = 67.0
+    @AppStorage("fullScreenWidthExternal") private var fullScreenWidthExternal = 45.0
 
     /// The sentinel the pop-up's last item carries, as Author tags it.
     private static let editColorsTag = "__editThemeColors"
@@ -91,6 +108,42 @@ private struct AppearanceSettingsView: View {
                 Text("Note Layout")
             } footer: {
                 Text("In the list, a clicked note grows in place to hold all its words — still the writing page — with the controls on the right. The other layouts open the note in its own pane, the controls beside it or under it. Documents that read rather than write always open in their own pane.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Section {
+                Picker("Citations", selection: $citationStyleRaw) {
+                    ForEach(OrigamiCitationStyle.allCases) { style in
+                        Text(style.displayName).tag(style.rawValue)
+                    }
+                }
+                .pickerStyle(.inline)
+                Picker("Body typeface", selection: $readingBodyFont) {
+                    Text("New York — the reading serif").tag("New York")
+                    Divider()
+                    ForEach(NSFontManager.shared.availableFontFamilies, id: \.self) { family in
+                        Text(family).tag(family)
+                    }
+                }
+                .pickerStyle(.menu)
+                Picker("Heading typeface", selection: $readingHeadingFont) {
+                    Text("New York — the reading serif").tag("New York")
+                    Divider()
+                    ForEach(NSFontManager.shared.availableFontFamilies, id: \.self) { family in
+                        Text(family).tag(family)
+                    }
+                }
+                .pickerStyle(.menu)
+                Stepper(value: $fullScreenWidthInternal, in: 25...100, step: 1) {
+                    Text("Width, built-in display: \(Int(fullScreenWidthInternal))%")
+                }
+                Stepper(value: $fullScreenWidthExternal, in: 25...100, step: 1) {
+                    Text("Width, external display: \(Int(fullScreenWidthExternal))%")
+                }
+            } header: {
+                Text("Reading")
+            } footer: {
+                Text("How a document's citations read — (Author Date) as written, [Number] and Superscript by the reference list — and the reading page's type: the body's and headings' faces, and Author's full-screen measure, the text column as a percentage of the display's width, one value per kind of display.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

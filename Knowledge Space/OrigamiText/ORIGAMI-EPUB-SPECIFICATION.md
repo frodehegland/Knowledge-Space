@@ -63,6 +63,7 @@ OEBPS/nav.xhtml
 OEBPS/content.xhtml
 OEBPS/origami.json
 OEBPS/images/<file>…        (only when the document carries images)
+OEBPS/data/<scene-id>.liquidinfo.json…   (only when a figure carries a scene dataset, §2.4)
 ```
 
 ### 2.1 `META-INF/container.xml` — verbatim
@@ -121,6 +122,46 @@ OEBPS/images/<file>…        (only when the document carries images)
 A single-entry table of contents is the profile's canonical form. A producer may add one
 `<li>` per heading (linking `content.xhtml#<heading id>`) for nicer reader navigation;
 Origami importers ignore nav.xhtml either way.
+
+### 2.4 `OEBPS/data/` — scene datasets
+
+A figure that is a **Liquid Information view** (a citable PNG carrying a `liquid-scene`
+iTXt chunk) may bring its complete scene document into the package as
+`OEBPS/data/<scene-id>.liquidinfo.json` — the same JSON the PNG's chunk carries, plain
+text, uncompressed (the ZIP container does the compressing; a person with a text editor
+does the reading). This is the durable home for scenes whose datasets are too large to
+travel in a link or comfortably inside every copy of an image.
+
+Rules:
+
+- One file per scene, named by the scene's id, written **byte-identical to the scene's
+  source at the moment of export** — never regenerated separately from the PNG's chunk,
+  so the two cannot drift.
+- Manifested (`media-type="application/json"`), **never in the spine** — a non-spine
+  foreign resource needs no fallback and the file stays a valid EPUB everywhere:
+
+  ```xml
+  <item id="scene1" href="data/SCENE-ID.liquidinfo.json" media-type="application/json"/>
+  ```
+
+- The figure's reference-pool entry points at it with a `scene-resource` field in its
+  BibTeX (§5.3) — package-relative, human-readable, ignorable by any other reader:
+
+  ```
+  scene-resource = {data/SCENE-ID.liquidinfo.json}
+  ```
+
+- The **package file is the full truth** when present. The PNG's own chunk still travels
+  (the image alone must survive escaping the package); above the sender's size threshold
+  the chunk may be the *trimmed* form — the scene minus its bulk point data — and the
+  package file carries everything. Readers restore from the package file first, the
+  chunk second, the link's `scene=` payload third.
+- The scene's data points are the cited numbers: readers render from the file, never by
+  re-fetching the series' `sourceURL` (that is provenance, and the reader may be
+  offline).
+- When a section is carved out (§5.7) or a document re-exported, a scene file travels
+  whenever its figure does — treat `scene-resource` like an image reference when
+  trimming pools.
 
 ## 3. `OEBPS/content.xhtml` — the content document
 
@@ -217,18 +258,25 @@ on whitespace (put the space outside the element). Importers also read `<b>` as 
 ### 3.4 Citations and endnotes
 
 **A citation** points at an entry in the reference pool (§5.3) by key. The anchor carries
-the key in `data-citation-key`; the visible label is a human reading (author–date), so a
-plain reader sees a normal citation:
+the key in `data-citation-key` and the entry's 1-based place in the reference list in
+`data-citation-number`; the visible label is the citation as its author wrote it
+(author–date), so a plain reader sees a normal citation:
 
 ```xml
 <a epub:type="biblioref" role="doc-biblioref" data-citation-key="hegland2021vm"
+   data-citation-number="1"
    href="backmatter.xhtml#bib-hegland2021vm">(Hegland, 2021)</a>
 ```
 
-Importers identify the citation **by `data-citation-key` alone** and regenerate the label
-in the reader's own citation style; adjacent anchors sharing one key collapse to one
-citation token. The `href` is conventional (`backmatter.xhtml#bib-<key>`) — see §8 on
-strict validation.
+Importers identify the citation by `data-citation-key`, and **read, never regenerate**,
+what the anchor carries: the text content is always present and always correct to show
+verbatim (the author–date reading), and `data-citation-number` is the number a numbered
+citation style shows — a reader must not renumber on its own, or the in-text citations
+and the visible reference list would disagree. Adjacent anchors sharing one key collapse
+to one citation token, their text fragments read as one label. The raw key is a last
+resort shown bracketed (`[hegland2021vm]`) only when both text and number are missing;
+an unresolved citation never surfaces as machine syntax. The `href` is conventional
+(`backmatter.xhtml#bib-<key>`) — see §8 on strict validation.
 
 **An endnote dagger** marks where a note attaches. The note's *words* do not appear in
 the flow; they ride in `origami.json` (§5.4). The dagger:
@@ -336,12 +384,16 @@ that is how the profile grows — and a producer must emit only what it can expl
 ### 5.3 `references` — the citation pool
 
 A dictionary keyed by citation key (the `data-citation-key` values used in the body),
-each entry carrying the cited work's **verbatim BibTeX**:
+each entry carrying the cited work's **verbatim BibTeX**, and optionally `citedAs` (the
+in-text display text as the author wrote it) and `number` (the entry's 1-based place in
+the reference list, matching the body anchors' `data-citation-number`):
 
 ```json
 "references": {
   "hegland2021vm": {
-    "bibtex": "@phdthesis{hegland2021vm,\n  author = {Frode Hegland},\n  title = {Visual-Meta: An Approach to Surfacing Metadata},\n  school = {University of Southampton},\n  year = {2021},\n}"
+    "bibtex": "@phdthesis{hegland2021vm,\n  author = {Frode Hegland},\n  title = {Visual-Meta: An Approach to Surfacing Metadata},\n  school = {University of Southampton},\n  year = {2021},\n}",
+    "citedAs": "(Hegland, 2021)",
+    "number": 1
   }
 }
 ```
@@ -351,7 +403,10 @@ allowed (it still counts as a reference of the document). Inside BibTeX values, 
 the BibTeX special characters `& % $ # _ { } ~ ^` and backslash; braces that *delimit*
 fields stay. A citation of another **Origami library document** may additionally carry
 the target's address in the entry as `vm-id = {<address>#<paragraph-id>}` — that is what
-lets a receiving library resolve the citation to the live document.
+lets a receiving library resolve the citation to the live document. A citation of a
+**Liquid Information view** whose scene dataset rides in the package (§2.4) additionally
+carries `scene-resource = {data/<scene-id>.liquidinfo.json}` — the package-relative path
+readers use to restore the scene whole.
 
 ### 5.4 `endnotes`
 
@@ -447,13 +502,21 @@ re-writer* built from this specification does not reject real files:
 - The flow may be wrapped in `<main>` instead of written directly into `<body>`; sections
   may nest in `<section>`, `<div>`, or `<article>` freely (importers recurse).
 - The document title may echo as a leading `<h1>`; importers drop that echo.
+- A placeholder metadata title ("Untitled", or blank) never makes the imported record:
+  importers take the title from the leading `<h1>` instead (shown once, as the
+  document's header, not again in the body), else from the `.liquid` filename
+  origami.json records.
 - `authors` may be an array of plain strings (`["Name"]`).
 - The metadata may carry `concepts` (an array with `id`/`name`/`description` — the older
   spelling of `glossary`), a `citations` array (entries with `id`, `bibtex`, and `urls`
   where an `origamitext://open/<address>` URL marks a citation of a library document),
   and a `map` object (`views` with node positions, `connections`) for spatial layouts.
 - One citation may be split across several adjacent anchors sharing one
-  `data-citation-key`; importers read them as one token.
+  `data-citation-key`; importers read them as one token, their text as one label.
+- Anchors may carry no `data-citation-number` (exports before 2026-08-18); importers
+  derive the numbers from the bibliography list's own order (`<li id="bib-<key>">`,
+  in sequence) when a package file carries one, and otherwise fall back to the
+  anchor's text.
 - A `<figure>` may wrap its `<img>` in a cited anchor (`epub:type="biblioref"` with an
   `http` href); importers mint a reference from it when the pool lacks the key.
 - An EPUB with **no Origami metadata at all** is read as a plain book: every spine
@@ -497,7 +560,8 @@ target per citation key (`bib-<key>`) and per note id. Origami importers ignore 
    id (where the `<slug>--<id>.epub` naming is used) all agree.
 6. Every `data-citation-key` in the body has a `references` entry; every dagger's href
    fragment has an `endnotes` entry; every `data-table-id` has a `tables` entry; every
-   `<img src>` has a package file and a manifest item.
+   `<img src>` has a package file and a manifest item; every `scene-resource` field has
+   a `data/` package file and a manifest item (§2.4).
 7. Speaker turns lead with `<strong class="speaker">Name:</strong>` and a space;
    continuations carry `data-speaker`.
 8. Titles, authors, and dates agree between the OPF and `origami.json`.

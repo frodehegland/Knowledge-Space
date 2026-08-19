@@ -31,20 +31,42 @@ struct DocumentReaderView: View {
         StretchtextDisplay(rawValue: stretchDisplayRaw) ?? .callout
     }
 
+    /// The sections folded closed — the outline, as in Author. Pinch
+    /// in on the trackpad (or ⌘－) folds every section under its
+    /// heading; a heading's triangle or click opens its own; pinch
+    /// out (or ⌘＋) opens the reading whole. Per reading, like the
+    /// stretchtext above.
+    @State private var foldedSections: Set<String> = []
+    /// One pinch acts once — the flag rests until the fingers lift.
+    @State private var pinchActed = false
+
     var body: some View {
-        if inline {
-            readerColumn
-                .padding(.vertical, 8)
-        } else {
-            ScrollViewReader { proxy in
-                ScrollView {
-                    readerColumn
-                        .padding(24)
+        Group {
+            if inline {
+                readerColumn
+                    .padding(.vertical, 8)
+            } else {
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        readerColumn
+                            .padding(24)
+                    }
+                    .onAppear { scrollToPendingFragment(proxy) }
+                    .onChange(of: state.pendingFragment) { scrollToPendingFragment(proxy) }
                 }
-                .onAppear { scrollToPendingFragment(proxy) }
-                .onChange(of: state.pendingFragment) { scrollToPendingFragment(proxy) }
             }
         }
+        // Pinch in folds the reading into its outline; pinch out opens
+        // it whole again. The scroll keeps its own gestures.
+        .simultaneousGesture(outlinePinch)
+        // The View menu's ⌘－/⌘＋ answer the same way while this
+        // reading is front — but only when the document has headings
+        // to fold under; otherwise the menu keeps its text sizing.
+        .focusedSceneValue(\.outlineFold, canOutline
+            ? OutlineFoldActions(folded: !foldedSections.isEmpty,
+                                 fold: { foldAll() },
+                                 unfold: { unfoldAll() })
+            : nil)
     }
 
     private var readerColumn: some View {
@@ -63,10 +85,21 @@ struct DocumentReaderView: View {
                 // The flow walks the body with its stretch blocks
                 // grouped: consecutive paragraphs sharing a stretchID —
                 // the expandable detail Author's EPUB export writes —
-                // fold behind one toggle, closed by default.
+                // fold behind one toggle, closed by default. A folded
+                // section's paragraphs step out of the flow entirely;
+                // its heading stays and speaks for them.
+                let hidden = foldedParagraphIDs
                 let items = OrigamiFlowItem.build(body.filter {
-                    state.showsVisualMeta || !appendixIDs.contains($0.id)
+                    (state.showsVisualMeta || !appendixIDs.contains($0.id))
+                        && !hidden.contains($0.id)
                 })
+                // The folded opening — the run before any heading —
+                // has no heading row of its own; a quiet line stands
+                // in for it.
+                if let opening = sections.first, opening.heading == nil,
+                   foldedSections.contains(opening.id) {
+                    openingPlaceholder(opening)
+                }
                 ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
                     switch item {
                     case .paragraph(let paragraph):
@@ -80,8 +113,15 @@ struct DocumentReaderView: View {
                             else { return nil }
                             return (id, run)
                         }()
-                        paragraphRow(paragraph, appendixIDs: appendixIDs,
-                                     trailingStretch: trailing)
+                        // While the outline is engaged, headings wear
+                        // the fold triangle and answer clicks.
+                        if paragraph.heading != nil, !foldedSections.isEmpty {
+                            headingRow(paragraph, appendixIDs: appendixIDs,
+                                       trailingStretch: trailing)
+                        } else {
+                            paragraphRow(paragraph, appendixIDs: appendixIDs,
+                                         trailingStretch: trailing)
+                        }
                     case .stretch(let id, let run):
                         let hosted: Bool = {
                             guard index > 0,
@@ -117,6 +157,13 @@ struct DocumentReaderView: View {
 
     private func scrollToPendingFragment(_ proxy: ScrollViewProxy) {
         guard let fragment = state.pendingFragment else { return }
+        // A fragment inside a folded section opens the section first,
+        // so its paragraph exists to scroll to.
+        if let section = sections.first(where: { section in
+            section.paragraphs.contains { $0.id == fragment }
+        }), foldedSections.contains(section.id) {
+            foldedSections.remove(section.id)
+        }
         // A fragment inside a closed stretch opens the stretch first,
         // so its paragraph exists to scroll to.
         if let target = doc.body?.first(where: { $0.id == fragment }),
@@ -134,6 +181,113 @@ struct DocumentReaderView: View {
                 state.pendingFragment = nil
             }
         }
+    }
+
+    // MARK: Folding into outline
+
+    /// The document sliced at its headings — OrigamiReading's pure
+    /// structure, shared with the citation layer.
+    private var sections: [OrigamiSection] {
+        OrigamiSection.build(from: doc)
+    }
+
+    /// Only a document with headings has an outline to fold into —
+    /// an EPUB's chapters, a paper's sections. Without one, the pinch
+    /// rests and the View menu keeps its text sizing.
+    private var canOutline: Bool {
+        doc.body?.contains { $0.heading != nil } == true
+    }
+
+    /// The paragraphs of every folded section — what steps out of the
+    /// reading flow while the outline is engaged.
+    private var foldedParagraphIDs: Set<String> {
+        guard !foldedSections.isEmpty else { return [] }
+        var hidden: Set<String> = []
+        for section in sections where foldedSections.contains(section.id) {
+            for paragraph in section.paragraphs { hidden.insert(paragraph.id) }
+        }
+        return hidden
+    }
+
+    private func foldAll() {
+        guard canOutline else { return }
+        withAnimation(.snappy) { foldedSections = Set(sections.map(\.id)) }
+    }
+
+    private func unfoldAll() {
+        withAnimation(.snappy) { foldedSections = [] }
+    }
+
+    private func toggleSection(_ id: String) {
+        withAnimation(.snappy) {
+            if foldedSections.contains(id) {
+                foldedSections.remove(id)
+            } else {
+                foldedSections.insert(id)
+            }
+        }
+    }
+
+    /// The trackpad's pinch: in folds the reading into its outline,
+    /// out opens it whole. Acts once per pinch, at a comfortable
+    /// threshold, and never steals the scroll.
+    private var outlinePinch: some Gesture {
+        MagnifyGesture()
+            .onChanged { value in
+                guard !pinchActed, canOutline else { return }
+                if value.magnification < 0.8 {
+                    pinchActed = true
+                    foldAll()
+                } else if value.magnification > 1.25, !foldedSections.isEmpty {
+                    pinchActed = true
+                    unfoldAll()
+                }
+            }
+            .onEnded { _ in pinchActed = false }
+    }
+
+    /// A heading while the outline is engaged: the fold triangle at
+    /// its left — the sidebar's own gesture, brought to the page — and
+    /// the whole line answering a click.
+    private func headingRow(_ paragraph: LiquidDoc.Paragraph,
+                            appendixIDs: Set<String>,
+                            trailingStretch: (id: String, run: [LiquidDoc.Paragraph])? = nil) -> some View {
+        let folded = foldedSections.contains(paragraph.id)
+        return HStack(alignment: .firstTextBaseline, spacing: 6) {
+            Button {
+                toggleSection(paragraph.id)
+            } label: {
+                Image(systemName: "chevron.right")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .rotationEffect(.degrees(folded ? 0 : 90))
+            }
+            .buttonStyle(.plain)
+            .help(folded ? "Open this section" : "Fold this section")
+            paragraphRow(paragraph, appendixIDs: appendixIDs,
+                         trailingStretch: trailingStretch)
+        }
+        .contentShape(Rectangle())
+        .onTapGesture { toggleSection(paragraph.id) }
+    }
+
+    /// The folded opening — the run before any heading — has no
+    /// heading to stand under; a quiet line holds its place.
+    private func openingPlaceholder(_ section: OrigamiSection) -> some View {
+        Button {
+            toggleSection(section.id)
+        } label: {
+            HStack(spacing: 6) {
+                Image(systemName: "chevron.right")
+                    .font(.caption.weight(.semibold))
+                Text("Opening ⋯")
+                    .italic()
+            }
+            .foregroundStyle(.secondary)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help("Open the words before the first heading")
     }
 
     // MARK: Stretchtext
@@ -160,13 +314,14 @@ struct DocumentReaderView: View {
             // screenshot carries its citation aboard — or beside it, as
             // Author's export writes it — and answers a click with it.
             OrigamiAssetView(asset: asset,
-                             fallback: Self.imageCitation(after: paragraph, in: doc))
+                             fallback: Self.imageCitation(after: paragraph, in: doc),
+                             doc: doc)
                 .id(paragraph.id)
         } else if let tableID = paragraph.tableID,
                   let table = doc.tables.first(where: { $0.identifier == tableID }) {
             // A live table from the document's pool; the paragraph's
             // own pipe-text stands in elsewhere.
-            OrigamiTableView(table: table)
+            OrigamiTableView(table: table, doc: doc, paragraphID: paragraph.id)
                 .id(paragraph.id)
         } else {
             ParagraphView(paragraph: paragraph,
@@ -632,9 +787,12 @@ struct ParagraphView: View {
 
     /// The conventions resolved, then the ordinary inline pipeline —
     /// markdown, live addresses, web links — with marked spans painted
-    /// in Author's orange.
-    private static func origamiRendered(_ text: String, in doc: LiquidDoc) -> AttributedString {
-        var resolved = OrigamiReading.citationsResolved(text, in: doc, style: .authorDate)
+    /// in Author's orange. Citations render in the reader's chosen
+    /// style, each a live link that opens the reference's card.
+    private static func origamiRendered(_ text: String, in doc: LiquidDoc,
+                                        citations style: OrigamiCitationStyle) -> AttributedString {
+        var resolved = OrigamiReading.citationsResolved(text, in: doc, style: style,
+                                                        linked: true)
         // Endnote tokens become clickable daggers on the origami-note:
         // scheme — a click opens the note in a popover, right where the
         // dagger stands; the notes also read whole at the document's
@@ -655,10 +813,21 @@ struct ParagraphView: View {
         return out
     }
 
+    /// How citations read — the author's own text, numbered, or
+    /// superscript — per the setting shared across platforms. Only the
+    /// displayed text changes with it; the citation's link, and the
+    /// card a click reveals, are the same in every style.
+    @AppStorage("origamiCitationStyle") private var citationStyleRaw =
+        OrigamiCitationStyle.authorDate.rawValue
+    private var citationStyle: OrigamiCitationStyle {
+        OrigamiCitationStyle(rawValue: citationStyleRaw) ?? .authorDate
+    }
+
     private var shownText: AttributedString {
         var rendered: AttributedString
         if let origami, Self.hasOrigamiTokens(paragraph.displayText) {
-            rendered = Self.origamiRendered(paragraph.displayText, in: origami)
+            rendered = Self.origamiRendered(paragraph.displayText, in: origami,
+                                            citations: citationStyle)
         } else {
             rendered = paragraph.renderedText
         }
@@ -672,7 +841,8 @@ struct ParagraphView: View {
     /// the same pipeline as `shownText`, without the affordances.
     private func renderedRun(_ paragraph: LiquidDoc.Paragraph) -> AttributedString {
         if let origami, Self.hasOrigamiTokens(paragraph.displayText) {
-            return Self.origamiRendered(paragraph.displayText, in: origami)
+            return Self.origamiRendered(paragraph.displayText, in: origami,
+                                        citations: citationStyle)
         }
         return paragraph.renderedText
     }
@@ -720,14 +890,23 @@ struct ParagraphView: View {
     /// paragraph. Nil between clicks.
     @State private var openNote: LiquidDoc.Paragraph?
 
-    /// Catches a stretch toggle's origami-stretch: link and a dagger's
-    /// origami-note: link; everything else passes through to the
-    /// window's own handling (origamitext://, the web).
+    /// The reference a clicked citation reveals, shown in a popover on
+    /// this paragraph. Nil between clicks.
+    @State private var openCitation: LiquidDoc.Reference?
+
+    /// Catches a stretch toggle's origami-stretch: link, a citation's
+    /// origami-cite: link, and a dagger's origami-note: link; everything
+    /// else passes through to the window's own handling (origamitext://,
+    /// the web).
     private func handleReaderURL(_ url: URL) -> OpenURLAction.Result {
         if url.scheme == OrigamiReading.stretchScheme, let onToggleStretch {
             let raw = String(url.absoluteString.dropFirst(
                 OrigamiReading.stretchScheme.count + 1))
             onToggleStretch(raw.removingPercentEncoding ?? raw)
+            return .handled
+        }
+        if let origami, let key = OrigamiReading.citationKey(from: url) {
+            openCitation = origami.references.first { $0.id == key }
             return .handled
         }
         guard let origami, let id = OrigamiReading.noteID(from: url) else {
@@ -737,11 +916,66 @@ struct ParagraphView: View {
         return .handled
     }
 
+    /// The clicked citation's card: the cited work as the document's
+    /// own record tells it — title, who and when, where it appeared,
+    /// the abstract when anyone recorded one — and Open, which finds
+    /// the nearest copy: the work on the shelf (an imported EPUB reads
+    /// right here), its PDF in the Reader Library, or the DOI or web
+    /// page last. The same card in every citation style.
+    @ViewBuilder private func citationPopover(_ reference: LiquidDoc.Reference) -> some View {
+        let record = BibTeXRecord.records(in: reference.bibtex).first
+        VStack(alignment: .leading, spacing: 6) {
+            if let record {
+                Text(record.title.isEmpty ? reference.id : record.title)
+                    .font(.system(size: 14, weight: .semibold, design: .serif))
+                let credit = [record.displayAuthors, record.year]
+                    .filter { !$0.isEmpty }
+                    .joined(separator: ", ")
+                if !credit.isEmpty {
+                    Text(credit)
+                        .font(.system(size: 13, design: .serif))
+                }
+                if let venue = record.fields["journal"]
+                    ?? record.fields["booktitle"]
+                    ?? record.fields["publisher"] {
+                    Text(venue)
+                        .font(.system(size: 12, design: .serif))
+                        .italic()
+                        .foregroundStyle(.secondary)
+                }
+                if let abstract = state.citedWorkAbstract(of: record) {
+                    Text(abstract)
+                        .font(.system(size: 12, design: .serif))
+                        .foregroundStyle(.secondary)
+                        .lineSpacing(2)
+                        .lineLimit(10)
+                        .padding(.top, 2)
+                }
+                if state.canOpenCitedWork(record) {
+                    Button("Open") { state.openCitedWork(record) }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(.tint)
+                        .font(.system(size: 12))
+                        .padding(.top, 2)
+                        .help("Opens the nearest copy: the work on the shelf, its PDF in the Reader Library, or its DOI or web page")
+                }
+            } else {
+                // A record that does not parse still shows verbatim —
+                // the BibTeX is the record.
+                Text(reference.bibtex)
+                    .font(.system(size: 11, design: .monospaced))
+            }
+        }
+        .textSelection(.enabled)
+        .padding(14)
+        .frame(minWidth: 240, maxWidth: 380, alignment: .leading)
+    }
+
     /// The dagger's popover: the note's own words, its conventions
     /// resolved like any paragraph's.
     @ViewBuilder private func notePopover(_ note: LiquidDoc.Paragraph) -> some View {
         Text(origami.map { Self.hasOrigamiTokens(note.displayText)
-                ? Self.origamiRendered(note.displayText, in: $0)
+                ? Self.origamiRendered(note.displayText, in: $0, citations: citationStyle)
                 : note.renderedText } ?? note.renderedText)
             .font(.system(size: 14, design: .serif))
             .lineSpacing(4)
@@ -773,6 +1007,7 @@ struct ParagraphView: View {
                     .textSelection(.enabled)
                     .environment(\.openURL, OpenURLAction { handleReaderURL($0) })
                     .popover(item: $openNote) { note in notePopover(note) }
+                    .popover(item: $openCitation) { reference in citationPopover(reference) }
                 Spacer(minLength: 0)
             }
             .padding(4)
@@ -798,6 +1033,7 @@ struct ParagraphView: View {
                         .lineSpacing((paragraph.effectiveHeading == nil ? 6 : 3) * scale)
                         .environment(\.openURL, OpenURLAction { handleReaderURL($0) })
                         .popover(item: $openNote) { note in notePopover(note) }
+                        .popover(item: $openCitation) { reference in citationPopover(reference) }
                 }
             }
             .padding(4)
@@ -905,9 +1141,15 @@ struct OrigamiAssetView: View {
     /// The citation standing beside the image in the document, for a
     /// PNG whose own embedded copy did not survive its export.
     var fallback: BibTeXRecord? = nil
+    /// The document the figure stands in, for the package's own scene
+    /// datasets (data/<scene-id>.liquidinfo.json, spec §2.4).
+    var doc: LiquidDoc? = nil
 
     /// The citation read out of the PNG, once, on appearance.
     @State private var record: BibTeXRecord?
+    /// The complete `.liquidinfo` scene a Liquid PNG carries in its
+    /// `liquid-scene` chunk — the image as its own source of truth.
+    @State private var scene: String?
     @State private var showsCitation = false
 
     /// Open Source, each platform through its own door: the Mac probes
@@ -915,7 +1157,28 @@ struct OrigamiAssetView: View {
     /// Library); iOS and visionOS try the scheme and fall back to the
     /// https link — the browser until Interatlas registers its domain.
     private func openSource(_ url: URL) {
+        // The reader may hold nothing but this image: a Liquid view
+        // link that does not itself carry the scene is handed over
+        // with the scene the document holds — the package's data/
+        // file or the PNG's own `liquid-scene` chunk — so what is
+        // sent is always enough to re-create the very view. A scene
+        // over the link ceiling travels as a `.liquidinfo` file
+        // instead (SCENE-DATA-IN-EPUB.md).
+        var url = url
+        var sceneAsFile: String?
+        if LiquidViewLink.isLiquidViewLink(url), let scene {
+            if LiquidViewLink.sceneTravelsInLink(scene) {
+                url = LiquidViewLink.carryingScene(url, sceneJSON: scene)
+            } else if !LiquidViewLink.carriesScene(url) {
+                sceneAsFile = scene
+            }
+        }
+        copyHandoffForTesting(url, fileScene: sceneAsFile)
         #if os(macOS)
+        if let sceneAsFile {
+            state.openLiquidScene(json: sceneAsFile, link: url)
+            return
+        }
         // The Liquid check first: a Liquid view link lives on the same
         // link domain as Interatlas, told apart by its /liquid/ path.
         if LiquidViewLink.isLiquidViewLink(url) {
@@ -941,6 +1204,36 @@ struct OrigamiAssetView: View {
         #endif
     }
 
+    /// A testing aid, documented in LIQUID-OPEN-SOURCE-HANDOFF.md:
+    /// everything the hand-off sends, onto the clipboard — the exact
+    /// link, its scheme forms, and the scene decoded back out of the
+    /// link itself, so the receiving side can be diffed against what
+    /// truly travelled. Remove once the hand-off is trusted.
+    private func copyHandoffForTesting(_ url: URL, fileScene: String? = nil) {
+        var text = "=== Open Source hand-off ===\nlink: \(url.absoluteString)\n"
+        if let fileScene {
+            text += "scene: too large for the link — sent as a .liquidinfo file (\(fileScene.count) chars):\n\(fileScene)\n"
+        } else if LiquidViewLink.isLiquidViewLink(url) {
+            for schemed in LiquidViewLink.schemedForms(url) {
+                text += "scheme form: \(schemed.absoluteString)\n"
+            }
+            if let sceneJSON = LiquidViewLink.sceneJSON(from: url) {
+                text += "scene (decoded from the link, \(sceneJSON.count) chars):\n\(sceneJSON)\n"
+            } else {
+                text += "scene: none aboard the link\n"
+            }
+        } else if InteratlasLink.isInteratlasLink(url),
+                  let schemed = InteratlasLink.schemed(url) {
+            text += "scheme form: \(schemed.absoluteString)\n"
+        }
+        #if os(macOS)
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
+        #else
+        UIPasteboard.general.string = text
+        #endif
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             if record != nil {
@@ -963,16 +1256,51 @@ struct OrigamiAssetView: View {
         }
         .task {
             // The PNG's own embedded citation first; the one standing
-            // beside the image in the document otherwise.
-            if asset.mediaType == "image/png",
-               let data = asset.data,
-               let text = PNGCitation.citationText(inPNGData: data),
-               let found = BibTeXRecord.records(in: text).first {
-                record = found
-            } else {
-                record = fallback
+            // beside the image in the document otherwise. The scene
+            // rides along for Open Source, by the format's ladder:
+            // the package's data/ file is the full truth — the chunk
+            // may be the trimmed form when the data is large — and
+            // the chunk stands in otherwise.
+            if asset.mediaType == "image/png", let data = asset.data {
+                scene = PNGCitation.sceneText(inPNGData: data)
+                if let text = PNGCitation.citationText(inPNGData: data),
+                   let found = BibTeXRecord.records(in: text).first {
+                    record = found
+                }
+            }
+            if record == nil { record = fallback }
+            if let packaged = packagedScene() { scene = packaged }
+        }
+    }
+
+    /// The scene dataset the document's package carries for this
+    /// figure (spec §2.4) — named by the citation's `scene-resource`
+    /// field (the pool's copy carries it; the PNG's embedded record
+    /// cannot know package paths), or matched to the link's scene id
+    /// when the field is absent.
+    private func packagedScene() -> String? {
+        guard let doc else { return nil }
+        var names: [String] = []
+        if let resource = record?.fields["scene-resource"]
+            ?? fallback?.fields["scene-resource"] {
+            let trimmed = resource.trimmingCharacters(in: .whitespaces)
+            names.append((trimmed as NSString).lastPathComponent.lowercased())
+        }
+        if let urlText = record?.fields["url"] ?? fallback?.fields["url"],
+           let url = URL(string: urlText.trimmingCharacters(in: .whitespaces)),
+           LiquidViewLink.isLiquidViewLink(url),
+           let sceneID = url.pathComponents.last, !sceneID.isEmpty {
+            names.append("\(sceneID.lowercased()).liquidinfo.json")
+        }
+        guard !names.isEmpty else { return nil }
+        for candidate in doc.assets
+        where candidate.isLiquidSceneResource
+            && names.contains(candidate.filename.lowercased()) {
+            if let data = candidate.data {
+                return String(data: data, encoding: .utf8)
             }
         }
+        return nil
     }
 
     @ViewBuilder private var imageContent: some View {
@@ -1049,28 +1377,144 @@ struct OrigamiAssetView: View {
 /// lost where this view is not used.
 struct OrigamiTableView: View {
     let table: LiquidDoc.Table
+    /// The document and table paragraph this grid stands in. With both
+    /// given, the reader's what-ifs persist as "editing" annotations in
+    /// the document's sidecar; without them (the Settings preview) the
+    /// numbers live only as long as the view.
+    var doc: LiquidDoc? = nil
+    var paragraphID: String? = nil
+
+    @Environment(AppState.self) private var state
+    /// The table's dress — Settings ▸ Tables.
+    @AppStorage("tableStyle") private var tableStyleRaw = TableStyle.greyBackground.rawValue
+    /// The reader's what-ifs: numbers typed over the inputs, keyed
+    /// "row,col" — the reader's annotation, never the document's words.
+    @State private var overrides: [String: String] = [:]
+    /// What the sidecar last heard, so loading is never re-saved and
+    /// saving happens a beat after the typing rests.
+    @State private var savedEdits: [String: String] = [:]
+    @State private var saveTask: Task<Void, Never>?
+
+    private var style: TableStyle {
+        TableStyle(rawValue: tableStyleRaw) ?? .greyBackground
+    }
+
+    /// A table with formulas reads live: its computed cells follow the
+    /// inputs, and the inputs answer to a click.
+    private var live: Bool { TableMath.hasMath(table) }
 
     var body: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            Grid(alignment: .leading, horizontalSpacing: 18, verticalSpacing: 5) {
-                ForEach(Array(table.cells.enumerated()), id: \.offset) { row, cells in
-                    GridRow {
-                        ForEach(Array(cells.enumerated()), id: \.offset) { _, cell in
-                            Text(cell.value)
-                                .font(.system(size: 14,
-                                              weight: row == 0 ? .semibold : .regular,
-                                              design: .serif))
+        let computed = TableMath.computedGrid(table, overrides: overrides)
+        VStack(alignment: .leading, spacing: 0) {
+            ScrollView(.horizontal, showsIndicators: false) {
+                Grid(alignment: .leading, horizontalSpacing: 18, verticalSpacing: 5) {
+                    ForEach(Array(table.cells.enumerated()), id: \.offset) { row, cells in
+                        GridRow {
+                            ForEach(Array(cells.enumerated()), id: \.offset) { col, cell in
+                                cellView(cell, row: row, col: col, computed: computed)
+                            }
+                        }
+                        if row == 0 && table.cells.count > 1 {
+                            Divider()
                         }
                     }
-                    if row == 0 && table.cells.count > 1 {
-                        Divider()
-                    }
                 }
+                .padding(10)
             }
-            .padding(10)
+            // Only the way back, and only once there is one: Reset,
+            // quiet under the grid, returns the document's numbers.
+            if live, !overrides.isEmpty {
+                Button("Reset") {
+                    withAnimation(.snappy) { overrides = [:] }
+                }
+                .buttonStyle(.link)
+                .font(.caption)
+                .help("Back to the document's own numbers — your tried numbers leave the annotation")
+                .padding(.horizontal, 10)
+                .padding(.bottom, 8)
+            }
         }
-        .background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 8))
-        .textSelection(.enabled)
+        .background {
+            if style == .greyBackground {
+                RoundedRectangle(cornerRadius: 8)
+                    .fill(.quaternary.opacity(0.4))
+            }
+        }
+        .overlay {
+            if style == .lightFrame {
+                RoundedRectangle(cornerRadius: 8)
+                    .strokeBorder(.quaternary)
+            }
+        }
+        // The what-ifs come back with the reading, and every change
+        // rests a moment before the sidecar hears it.
+        .onAppear {
+            guard let doc, let paragraphID else { return }
+            let kept = state.tableEdits(for: doc, paragraphID: paragraphID)
+            overrides = kept
+            savedEdits = kept
+        }
+        .onChange(of: overrides) {
+            guard let doc, let paragraphID, overrides != savedEdits else { return }
+            saveTask?.cancel()
+            let edits = overrides
+            saveTask = Task { @MainActor in
+                try? await Task.sleep(for: .milliseconds(800))
+                guard !Task.isCancelled else { return }
+                state.setTableEdits(edits, for: doc, paragraphID: paragraphID)
+                savedEdits = edits
+            }
+        }
+    }
+
+    /// One cell: a computed cell shows its result (the formula rides
+    /// on the pointer), an input cell in a live table is editable in
+    /// place, and everything else is the words as written.
+    @ViewBuilder
+    private func cellView(_ cell: LiquidDoc.Table.Cell, row: Int, col: Int,
+                          computed: [String: String]) -> some View {
+        let key = "\(row),\(col)"
+        if let formula = TableMath.formula(of: cell) {
+            Text(computed[key] ?? cell.value)
+                .font(cellFont(row: row))
+                // A computed cell whispers what it is: a dotted line
+                // under the number, the formula on the pointer.
+                .underline(pattern: .dot, color: .secondary.opacity(0.5))
+                .help(formula.hasPrefix("=") ? formula : "= " + formula)
+                .contentTransition(.numericText())
+                .animation(.snappy, value: computed[key])
+        } else if live, TableMath.numeric(cell.value) != nil {
+            TextField("", text: overrideBinding(key, original: cell.value))
+                .textFieldStyle(.plain)
+                .font(cellFont(row: row))
+                .fixedSize()
+                .foregroundStyle(overrides[key] == nil
+                                 ? AnyShapeStyle(.primary)
+                                 : AnyShapeStyle(Color.accentColor))
+                .help("An input the maths reads — try another number; Reset restores the document's.")
+        } else {
+            Text(cell.value)
+                .font(cellFont(row: row))
+                .textSelection(.enabled)
+        }
+    }
+
+    private func cellFont(row: Int) -> Font {
+        .system(size: 14, weight: row == 0 ? .semibold : .regular, design: .serif)
+    }
+
+    /// Typing over an input keeps the what-if beside the document's
+    /// own number; typing the original back lets the what-if go.
+    private func overrideBinding(_ key: String, original: String) -> Binding<String> {
+        Binding(
+            get: { overrides[key] ?? original },
+            set: { text in
+                if text == original || text.isEmpty {
+                    overrides.removeValue(forKey: key)
+                } else {
+                    overrides[key] = text
+                }
+            })
     }
 }
 
@@ -1248,4 +1692,18 @@ nonisolated enum FlowBreaker {
     .padding(20)
     .frame(width: 640)
     .environment(AppState())
+}
+
+/// The fold-into-outline actions the front reading offers the View
+/// menu: ⌘－ folds every section under its heading, ⌘＋ opens the
+/// reading whole — as in Author. Nil while no reading with headings
+/// is front, so the menu keeps its text sizing.
+struct OutlineFoldActions {
+    let folded: Bool
+    let fold: () -> Void
+    let unfold: () -> Void
+}
+
+extension FocusedValues {
+    @Entry var outlineFold: OutlineFoldActions?
 }

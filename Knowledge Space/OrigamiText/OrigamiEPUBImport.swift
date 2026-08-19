@@ -118,14 +118,19 @@ nonisolated enum OrigamiEPUBImporter {
         }
         // The current Author export's reference pool: a dictionary keyed
         // by citation key, each entry carrying BibTeX (and CSL). The
-        // body's biblioref anchors cite these keys.
+        // body's biblioref anchors cite these keys. Our own export also
+        // writes `citedAs` and `number` into the entries, so those
+        // round-trip here directly.
         if let pool = visualMeta?["references"] as? [String: Any] {
             references = pool.compactMap { key, value -> LiquidDoc.Reference? in
                 guard let node = value as? [String: Any],
                       let bibtex = (node["bibtex"] as? String)?
                           .trimmingCharacters(in: .whitespacesAndNewlines),
                       !bibtex.isEmpty else { return nil }
-                return LiquidDoc.Reference(id: key, bibtex: bibtex)
+                return LiquidDoc.Reference(
+                    id: key, bibtex: bibtex,
+                    citedAs: (node["citedAs"] as? String).flatMap { $0.isEmpty ? nil : $0 },
+                    number: (node["number"] as? NSNumber)?.intValue)
             }
             .sorted { $0.id < $1.id }
         }
@@ -194,8 +199,10 @@ nonisolated enum OrigamiEPUBImporter {
 
         // Live tables: the Visual-Meta `tables` array is the raw source
         // (values and formulas both). The body's <table> elements only
-        // supply placement (their data-table-id links here).
-        let tables: [LiquidDoc.Table] = dictionaries(visualMeta?["tables"]).compactMap { raw in
+        // supply placement (their data-table-id links here) — though a
+        // table the pool never carried is synthesized from its own
+        // XHTML cells below, so every table reads as a table.
+        var tables: [LiquidDoc.Table] = dictionaries(visualMeta?["tables"]).compactMap { raw in
             guard let identifier = raw["identifier"] as? String, !identifier.isEmpty else { return nil }
             let cellRows = raw["cells"] as? [[[String: Any]]] ?? []
             let cells: [[LiquidDoc.Table.Cell]] = cellRows.map { row in
@@ -223,7 +230,18 @@ nonisolated enum OrigamiEPUBImporter {
         }
 
         let document = visualMeta?["document"] as? [String: Any]
-        let documentTitle = document?["title"] as? String ?? title
+        var documentTitle = document?["title"] as? String ?? title
+        // Author exports an unnamed document titled "Untitled" while
+        // its real name stands in the body's leading <h1> (and in the
+        // .liquid filename origami.json records). A placeholder never
+        // makes the header: the leading heading is the title — and it
+        // becomes the header alone; the echo-skip below keeps it out
+        // of the body, so the name never shows twice.
+        if documentTitle.map(Self.isPlaceholderTitle) ?? true {
+            documentTitle = leadingH1Text(inXHTML: html)
+                ?? (document?["filename"] as? String).flatMap(Self.titleFromLiquidFilename)
+                ?? documentTitle
+        }
 
         // The Origami profile is one semantic content document; a plain
         // EPUB (no Origami metadata) is often many — one per chapter —
@@ -233,6 +251,7 @@ nonisolated enum OrigamiEPUBImporter {
         // balloon the document (the markers stay visible regardless).
         var body: [LiquidDoc.Paragraph]
         var bodyAssets: [LiquidDoc.Asset]
+        let capture = CitationCapture()
         let spineHrefs = spineContentHrefs(in: opf)
         if visualMeta == nil, spineHrefs.count > 1 {
             body = []
@@ -254,26 +273,66 @@ nonisolated enum OrigamiEPUBImporter {
                     imageBudget -= bytes.count
                     return bytes
                 }
-                guard let (part, partAssets, partReferences) = try? bodyParagraphs(
+                guard let (part, partAssets, partReferences, partTables) = try? bodyParagraphs(
                     fromXHTML: String(decoding: data, as: UTF8.self),
                     documentTitle: index == 0 ? documentTitle : nil,
                     addressByCitationID: [:],
                     resolveImage: resolve,
-                    idPrefix: "s\(index + 1)-") else { continue }
+                    idPrefix: "s\(index + 1)-",
+                    capture: capture) else { continue }
                 body += part
                 bodyAssets += partAssets
                 adoptFigureReferences(partReferences)
+                // A body table the pool never carried joins it, its
+                // grid read from the XHTML cells; the pool's own
+                // record always wins.
+                for table in partTables
+                where !tables.contains(where: { $0.identifier == table.identifier }) {
+                    tables.append(table)
+                }
             }
             guard !body.isEmpty else { throw OrigamiEPUBImportError.missingContent }
         } else {
-            let (part, partAssets, partReferences) = try bodyParagraphs(
+            let (part, partAssets, partReferences, partTables) = try bodyParagraphs(
                 fromXHTML: html,
                 documentTitle: documentTitle,
                 addressByCitationID: addressByCitationID,
-                resolveImage: resolveImage)
+                resolveImage: resolveImage,
+                capture: capture)
             body = part
             bodyAssets = partAssets
             adoptFigureReferences(partReferences)
+            // A body table the pool never carried joins it, its grid
+            // read from the XHTML cells; the pool's own record wins.
+            for table in partTables
+            where !tables.contains(where: { $0.identifier == table.identifier }) {
+                tables.append(table)
+            }
+        }
+
+        // What the in-text anchors carried joins the pool: the citation's
+        // display text as the author wrote it, and the number tying it to
+        // the source's own References list — read from the file, never
+        // re-derived, so the text and the visible list always agree. An
+        // older export without numbers on its anchors still gets them
+        // from the bibliography list itself when the package carries one.
+        if !references.isEmpty {
+            let bibliographyOrder = capture.numbers.isEmpty
+                ? bibliographyNumbers(in: zip) : [:]
+            references = references.map { reference in
+                var enriched = reference
+                if enriched.citedAs == nil,
+                   let raw = capture.citedAs[reference.id] {
+                    let text = collapsedLineBreaks(raw)
+                        .trimmingCharacters(in: .whitespacesAndNewlines)
+                    if !text.isEmpty { enriched.citedAs = text }
+                }
+                if enriched.number == nil {
+                    enriched.number = capture.numbers[reference.id]
+                        ?? bibliographyOrder[reference.id]
+                }
+                return enriched
+            }
         }
 
         // Endnotes travel in the metadata (the body only carries their
@@ -334,6 +393,23 @@ nonisolated enum OrigamiEPUBImporter {
                 headingID: headingID,
                 headingText: excerpt["headingText"] as? String ?? "")
         }
+        // Scene datasets (spec §2.4): every data/….liquidinfo.json
+        // package file rides into the document as an asset, so a
+        // figure's scene survives round-trips whole even when its
+        // PNG's own chunk is the trimmed form or was stripped.
+        var assets = bodyAssets
+        for (path, data) in zip.entries.sorted(by: { $0.key < $1.key })
+        where path.lowercased().hasSuffix(".liquidinfo.json") {
+            let filename = (path as NSString).lastPathComponent
+            guard !assets.contains(where: { $0.filename == filename }) else { continue }
+            assets.append(LiquidDoc.Asset(
+                id: String(filename.dropLast(".liquidinfo.json".count)),
+                filename: filename,
+                mediaType: "application/json",
+                dataBase64: data.base64EncodedString(),
+                alt: nil))
+        }
+
         return ImportResult(
             title: documentTitle ?? "Untitled",
             author: documentAuthor ?? creator,
@@ -348,7 +424,7 @@ nonisolated enum OrigamiEPUBImporter {
             mapConnections: mapConnections,
             references: references,
             tables: tables,
-            assets: bodyAssets)
+            assets: assets)
     }
 
     /// Unpacks the EPUB to `directory` (replacing whatever is there) and
@@ -482,6 +558,33 @@ nonisolated enum OrigamiEPUBImporter {
             .flatMap { $0.isEmpty ? nil : $0 }
     }
 
+    /// A metadata title that says nothing — absent in spirit: the
+    /// exporter's "Untitled" stand-in, or blank.
+    private static func isPlaceholderTitle(_ title: String) -> Bool {
+        let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty || trimmed.caseInsensitiveCompare("Untitled") == .orderedSame
+    }
+
+    /// The content document's leading `<h1>` — the document-title
+    /// heading the current export writes. Nil when the heading carries
+    /// inline markup this plain read cannot see whole.
+    private static func leadingH1Text(inXHTML html: String) -> String? {
+        firstCapture(in: html, pattern: "<h1[^>]*>([^<]+)</h1>")
+            .map { collapsedLineBreaks(xmlUnescaped($0))
+                .trimmingCharacters(in: .whitespacesAndNewlines) }
+            .flatMap { $0.isEmpty || isPlaceholderTitle($0) ? nil : $0 }
+    }
+
+    /// The document's name out of the `.liquid` filename origami.json
+    /// records — the last resort when metadata and body both stay
+    /// silent about the title.
+    private static func titleFromLiquidFilename(_ filename: String) -> String? {
+        let stem = ((filename as NSString).lastPathComponent as NSString)
+            .deletingPathExtension
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return stem.isEmpty || isPlaceholderTitle(stem) ? nil : stem
+    }
+
     private static func xmlUnescaped(_ text: String) -> String {
         text.replacingOccurrences(of: "&lt;", with: "<")
             .replacingOccurrences(of: "&gt;", with: ">")
@@ -507,6 +610,51 @@ nonisolated enum OrigamiEPUBImporter {
 
     // MARK: The body
 
+    /// What the body's citation anchors carry besides their key: the
+    /// display text the author wrote (adjacent same-key fragments of
+    /// one citation accumulate into it; the first complete occurrence
+    /// is kept) and the `data-citation-number` tying the citation to
+    /// the source's References list. Gathered while the body parses,
+    /// then written onto the reference pool.
+    private nonisolated final class CitationCapture {
+        var citedAs: [String: String] = [:]
+        var numbers: [String: Int] = [:]
+        /// The key whose first occurrence is still accumulating
+        /// fragments — nil once anything else interrupts.
+        var openKey: String?
+    }
+
+    /// The References list's own numbering, read from the bibliography
+    /// section any package file carries: `<li id="bib-<key>">` in list
+    /// order, or the entry's explicit `data-citation-number`. The
+    /// fallback for older exports whose in-text anchors carry no
+    /// numbers — the visible list is the one order both sides agree on.
+    private static func bibliographyNumbers(in zip: ZipReader) -> [String: Int] {
+        for (name, data) in zip.entries.sorted(by: { $0.key < $1.key })
+        where name.hasSuffix(".xhtml") || name.hasSuffix(".html") {
+            let html = String(decoding: data, as: UTF8.self)
+            guard html.contains("epub:type=\"bibliography\"")
+                    || html.contains("role=\"doc-bibliography\"") else { continue }
+            guard let regex = try? NSRegularExpression(
+                pattern: #"<li\s+[^>]*id="bib-([^"]+)"[^>]*>"#) else { return [:] }
+            let ns = html as NSString
+            var numbers: [String: Int] = [:]
+            var position = 0
+            for match in regex.matches(in: html,
+                                       range: NSRange(location: 0, length: ns.length)) {
+                position += 1
+                let key = xmlUnescaped(ns.substring(with: match.range(at: 1)))
+                let tag = ns.substring(with: match.range)
+                let explicit = firstCapture(in: tag,
+                                            pattern: #"data-citation-number="(\d+)""#)
+                    .flatMap { Int($0) }
+                if numbers[key] == nil { numbers[key] = explicit ?? position }
+            }
+            if !numbers.isEmpty { return numbers }
+        }
+        return [:]
+    }
+
     /// Rebuilds paragraphs from the content document: `<main>`'s
     /// headings, paragraphs, and rules, each keeping its **stable id**
     /// (`data-id` — the original paragraph id or heading node UUID),
@@ -516,9 +664,10 @@ nonisolated enum OrigamiEPUBImporter {
                                        documentTitle: String?,
                                        addressByCitationID: [String: String],
                                        resolveImage: (String) -> Data?,
-                                       idPrefix: String = "")
+                                       idPrefix: String = "",
+                                       capture: CitationCapture? = nil)
         throws -> (paragraphs: [LiquidDoc.Paragraph], assets: [LiquidDoc.Asset],
-                   figureReferences: [LiquidDoc.Reference]) {
+                   figureReferences: [LiquidDoc.Reference], tables: [LiquidDoc.Table]) {
         let root = try XMLTree.parse(Data(html.utf8))
         // The older export wraps the flow in <main>; the current Author
         // export writes its sections straight into <body>.
@@ -530,6 +679,7 @@ nonisolated enum OrigamiEPUBImporter {
         var paragraphs: [LiquidDoc.Paragraph] = []
         var assets: [LiquidDoc.Asset] = []
         var figureReferences: [LiquidDoc.Reference] = []
+        var tables: [LiquidDoc.Table] = []
         var assetOrdinal = 0
         var fallbackOrdinal = 0
 
@@ -632,12 +782,26 @@ nonisolated enum OrigamiEPUBImporter {
                     id: stableID(), heading: nil,
                     text: tableFallbackText(of: element),
                     stretchID: stretchID)
-                paragraph.tableID = element.attributes["data-table-id"]
-                    ?? element.attributes["id"]
+                let tableID = element.attributes["data-table-id"]
+                    ?? element.attributes["id"] ?? paragraph.id
+                paragraph.tableID = tableID
                 paragraphs.append(paragraph)
+                // The grid itself, straight from the XHTML's cells, so
+                // a table arrives as a table whatever the package —
+                // the pool's richer record (formulas and all) replaces
+                // this one when the metadata carries it.
+                let cells = tableCells(of: element)
+                if !cells.isEmpty {
+                    tables.append(LiquidDoc.Table(
+                        identifier: tableID,
+                        rowCount: cells.count,
+                        columnCount: cells.map(\.count).max() ?? 0,
+                        cells: cells))
+                }
             case "h1", "h2", "h3", "h4":
                 let text = collapsedLineBreaks(
-                    inlineText(of: element, addressByCitationID: addressByCitationID))
+                    inlineText(of: element, addressByCitationID: addressByCitationID,
+                               capture: capture))
                     .trimmingCharacters(in: .whitespacesAndNewlines)
                 guard !text.isEmpty else { return }
                 // The current export opens with the document's title as an
@@ -657,7 +821,8 @@ nonisolated enum OrigamiEPUBImporter {
                     contributingAuthors: (contributing?.isEmpty ?? true) ? nil : contributing))
             case "p":
                 let text = collapsedLineBreaks(
-                    inlineText(of: element, addressByCitationID: addressByCitationID))
+                    inlineText(of: element, addressByCitationID: addressByCitationID,
+                               capture: capture))
                     .trimmingCharacters(in: .whitespacesAndNewlines)
                 guard !text.isEmpty else {
                     // A paragraph that is only an image — a figure in a
@@ -690,7 +855,7 @@ nonisolated enum OrigamiEPUBImporter {
             }
         }
         for child in main.elements { visit(child) }
-        return (paragraphs, assets, figureReferences)
+        return (paragraphs, assets, figureReferences, tables)
     }
 
     /// Appends inline-marked content with the whitespace hoisted outside
@@ -737,14 +902,16 @@ nonisolated enum OrigamiEPUBImporter {
     /// address — or to a `[cite:key]` token naming the reference pool —
     /// `<dfn>` wrappers unwrapped, the speaker's strong left plain.
     private static func inlineText(of element: XMLTree.Element,
-                                   addressByCitationID: [String: String]) -> String {
+                                   addressByCitationID: [String: String],
+                                   capture: CitationCapture? = nil) -> String {
         var out = ""
         for child in element.children {
             switch child {
             case .text(let text):
                 out += text
             case .element(let inner):
-                let content = inlineText(of: inner, addressByCitationID: addressByCitationID)
+                let content = inlineText(of: inner, addressByCitationID: addressByCitationID,
+                                         capture: capture)
                 switch inner.name {
                 case "strong", "b":
                     if inner.attributes["class"] == "speaker" {
@@ -768,14 +935,37 @@ nonisolated enum OrigamiEPUBImporter {
                         // content; the expandable text itself follows in
                         // its own <aside>.
                     } else if let key = inner.attributes["data-citation-key"], !key.isEmpty {
-                        // The current export splits one citation across
+                        // Older exports split one citation across
                         // adjacent biblioref anchors (the parenthesis,
                         // then the label), all carrying the same key:
-                        // one token, however many anchors. The visible
-                        // text is regenerated at reading time in the
-                        // reader's chosen citation style.
+                        // one token, however many anchors. The anchor's
+                        // text — the author's own rendering, always
+                        // present and correct — and its number are kept
+                        // on the reference record, so the reader shows
+                        // the citation as written and numbers it as the
+                        // source's References list does.
                         let token = "[cite:\(key)]"
-                        if !out.hasSuffix(token) { out += token }
+                        if let number = inner.attributes["data-citation-number"]
+                            .flatMap(Int.init) {
+                            capture?.numbers[key] = number
+                        }
+                        if out.hasSuffix(token) {
+                            // A continuation fragment of the citation
+                            // just opened joins its display text.
+                            if let capture, capture.openKey == key {
+                                capture.citedAs[key, default: ""] += content
+                            }
+                        } else {
+                            out += token
+                            if let capture {
+                                if capture.citedAs[key] == nil {
+                                    capture.citedAs[key] = content
+                                    capture.openKey = key
+                                } else {
+                                    capture.openKey = nil
+                                }
+                            }
+                        }
                     } else if (inner.attributes["epub:type"] ?? "").contains("noteref")
                         || (inner.attributes["role"] ?? "").contains("doc-noteref") {
                         // The endnote's mark: a token carrying the
@@ -830,6 +1020,30 @@ nonisolated enum OrigamiEPUBImporter {
         }
         collectRows(table)
         return rows.joined(separator: "\n")
+    }
+
+    /// The `<table>`'s cells as the live grid's rows — every `<tr>`'s
+    /// `<th>`/`<td>` text, in order — for tables the metadata pool
+    /// never carried, so they still read as tables.
+    private static func tableCells(of table: XMLTree.Element) -> [[LiquidDoc.Table.Cell]] {
+        var rows: [[LiquidDoc.Table.Cell]] = []
+        func collectRows(_ element: XMLTree.Element) {
+            for child in element.elements {
+                if child.name == "tr" {
+                    let cells = child.elements
+                        .filter { $0.name == "td" || $0.name == "th" }
+                        .map {
+                            LiquidDoc.Table.Cell(value: $0.plainText
+                                .trimmingCharacters(in: .whitespacesAndNewlines))
+                        }
+                    if !cells.isEmpty { rows.append(cells) }
+                } else {
+                    collectRows(child)
+                }
+            }
+        }
+        collectRows(table)
+        return rows
     }
 }
 
@@ -943,8 +1157,9 @@ private nonisolated final class XMLTree: NSObject, XMLParserDelegate {
 
 /// A minimal ZIP reader: the central directory drives extraction, and
 /// stored and deflated entries both open — Origami's own EPUBs are stored,
-/// but EPUBs from other writers usually deflate.
-private nonisolated struct ZipReader {
+/// but EPUBs from other writers usually deflate. (Internal so the
+/// citation-sources metadata loader can read the same packages.)
+nonisolated struct ZipReader {
 
     private(set) var entriesByName: [String: Data] = [:]
 

@@ -303,12 +303,14 @@ extension LiquidDoc {
         let reference: Reference
         init(_ reference: Reference) { self.reference = reference }
 
-        enum CodingKeys: String, CodingKey { case id, bibtex }
+        enum CodingKeys: String, CodingKey { case id, bibtex, citedAs, number }
 
         func encode(to encoder: Encoder) throws {
             var container = encoder.container(keyedBy: CodingKeys.self)
             try container.encode(reference.id, forKey: .id)
             try container.encode(reference.bibtex, forKey: .bibtex)
+            try container.encodeIfPresent(reference.citedAs, forKey: .citedAs)
+            try container.encodeIfPresent(reference.number, forKey: .number)
         }
     }
 

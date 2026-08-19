@@ -90,6 +90,14 @@ struct LibrarySidebarView: View {
                                           : isArchivedPlace(place.item) ? AppGreys.quietText
                                           : SidebarCatalog.iconTint)
                             .tag(place.item)
+                            // Clicking Timeline — even already open —
+                            // returns its list to Today; the tap rides
+                            // beside the List's own selection.
+                            .simultaneousGesture(TapGesture().onEnded {
+                                if place.item == .timelineToday {
+                                    state.timelineTodayPulse += 1
+                                }
+                            })
                             #if os(macOS)
                             .contextMenu {
                                 // A standing's place starts a note with

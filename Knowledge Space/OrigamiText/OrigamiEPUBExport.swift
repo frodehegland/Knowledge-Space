@@ -202,14 +202,24 @@ nonisolated enum OrigamiEPUBExporter {
         zip.add(path: "META-INF/container.xml", data: Data(containerXML.utf8))
 
         let (xhtml, imageFiles) = contentXHTML(for: doc)
+        // Scene datasets (spec §2.4): every .liquidinfo.json asset the
+        // document carries rides back out under data/, manifested —
+        // the package file is the full truth for a figure's scene.
+        let sceneFiles = doc.assets.filter(\.isLiquidSceneResource)
         zip.add(path: "OEBPS/content.opf",
-                data: Data(packageOPF(for: doc, imageFiles: imageFiles).utf8))
+                data: Data(packageOPF(for: doc, imageFiles: imageFiles,
+                                      sceneFiles: sceneFiles).utf8))
         zip.add(path: "OEBPS/nav.xhtml", data: Data(navXHTML(for: doc).utf8))
         zip.add(path: "OEBPS/content.xhtml", data: Data(xhtml.utf8))
         zip.add(path: "OEBPS/origami.json",
                 data: try origamiJSON(for: doc, generator: generator))
         for file in imageFiles {
             zip.add(path: "OEBPS/images/\(file.name)", data: file.data)
+        }
+        for file in sceneFiles {
+            if let data = file.data {
+                zip.add(path: "OEBPS/data/\(file.filename)", data: data)
+            }
         }
         try zip.finish().write(to: url, options: .atomic)
     }
@@ -264,8 +274,20 @@ nonisolated enum OrigamiEPUBExporter {
                     images.append((name, asset.mediaType, data))
                 }
                 let alt = escape(image.alt)
-                html += "<figure id=\"\(escape(paragraph.id))\">"
-                    + "<img src=\"images/\(escape(name))\" alt=\"\(alt)\"/></figure>\n"
+                let img = "<img src=\"images/\(escape(name))\" alt=\"\(alt)\"/>"
+                // A cited figure keeps its citation anchor on the way
+                // out — the biblioref wrap Author writes, its href the
+                // reference's own URL, XML-escaped exactly once and
+                // otherwise untouched: a Liquid link's scene payload
+                // dies of any deeper re-encoding.
+                if let citation = figureCitation(for: paragraph, in: doc) {
+                    html += "<figure id=\"\(escape(paragraph.id))\">"
+                        + "<a epub:type=\"biblioref\" role=\"doc-biblioref\" "
+                        + "data-citation-key=\"\(escape(citation.key))\" "
+                        + "href=\"\(escape(citation.url))\">" + img + "</a></figure>\n"
+                } else {
+                    html += "<figure id=\"\(escape(paragraph.id))\">" + img + "</figure>\n"
+                }
             } else if let tableID = paragraph.tableID {
                 html += tableHTML(paragraph: paragraph, tableID: tableID, doc: doc)
             } else if paragraph.text == "---" {
@@ -313,14 +335,20 @@ nonisolated enum OrigamiEPUBExporter {
     /// marks, strong/em, code, and plain links.
     static func inlineHTML(_ text: String, doc: LiquidDoc) -> String {
         var out = escape(text)
-        // Citations: the anchor carries the key; the visible label is
-        // the author–date reading, for readers without the metadata.
+        // Citations: the anchor carries the key and the entry's number
+        // (its place in the reference list — the same number the pool
+        // entry carries, so readers never renumber); the visible label
+        // is the citation as written, or the author–date reading, for
+        // readers without the metadata.
         out = replacing(out, pattern: #"\[cite:([^\]]+)\]"#) { groups in
             let key = groups[0]
             let label = OrigamiReading.citationsResolved(
                 "[cite:\(key)]", in: doc, style: .authorDate)
+            let number = doc.references.firstIndex { $0.id == key }
+                .map { doc.references[$0].number ?? $0 + 1 }
             return "<a epub:type=\"biblioref\" role=\"doc-biblioref\" "
                 + "data-citation-key=\"\(key)\" "
+                + (number.map { "data-citation-number=\"\($0)\" " } ?? "")
                 + "href=\"backmatter.xhtml#bib-\(key)\">\(escape(label))</a>"
         }
         // Endnote daggers — the fragment is the note's id exactly,
@@ -389,7 +417,12 @@ nonisolated enum OrigamiEPUBExporter {
         }
         if !doc.references.isEmpty {
             root["references"] = Dictionary(uniqueKeysWithValues:
-                doc.references.map { ($0.id, ["bibtex": $0.bibtex]) })
+                doc.references.map { reference -> (String, [String: Any]) in
+                    var node: [String: Any] = ["bibtex": reference.bibtex]
+                    if let citedAs = reference.citedAs { node["citedAs"] = citedAs }
+                    if let number = reference.number { node["number"] = number }
+                    return (reference.id, node)
+                })
         }
         if !doc.concepts.isEmpty {
             root["glossary"] = Dictionary(uniqueKeysWithValues:
@@ -410,7 +443,8 @@ nonisolated enum OrigamiEPUBExporter {
     }
 
     private static func packageOPF(for doc: LiquidDoc,
-                                   imageFiles: [(name: String, mediaType: String, data: Data)])
+                                   imageFiles: [(name: String, mediaType: String, data: Data)],
+                                   sceneFiles: [LiquidDoc.Asset] = [])
         -> String {
         var manifest = """
           <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
@@ -419,6 +453,9 @@ nonisolated enum OrigamiEPUBExporter {
         """
         for (index, file) in imageFiles.enumerated() {
             manifest += "\n  <item id=\"img\(index + 1)\" href=\"images/\(escape(file.name))\" media-type=\"\(escape(file.mediaType))\"/>"
+        }
+        for (index, file) in sceneFiles.enumerated() {
+            manifest += "\n  <item id=\"scene\(index + 1)\" href=\"data/\(escape(file.filename))\" media-type=\"application/json\"/>"
         }
         return """
         <?xml version="1.0" encoding="UTF-8"?>
@@ -463,6 +500,44 @@ nonisolated enum OrigamiEPUBExporter {
             .replacingOccurrences(of: "<", with: "&lt;")
             .replacingOccurrences(of: ">", with: "&gt;")
             .replacingOccurrences(of: "\"", with: "&quot;")
+    }
+
+    /// The figure's own citation, for the anchor wrap: the reference
+    /// minted for this very figure on import ("fig-<paragraph id>"),
+    /// else the nearest [cite:] within the two paragraphs after the
+    /// image (Author's caption convention), else the document's single
+    /// scene-linked reference — never a guess between several.
+    private static func figureCitation(for paragraph: LiquidDoc.Paragraph,
+                                       in doc: LiquidDoc)
+        -> (key: String, url: String)? {
+        func urlField(_ reference: LiquidDoc.Reference) -> String? {
+            BibTeXRecord.records(in: reference.bibtex).first?
+                .fields["url"]?.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        if let own = doc.references.first(where: { $0.id == "fig-\(paragraph.id)" }),
+           let url = urlField(own), url.hasPrefix("http") {
+            return (own.id, url)
+        }
+        if let body = doc.body,
+           let index = body.firstIndex(where: { $0.id == paragraph.id }) {
+            for next in body[(index + 1)...].prefix(2) {
+                guard let match = next.text.range(of: #"\[cite:([^\]]+)\]"#,
+                                                  options: .regularExpression)
+                else { continue }
+                let key = String(next.text[match]
+                    .dropFirst("[cite:".count).dropLast())
+                if let reference = doc.references.first(where: { $0.id == key }),
+                   let url = urlField(reference), url.hasPrefix("http") {
+                    return (key, url)
+                }
+            }
+        }
+        let scene = doc.references.compactMap { reference -> (String, String)? in
+            guard let url = urlField(reference),
+                  InteratlasLink.isInteratlasLink(url) else { return nil }
+            return (reference.id, url)
+        }
+        return scene.count == 1 ? scene.first : nil
     }
 
     private static func replacing(_ text: String, pattern: String,

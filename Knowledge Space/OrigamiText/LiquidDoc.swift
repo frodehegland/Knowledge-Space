@@ -365,6 +365,13 @@ nonisolated struct LiquidDoc: Identifiable, Hashable, Sendable {
         var alt: String?
 
         var data: Data? { Data(base64Encoded: dataBase64) }
+
+        /// Whether this asset is a scene dataset — an EPUB package's
+        /// `data/<scene-id>.liquidinfo.json` (spec §2.4) — rather than
+        /// an image the body shows.
+        var isLiquidSceneResource: Bool {
+            filename.lowercased().hasSuffix(".liquidinfo.json")
+        }
     }
 
     /// The asset id a body paragraph's text points at, when the paragraph
@@ -389,6 +396,18 @@ nonisolated struct LiquidDoc: Identifiable, Hashable, Sendable {
     struct Reference: Identifiable, Hashable, Sendable {
         let id: String
         var bibtex: String
+        /// The citation's display text as its author wrote it — an
+        /// imported EPUB's in-text anchor content, verbatim
+        /// ("(Atzenbeck, 2023)"). The reader's author–date style shows
+        /// this untouched rather than re-deriving it from the BibTeX.
+        /// Nil for references minted locally.
+        var citedAs: String? = nil
+        /// The reference's 1-based place in the source's own References
+        /// list (`data-citation-number` in an Origami EPUB). Numbered
+        /// citation styles show this, never a client-side renumbering —
+        /// the in-text numbers and the visible list must agree, and
+        /// both come from the file.
+        var number: Int? = nil
     }
 
     /// A Defined Concept: one node in the document's glossary. Ids are
@@ -661,7 +680,9 @@ extension LiquidDoc {
             guard let referenceID = rawReference.id,
                   let bibtex = rawReference.bibtex?.trimmingCharacters(in: .whitespacesAndNewlines),
                   !bibtex.isEmpty else { return nil }
-            return Reference(id: referenceID, bibtex: bibtex)
+            return Reference(id: referenceID, bibtex: bibtex,
+                             citedAs: rawReference.citedAs,
+                             number: rawReference.number)
         }
 
         // Tolerant, like the rest: a table or asset missing its
@@ -847,6 +868,8 @@ extension LiquidDoc {
     private nonisolated struct RawReference: Decodable {
         var id: String?
         var bibtex: String?
+        var citedAs: String?
+        var number: Int?
     }
 
     private nonisolated struct RawParagraph: Decodable {

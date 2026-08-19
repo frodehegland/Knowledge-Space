@@ -199,18 +199,25 @@ struct AuthorDocumentsView: View {
         }
     }
 
-    /// One document in the list: its name, then its date and measure.
+    /// One document in the list: its own icon where Author wrote one
+    /// (the package's QuickLook preview — the document's Finder face),
+    /// then its name, its date and measure.
     private func row(_ document: AuthorDocument) -> some View {
         Button {
             selectedID = document.id
         } label: {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(document.displayTitle)
-                    .fontWeight(.medium)
-                    .lineLimit(2)
-                Text(rowDetail(document))
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+            HStack(alignment: .center, spacing: 8) {
+                if AuthorDocumentIcon.hasIcon(document) {
+                    AuthorDocumentIconView(document: document, height: 38)
+                }
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(document.displayTitle)
+                        .fontWeight(.medium)
+                        .lineLimit(2)
+                    Text(rowDetail(document))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, 8)
@@ -312,6 +319,34 @@ struct AuthorDocumentsView: View {
         panel.prompt = "Grant"
         guard panel.runModal() == .OK, let url = panel.url else { return }
         state.chooseAuthorLibrary(url)
+    }
+}
+
+// MARK: - One document's icon
+
+/// One document's icon, asked of the system the way the Finder's icon
+/// view asks — the decorated document face, loaded as the row appears
+/// and cached. The square is held from the start, so the icon's
+/// arrival never shifts the row's words.
+private struct AuthorDocumentIconView: View {
+    let document: AuthorDocument
+    let height: CGFloat
+    @State private var icon: NSImage?
+
+    var body: some View {
+        Group {
+            if let icon {
+                Image(nsImage: icon)
+                    .resizable()
+                    .scaledToFit()
+            } else {
+                Color.clear
+            }
+        }
+        .frame(width: height, height: height)
+        .task(id: "\(document.id)|\(document.stamp)") {
+            icon = await AuthorDocumentIcon.icon(for: document, height: height)
+        }
     }
 }
 

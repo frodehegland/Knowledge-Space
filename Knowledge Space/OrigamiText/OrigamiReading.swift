@@ -263,15 +263,19 @@ nonisolated enum GlossaryDisplay: String, CaseIterable, Identifiable, Sendable {
     }
 }
 
-/// How citations read in the body: the author–date parenthesis or the
-/// numbered bracket, each resolved against the document's reference
-/// pool. The raw value is the persisted form (`@AppStorage` under
+/// How citations read in the body: the author–date parenthesis (the
+/// citation as its author wrote it), the numbered bracket, or the
+/// number raised superscript — only the displayed text changes; the
+/// citation's click, and the source it reveals, are the same in every
+/// style. The raw value is the persisted form (`@AppStorage` under
 /// "origamiCitationStyle"), shared across platforms like the view style.
 nonisolated enum OrigamiCitationStyle: String, CaseIterable, Identifiable, Sendable {
-    /// (Hegland 2025) — who and when, inline.
+    /// (Hegland 2025) — who and when, inline, as the author wrote it.
     case authorDate
-    /// [3] — the entry's place in the reference list.
+    /// [3] — the entry's number in the source's reference list.
     case numeric
+    /// ³ — the same number, raised and small.
+    case superscript
 
     var id: String { rawValue }
 
@@ -279,14 +283,16 @@ nonisolated enum OrigamiCitationStyle: String, CaseIterable, Identifiable, Senda
         switch self {
         case .authorDate: "(Author Date)"
         case .numeric: "[Number]"
+        case .superscript: "Superscript"
         }
     }
 
     /// One line for the settings pane.
     var blurb: String {
         switch self {
-        case .authorDate: "Citations read as (Hegland 2025) — who and when, inline."
-        case .numeric: "Citations read as [3] — the entry's number in the reference list."
+        case .authorDate: "Citations read as (Hegland 2025) — who and when, inline, as the author wrote them."
+        case .numeric: "Citations read as [3] — the entry's number in the source's reference list."
+        case .superscript: "Citations read as ³ — the entry's number, raised and small."
         }
     }
 }
@@ -669,11 +675,12 @@ nonisolated enum OrigamiReading {
 
     /// The text with its citation tokens — `[cite:key]`, the key naming
     /// an entry in the document's reference pool — resolved to the
-    /// chosen form: "(Hegland 2025)", or "[3]" numbering the entry's
-    /// place in the reference list. With `linked`, each becomes a
-    /// markdown link on the `origami-cite:` scheme. A key the pool does
-    /// not know keeps its token visible, so a broken export can be
-    /// seen, not guessed at.
+    /// chosen form: the citation as its author wrote it ("(Hegland
+    /// 2025)"), or its number in the source's reference list, bracketed
+    /// or superscript. With `linked`, each becomes a markdown link on
+    /// the `origami-cite:` scheme. The raw token is never shown: a key
+    /// the pool does not know reads as the bracketed key, still legible
+    /// and still honest about the gap.
     static func citationsResolved(_ text: String, in doc: LiquidDoc,
                                          style: OrigamiCitationStyle,
                                          linked: Bool = false) -> String {
@@ -685,27 +692,55 @@ nonisolated enum OrigamiReading {
         let matches = regex.matches(in: text, range: NSRange(location: 0, length: out.length))
         for match in matches.reversed() {
             let key = out.substring(with: match.range(at: 1))
-            guard let index = doc.references.firstIndex(where: { $0.id == key })
-            else { continue }
-            let numbered = "[\(index + 1)]"
+            let index = doc.references.firstIndex(where: { $0.id == key })
+            let reference = index.map { doc.references[$0] }
+            // The display text the author wrote, carried on the record
+            // by the EPUB import.
+            let citedAs = (reference?.citedAs).flatMap { text -> String? in
+                let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+                return trimmed.isEmpty ? nil : trimmed
+            }
+            // The number always comes from the file (it must agree with
+            // the source's visible reference list); the pool's own
+            // position stands in only for a document whose pool *is*
+            // the visible list — a native document with no imported
+            // display text to fall back on.
+            let number = reference?.number ?? (citedAs == nil ? index.map { $0 + 1 } : nil)
             var label: String
             switch style {
-            case .numeric:
-                label = numbered
             case .authorDate:
-                // The number stands in when the entry's BibTeX yields
-                // no author to cite by.
-                label = authorDateLabel(
-                    of: BibTeXRecord.records(in: doc.references[index].bibtex).first)
-                    .map { "(\($0))" } ?? numbered
+                // As written first — read, never re-derived; the BibTeX
+                // author–date for records that predate the carried
+                // text; a number when the entry names no author.
+                label = citedAs
+                    ?? authorDateLabel(
+                        of: reference.flatMap { BibTeXRecord.records(in: $0.bibtex).first })
+                        .map { "(\($0))" }
+                    ?? number.map { "[\($0)]" }
+                    ?? "[\(key)]"
+            case .numeric:
+                label = number.map { "[\($0)]" } ?? citedAs ?? "[\(key)]"
+            case .superscript:
+                label = number.map(superscriptDigits) ?? citedAs ?? "[\(key)]"
             }
-            if linked {
+            if linked, reference != nil {
                 let escaped = key.addingPercentEncoding(withAllowedCharacters: keyAllowed) ?? key
                 label = "[\(label)](\(citationScheme):\(escaped))"
             }
             out = out.replacingCharacters(in: match.range, with: label) as NSString
         }
         return out as String
+    }
+
+    /// 12 as ¹² — the raised small digits `<sup>` asks for, carried by
+    /// the characters themselves so selection, links, and every view
+    /// render them alike.
+    private static func superscriptDigits(_ number: Int) -> String {
+        let raised: [Character: Character] = [
+            "0": "\u{2070}", "1": "\u{00B9}", "2": "\u{00B2}", "3": "\u{00B3}",
+            "4": "\u{2074}", "5": "\u{2075}", "6": "\u{2076}", "7": "\u{2077}",
+            "8": "\u{2078}", "9": "\u{2079}", "-": "\u{207B}"]
+        return String(String(number).map { raised[$0] ?? $0 })
     }
 
     /// "Hegland 2025", "Nelson & Engelbart 1968", "Bush et al. 1945" —

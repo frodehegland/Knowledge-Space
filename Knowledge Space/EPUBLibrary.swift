@@ -2,6 +2,9 @@ import Foundation
 #if os(macOS)
 import AppKit
 #endif
+#if canImport(UIKit)
+import UIKit
+#endif
 
 // Origami EPUBs in the library: an EPUB dropped on the shelf is read
 // whole — body, concepts, references, internal citations, Map views,
@@ -88,6 +91,109 @@ extension AppState {
             if let doc = index.allByID[candidate]?.doc { return doc }
         }
         return nil
+    }
+
+    // MARK: The cited work's doors
+
+    /// The library document a citation record names, when the
+    /// community holds the work: the record's own library address
+    /// first (the `vm-id`/`origami-id` the exports inject), then its
+    /// DOI, then its title against the shelved sources' own records.
+    func citedDocument(for record: BibTeXRecord) -> LiquidDoc? {
+        for field in ["vm-id", "origami-id"] {
+            guard let raw = record.fields[field], !raw.isEmpty else { continue }
+            let address = String(raw.prefix { $0 != "#" })
+            if let doc = index.allByID[LiquidAddress.canonical(address)]?.doc {
+                return doc
+            }
+        }
+        let shelved = sourceEntries.compactMap { entry -> (doc: LiquidDoc, own: BibTeXRecord)? in
+            entry.doc.references.first
+                .flatMap { BibTeXRecord.records(in: $0.bibtex).first }
+                .map { (entry.doc, $0) }
+        }
+        if let doi = Self.normalizedDOI(record.fields["doi"]),
+           let hit = shelved.first(where: { Self.normalizedDOI($0.own.fields["doi"]) == doi }) {
+            return hit.doc
+        }
+        if let title = Self.normalizedWorkTitle(record.title),
+           let hit = shelved.first(where: { Self.normalizedWorkTitle($0.own.title) == title }) {
+            return hit.doc
+        }
+        return nil
+    }
+
+    /// A DOI as its bare comparable form: the resolver prefixes and
+    /// the "doi:" label dropped, case folded.
+    private static func normalizedDOI(_ raw: String?) -> String? {
+        guard var doi = raw?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
+              !doi.isEmpty else { return nil }
+        for prefix in ["https://doi.org/", "http://doi.org/", "https://dx.doi.org/",
+                       "http://dx.doi.org/", "doi:"] where doi.hasPrefix(prefix) {
+            doi = String(doi.dropFirst(prefix.count))
+        }
+        return doi.isEmpty ? nil : doi
+    }
+
+    /// A title as its comparable form: letters and digits only, case
+    /// folded — punctuation and spacing differences between two
+    /// records of one work never block the match.
+    private static func normalizedWorkTitle(_ raw: String) -> String? {
+        let core = raw.lowercased().unicodeScalars
+            .filter { CharacterSet.alphanumerics.contains($0) }
+        return core.isEmpty ? nil : String(String.UnicodeScalarView(core))
+    }
+
+    /// Whether Open on a clicked citation has somewhere to go — the
+    /// shelf, the Reader Library, or the web.
+    func canOpenCitedWork(_ record: BibTeXRecord) -> Bool {
+        citedDocument(for: record) != nil || record.webURL != nil
+    }
+
+    /// Open on a clicked citation, nearest copy first: a work the
+    /// library holds whole — an imported EPUB's document, or any
+    /// document the record addresses — opens right here; a source
+    /// standing for a PDF hands its file to the Mac's PDF app
+    /// (Reader); with nothing on the shelf, the record's DOI or web
+    /// page opens in the browser.
+    func openCitedWork(_ record: BibTeXRecord) {
+        if let doc = citedDocument(for: record) {
+            #if os(macOS)
+            if let pdf = sourcePDFURL(for: doc) {
+                NSWorkspace.shared.open(pdf)
+                return
+            }
+            #endif
+            openInLibrary(doc)
+            return
+        }
+        guard let url = record.webURL else {
+            showNote("The library does not hold this work, and its record names no DOI or web page.")
+            return
+        }
+        #if os(macOS)
+        NSWorkspace.shared.open(url)
+        #else
+        UIApplication.shared.open(url)
+        #endif
+    }
+
+    /// The work's abstract, when anyone recorded one: the citation's
+    /// own BibTeX field first, else the Abstract section of the
+    /// shelved source (the Reader Library harvest writes one).
+    func citedWorkAbstract(of record: BibTeXRecord) -> String? {
+        if let own = record.fields["abstract"]?
+            .trimmingCharacters(in: .whitespacesAndNewlines), !own.isEmpty {
+            return own
+        }
+        guard let body = citedDocument(for: record)?.body,
+              let heading = body.firstIndex(where: {
+                  $0.heading != nil && $0.text.trimmingCharacters(in: .whitespaces)
+                      .caseInsensitiveCompare("Abstract") == .orderedSame
+              }),
+              heading + 1 < body.count else { return nil }
+        let text = body[heading + 1].text.trimmingCharacters(in: .whitespacesAndNewlines)
+        return text.isEmpty ? nil : text
     }
 
     /// Imports an EPUB into the community folder: the parsed document
@@ -323,6 +429,43 @@ extension AppState {
                       cantReceiveNote: "That app can’t receive links yet — the view link is on the clipboard, ready to paste there.")
     }
 
+    /// Hands a complete scene to Liquid Information as a `.liquidinfo`
+    /// file — the road for scenes too large to ride in any URL
+    /// (SCENE-DATA-IN-EPUB.md). The doors, in order: the chosen app
+    /// (Settings ▸ Library), whatever app is registered for the file
+    /// type, and failing both, the file revealed in the Finder with
+    /// the truth on the status line — never a click that does nothing.
+    func openLiquidScene(json: String, link: URL) {
+        let name = link.pathComponents.last.flatMap { $0.isEmpty ? nil : $0 } ?? "scene"
+        let fileURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(name)
+            .appendingPathExtension("liquidinfo")
+        do {
+            try Data(json.utf8).write(to: fileURL, options: .atomic)
+        } catch {
+            showNote("Couldn’t write the scene file: \(error.localizedDescription)")
+            return
+        }
+        func reveal() {
+            NSWorkspace.shared.activateFileViewerSelecting([fileURL])
+            showNote("The scene is too large for a link — it is written as \(fileURL.lastPathComponent) and revealed in the Finder, ready to open in Liquid Information. LIQUID-OPEN-SOURCE-HANDOFF.md carries the document-type fix.")
+        }
+        if let liquidAppPath, FileManager.default.fileExists(atPath: liquidAppPath) {
+            NSWorkspace.shared.open([fileURL],
+                                    withApplicationAt: URL(fileURLWithPath: liquidAppPath),
+                                    configuration: NSWorkspace.OpenConfiguration()) { _, error in
+                guard error != nil else { return }
+                Task { @MainActor in reveal() }
+            }
+            return
+        }
+        if NSWorkspace.shared.urlForApplication(toOpen: fileURL) != nil,
+           NSWorkspace.shared.open(fileURL) {
+            return
+        }
+        reveal()
+    }
+
     /// The one ladder every scene-link kind climbs. The chosen app
     /// (Settings ▸ Library) always wins: an explicit choice outranks
     /// whatever app happens to have claimed a scheme — stale archive
@@ -337,12 +480,18 @@ extension AppState {
                           cantReceiveNote: cantReceiveNote)
             return
         }
+        // Every rung answers or the ladder climbs on: a scheme whose
+        // registered app has moved or been deleted (a stale Launch
+        // Services memory) fails in silence unless the result is
+        // checked.
         for schemed in schemedForms
         where NSWorkspace.shared.urlForApplication(toOpen: schemed) != nil {
-            NSWorkspace.shared.open(schemed)
-            return
+            if NSWorkspace.shared.open(schemed) { return }
         }
-        NSWorkspace.shared.open(url)
+        if NSWorkspace.shared.open(url) { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(url.absoluteString, forType: .string)
+        showNote("The link couldn\u{2019}t be opened here — it is on the clipboard, ready to paste.")
     }
 
     /// The chosen app's own doors, in order: whichever scheme form the
@@ -360,21 +509,34 @@ extension AppState {
             NSWorkspace.shared.urlsForApplications(toOpen: candidate)
                 .contains { $0.standardizedFileURL.path == appPath }
         }
+        // The last resort, shared by every failed hand-off: the link
+        // onto the clipboard, the app to the front, and the truth on
+        // the status line — never a click that does nothing.
+        func fallBack() {
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(url.absoluteString, forType: .string)
+            NSWorkspace.shared.openApplication(at: appURL,
+                                               configuration: NSWorkspace.OpenConfiguration())
+            showNote(cantReceiveNote)
+        }
+        // A hand-off's failure arrives in its completion, off the main
+        // thread and easy to lose — heard here, it falls back visibly.
+        func hand(_ links: [URL]) {
+            NSWorkspace.shared.open(links, withApplicationAt: appURL,
+                                    configuration: NSWorkspace.OpenConfiguration()) { _, error in
+                guard error != nil else { return }
+                Task { @MainActor in fallBack() }
+            }
+        }
         for schemed in schemedForms where claims(schemed) {
-            NSWorkspace.shared.open([schemed], withApplicationAt: appURL,
-                                    configuration: NSWorkspace.OpenConfiguration())
+            hand([schemed])
             return
         }
         if claims(url) {
-            NSWorkspace.shared.open([url], withApplicationAt: appURL,
-                                    configuration: NSWorkspace.OpenConfiguration())
+            hand([url])
             return
         }
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(url.absoluteString, forType: .string)
-        NSWorkspace.shared.openApplication(at: appURL,
-                                           configuration: NSWorkspace.OpenConfiguration())
-        showNote(cantReceiveNote)
+        fallBack()
     }
 
     /// Files arriving from File ▸ Open…, the Finder, or the Dock icon,

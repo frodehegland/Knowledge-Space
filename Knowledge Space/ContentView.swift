@@ -362,7 +362,7 @@ struct ContentView: View {
     /// chosen span reads beside it while one is set.
     private var timelineHeader: some View {
         HStack(spacing: 6) {
-            Text("Timeline")
+            Text("Journal")
                 .font(.headline)
             Button {
                 showingTimelineCalendar = true
@@ -703,8 +703,12 @@ struct ContentView: View {
             module.makeContent()
         } else if case .filedFolder(let folder)? = state.sidebarSelection {
             DocumentListView(filedUnder: folder)
+        } else if state.sidebarSelection == .timelineToday {
+            // The Timeline: Today at the top of view, the calendar's
+            // future above it, the notes' record below.
+            DocumentListView(timelineToday: true)
         } else if state.sidebarSelection == .timeline {
-            // Every note, by time, the latest on top.
+            // The Journal: every note, by time, the latest on top.
             DocumentListView()
         } else if state.sidebarSelection == .place {
             DocumentListView(grouping: .place)
@@ -754,6 +758,11 @@ struct ContentView: View {
         if Self.isWritable(doc) {
             NoteWritingView(doc: doc)
                 .id(doc.id)
+        } else if state.epubCompanionURL(for: doc) != nil {
+            // A book reads in the book reader: the view styles, the
+            // reading menu, glossary, folding, annotations — the works.
+            OrigamiReadingView(doc: doc)
+                .id(doc.id)
         } else {
             DocumentReaderView(doc: doc)
                 .id(doc.id)
@@ -768,6 +777,11 @@ struct ContentView: View {
                   let detail = module.makeDetail?(state) {
             detail
         } else if let doc = state.selectedDoc {
+            // A book takes the pane whole — its reader carries its own
+            // foot, and the note controls stay with notes.
+            if state.epubCompanionURL(for: doc) != nil {
+                notePane(doc)
+            } else {
             // Where the note stands and where its controls go — the
             // reader's choice, made in Settings ▸ Appearance. (In the
             // two-column "In the list" arrangement this pane does not
@@ -786,6 +800,7 @@ struct ContentView: View {
                     Divider()
                     NoteOptionsColumn(doc: doc)
                 }
+            }
             }
         } else if state.sidebarSelection == .people,
                   let listing = state.selectedPersonListing {

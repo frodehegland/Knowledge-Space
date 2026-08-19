@@ -58,6 +58,16 @@ nonisolated struct BibTeXRecord: Sendable {
         displayAuthors.components(separatedBy: ", ").filter { !$0.isEmpty }
     }
 
+    /// The record's own way out to the work on the web: its DOI (made
+    /// a URL when the field carries the bare identifier), else its URL
+    /// field.
+    var webURL: URL? {
+        if let doi = fields["doi"], !doi.isEmpty {
+            return URL(string: doi.hasPrefix("http") ? doi : "https://doi.org/\(doi)")
+        }
+        return fields["url"].flatMap(URL.init(string:))
+    }
+
     /// The §4 citation sentence for this record (without an address).
     var citationSentence: String {
         var sentence = "“\(title.isEmpty ? "Untitled" : title)”"

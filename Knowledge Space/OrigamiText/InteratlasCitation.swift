@@ -1,8 +1,25 @@
 import Foundation
+import Compression
 
 // Ported from Augmented Library's InteratlasCitation.swift — access
 // levels dropped, and the real link host added to the placeholder
 // (worth carrying back). A fix here should be carried across.
+//
+// Updated to the Liquid Information link rules of 2026-08-19
+// (LiquidInformationFormat.md v2): links may carry the complete scene
+// in a `scene` query parameter, so the href is opaque — scheme swaps
+// are string surgery, never a URL-components round-trip that could
+// re-encode, re-sort, or case-fold the payload. The citable PNG's
+// `liquid-scene` chunk is read as an equal carrier.
+
+/// The URL with only its scheme swapped, by string surgery: everything
+/// after the first colon travels untouched. A `scene` payload dies of
+/// re-encoding; treating the link as text is the format's rule.
+private nonisolated func swappingScheme(_ url: URL, to scheme: String) -> URL? {
+    let text = url.absoluteString
+    guard let colon = text.firstIndex(of: ":") else { return nil }
+    return URL(string: scheme + text[colon...])
+}
 
 /// The Interatlas Link: a plain https URL on the Interatlas link domain,
 /// path `/v1/<realm>`, whose query captures a complete view state (layers,
@@ -36,10 +53,7 @@ nonisolated enum InteratlasLink {
     /// reads, one parser serving both forms. Nil when the URL cannot be
     /// recomposed.
     static func schemed(_ url: URL) -> URL? {
-        guard var components = URLComponents(url: url, resolvingAgainstBaseURL: false)
-        else { return nil }
-        components.scheme = "interatlas"
-        return components.url
+        swappingScheme(url, to: "interatlas")
     }
 }
 
@@ -68,18 +82,136 @@ nonisolated enum LiquidViewLink {
     /// `liquid://` that LiquidView claimed, so a receiver is offered
     /// whichever door it actually has.
     static func schemedForms(_ url: URL) -> [URL] {
-        ["liquidinfo", "liquid"].compactMap { scheme in
-            guard var components = URLComponents(url: url, resolvingAgainstBaseURL: false)
-            else { return nil }
-            components.scheme = scheme
-            return components.url
-        }
+        ["liquidinfo", "liquid"].compactMap { swappingScheme(url, to: $0) }
     }
 
     /// The primary scheme form (`liquidinfo://`), for the platforms
     /// that try one scheme and fall back to the https link.
     static func schemed(_ url: URL) -> URL? {
         schemedForms(url).first
+    }
+
+    /// The link's `scene` payload decoded to its JSON text — the
+    /// complete `.liquidinfo` document the URL itself carries
+    /// (2026-08-19 links): base64url → zlib (RFC 1950) → UTF-8 JSON.
+    /// The query is read as plain text, never through a re-encoding
+    /// URL library; any failure at any stage reads as "no scene
+    /// present", never an error.
+    static func sceneJSON(from url: URL) -> String? {
+        guard let query = url.absoluteString
+            .split(separator: "?", maxSplits: 1).dropFirst().first else { return nil }
+        guard let raw = query.split(separator: "&")
+            .first(where: { $0.hasPrefix("scene=") })?
+            .dropFirst("scene=".count), !raw.isEmpty else { return nil }
+        var base64 = String(raw)
+            .replacingOccurrences(of: "-", with: "+")
+            .replacingOccurrences(of: "_", with: "/")
+        while base64.count % 4 != 0 { base64 += "=" }
+        guard let compressed = Data(base64Encoded: base64), compressed.count > 6
+        else { return nil }
+        // Liquid Information's PNGs of 2026-08-19 write the payload as
+        // a raw DEFLATE stream; the spec's earlier wording said zlib
+        // (RFC 1950) — the same stream inside a 2-byte header and an
+        // Adler-32. Both read: raw first, then the header stepped over
+        // and the trailer left unread. The scene is a JSON object, so
+        // an opening brace tells a true reading from a false one.
+        for candidate in [compressed, Data(compressed.dropFirst(2))] {
+            if let text = inflated(candidate),
+               text.drop(while: { $0 == " " || $0 == "\n" }).first == "{" {
+                return text
+            }
+        }
+        return nil
+    }
+
+    /// Whether a link already carries its scene — a `scene` query read
+    /// as plain text, by the format's never-reparse rule.
+    static func carriesScene(_ url: URL) -> Bool {
+        guard let query = url.absoluteString
+            .split(separator: "?", maxSplits: 1).dropFirst().first else { return false }
+        return query.split(separator: "&").contains { $0.hasPrefix("scene=") && $0.count > "scene=".count }
+    }
+
+    /// The most a link is asked to carry: payloads above this many
+    /// characters travel as a `.liquidinfo` file hand-off instead —
+    /// the shared threshold of SCENE-DATA-IN-EPUB.md, kept well inside
+    /// what schemes, Mail, and pasteboards move intact.
+    static let scenePayloadCeiling = 8_000
+
+    /// Whether a scene fits in a link at all — its compressed payload
+    /// within the ceiling.
+    static func sceneTravelsInLink(_ sceneJSON: String) -> Bool {
+        guard let payload = scenePayload(sceneJSON) else { return false }
+        return payload.count <= scenePayloadCeiling
+    }
+
+    /// The link with the complete scene aboard: the given `.liquidinfo`
+    /// JSON compressed (raw DEFLATE, as Liquid Information writes it)
+    /// and base64url-encoded into a `scene` query, appended by string
+    /// surgery. A link already carrying a scene, a payload that will
+    /// not write, or one over the ceiling returns the URL untouched.
+    static func carryingScene(_ url: URL, sceneJSON: String) -> URL {
+        guard !carriesScene(url), let payload = scenePayload(sceneJSON),
+              payload.count <= scenePayloadCeiling else { return url }
+        let text = url.absoluteString
+        let joined = text + (text.contains("?") ? "&" : "?") + "scene=" + payload
+        return URL(string: joined) ?? url
+    }
+
+    /// The scene JSON as the link's payload: raw DEFLATE, base64url,
+    /// no padding.
+    private static func scenePayload(_ json: String) -> String? {
+        let source = Data(json.utf8)
+        guard !source.isEmpty else { return nil }
+        // DEFLATE can expand incompressible input a little; the margin
+        // covers it, so a too-small buffer never reads as failure.
+        let capacity = source.count + 1024
+        var out = Data(count: capacity)
+        let written = out.withUnsafeMutableBytes { destination -> Int in
+            guard let destBase = destination.bindMemory(to: UInt8.self).baseAddress
+            else { return 0 }
+            return source.withUnsafeBytes { input -> Int in
+                guard let sourceBase = input.bindMemory(to: UInt8.self).baseAddress
+                else { return 0 }
+                return compression_encode_buffer(destBase, capacity,
+                                                 sourceBase, source.count,
+                                                 nil, COMPRESSION_ZLIB)
+            }
+        }
+        guard written > 0 else { return nil }
+        return out.prefix(written).base64EncodedString()
+            .replacingOccurrences(of: "+", with: "-")
+            .replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: "=", with: "")
+    }
+
+    /// A raw DEFLATE stream inflated to its UTF-8 text, the buffer
+    /// widened until the stream fits with room to spare. Nil for a
+    /// stream that does not read.
+    private static func inflated(_ deflate: Data) -> String? {
+        var capacity = max(deflate.count * 8, 64_000)
+        while capacity <= 16_000_000 {
+            var out = Data(count: capacity)
+            let written = out.withUnsafeMutableBytes { destination -> Int in
+                guard let destBase = destination.bindMemory(to: UInt8.self).baseAddress
+                else { return 0 }
+                return deflate.withUnsafeBytes { source -> Int in
+                    guard let sourceBase = source.bindMemory(to: UInt8.self).baseAddress
+                    else { return 0 }
+                    return compression_decode_buffer(destBase, capacity,
+                                                     sourceBase, deflate.count,
+                                                     nil, COMPRESSION_ZLIB)
+                }
+            }
+            guard written > 0 else { return nil }
+            // Filling the buffer exactly may mean truncation: widen
+            // and read again until the stream fits with room to spare.
+            if written < capacity {
+                return String(data: out.prefix(written), encoding: .utf8)
+            }
+            capacity *= 4
+        }
+        return nil
     }
 }
 
@@ -93,6 +225,7 @@ nonisolated enum PNGCitation {
 
     private static let pngSignature: [UInt8] = [137, 80, 78, 71, 13, 10, 26, 10]
     private static let visualMetaKeyword = "visual-meta"
+    private static let liquidSceneKeyword = "liquid-scene"
     private static let xmpKeyword = "XML:com.adobe.xmp"
 
     /// The embedded citation text: the `visual-meta` iTXt (or tEXt) chunk's
@@ -100,6 +233,20 @@ nonisolated enum PNGCitation {
     /// a BibTeX scan over whichever comes back. Nil for an ordinary PNG,
     /// a non-PNG, or a file too damaged to walk.
     static func citationText(inPNGData data: Data) -> String? {
+        text(forKeyword: visualMetaKeyword, inPNGData: data, takingXMPFallback: true)
+    }
+
+    /// The complete `.liquidinfo` scene the citable PNG carries — the
+    /// `liquid-scene` iTXt chunk (2026-08-19 format), uncompressed
+    /// JSON: the image as an equal source of truth to the link. Nil
+    /// for an ordinary PNG.
+    static func sceneText(inPNGData data: Data) -> String? {
+        text(forKeyword: liquidSceneKeyword, inPNGData: data, takingXMPFallback: false)
+    }
+
+    /// The chunk walk both readings share.
+    private static func text(forKeyword wanted: String, inPNGData data: Data,
+                             takingXMPFallback: Bool) -> String? {
         let bytes = [UInt8](data)
         guard bytes.count > pngSignature.count,
               Array(bytes[0..<pngSignature.count]) == pngSignature else { return nil }
@@ -117,11 +264,13 @@ nonisolated enum PNGCitation {
             switch type {
             case "iTXt":
                 if let (keyword, text) = iTXtEntry(body) {
-                    if keyword == visualMetaKeyword { return text }
-                    if keyword == xmpKeyword, xmpFallback == nil { xmpFallback = text }
+                    if keyword == wanted { return text }
+                    if takingXMPFallback, keyword == xmpKeyword, xmpFallback == nil {
+                        xmpFallback = text
+                    }
                 }
             case "tEXt":
-                if let (keyword, text) = tEXtEntry(body), keyword == visualMetaKeyword {
+                if let (keyword, text) = tEXtEntry(body), keyword == wanted {
                     return text
                 }
             default:
