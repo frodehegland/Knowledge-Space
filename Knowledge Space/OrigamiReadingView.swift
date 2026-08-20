@@ -32,6 +32,9 @@ struct ReadingTypographyActions {
 
 extension FocusedValues {
     @Entry var readingTypography: ReadingTypographyActions?
+    /// The front reading's printable book — its .epub on disk — for
+    /// File ▸ Print Booklet…; nil while nothing front can print.
+    @Entry var bookletSource: URL?
 }
 
 // MARK: - KS: the annotations' home
@@ -93,7 +96,7 @@ struct OrigamiReadingView: View {
     @AppStorage("readerMode") private var readerModeRaw = ReaderMode.scroll.rawValue
 
     enum ReaderMode: String, CaseIterable {
-        case scroll, horizontal
+        case scroll, horizontal, focus
     }
 
     private var readerMode: ReaderMode {
@@ -213,13 +216,18 @@ struct OrigamiReadingView: View {
     /// The moment's confirmation line at the window's foot.
     @State private var keepNotice: String?
     // The reading functions: the text expanded into meaning-paragraphs
-    // (p) and broken into flow lines (f).
+    // (p), broken into flow lines (f), and each paragraph's key
+    // sentence bolded (b).
     @State private var expandParagraphs = false
     @State private var flowReading = false
+    @State private var boldKeySentences = false
     /// The model's paragraph breaks, cached per paragraph id — the
     /// text with blank lines at the meaning shifts (or unchanged when
     /// the model found none).
     @State private var paragraphSplits: [String: String] = [:]
+    /// The model's key sentence per paragraph id, cached — empty where
+    /// it chose none, so a paragraph is never asked twice.
+    @State private var keySentences: [String: String] = [:]
     @State private var keyMonitor: Any?
     @AppStorage("flowBreakOnComma") private var flowBreakOnComma = true
     @AppStorage("flowDoubleBreakOnPeriod") private var flowDoubleBreakOnPeriod = false
@@ -317,6 +325,7 @@ struct OrigamiReadingView: View {
                     switch readerMode {
                     case .scroll: articleView(annotations)
                     case .horizontal: horizontalView(annotations)
+                    case .focus: focusView(annotations)
                     }
                 }
             }
@@ -328,6 +337,13 @@ struct OrigamiReadingView: View {
                 withAnimation(.easeInOut(duration: 0.25)) {
                     proxy.scrollTo(id, anchor: .top)
                 }
+            }
+            // A fragment can arrive while this reading already stands
+            // open — the camera finding a page of this document, say —
+            // not only on appearance.
+            .onChange(of: state.pendingFragment) {
+                guard let fragment = state.pendingFragment else { return }
+                land(fragment, with: proxy)
             }
             .onAppear { landOnArrival(proxy) }
         }
@@ -356,8 +372,14 @@ struct OrigamiReadingView: View {
             smaller: { stepFontSize(by: -1) },
             looser: { stepLineSpacing(by: 1) },
             tighter: { stepLineSpacing(by: -1) }))
+        // The front book announces itself printable — File ▸ Print
+        // Booklet… acts on it while this reading is front.
+        .focusedSceneValue(\.bookletSource, state.epubCompanionURL(for: doc))
         .onChange(of: expandParagraphs) { _, on in
             if on { computeParagraphSplits() }
+        }
+        .onChange(of: boldKeySentences) { _, on in
+            if on { computeKeySentences() }
         }
         // The moment's notice, briefly.
         .overlay(alignment: .bottom) {
@@ -389,8 +411,8 @@ struct OrigamiReadingView: View {
                 }
                 return nil
             }
-            // Bare p and f — the reading functions — and Esc, Author's
-            // door in and out of full screen. The selectable text views
+            // Bare p, f, and b — the reading functions — and Esc,
+            // Author's door in and out of full screen. The selectable text views
             // consume unmodified keys before the menu bar sees them, so
             // the window listens directly; anything editable keeps its
             // letters, and an open popover keeps its own Esc.
@@ -408,10 +430,12 @@ struct OrigamiReadingView: View {
                     return nil
                 }
                 guard let letter = event.charactersIgnoringModifiers?.lowercased(),
-                      letter == "p" || letter == "f"
+                      letter == "p" || letter == "f" || letter == "b"
                 else { return event }
                 if letter == "p" {
                     expandParagraphs.toggle()
+                } else if letter == "b" {
+                    boldKeySentences.toggle()
                 } else {
                     flowReading.toggle()
                 }
@@ -523,15 +547,10 @@ struct OrigamiReadingView: View {
     /// Land where the reading asks: a fragment link's paragraph first;
     /// otherwise, in the article flow, where the reader left off.
     private func landOnArrival(_ proxy: ScrollViewProxy) {
-        if let fragment = state.pendingFragment {
-            state.pendingFragment = nil
-            Task { @MainActor in
-                try? await Task.sleep(for: .milliseconds(120))
-                withAnimation(.easeInOut(duration: 0.3)) {
-                    proxy.scrollTo(fragment, anchor: .top)
-                }
-            }
-        } else if readerMode == .scroll, foldLevel == 0 {
+        if let fragment = state.pendingFragment, land(fragment, with: proxy) {
+            return
+        }
+        if readerMode == .scroll, foldLevel == 0 {
             let saved = UserDefaults.standard.double(forKey: progressKey)
             guard saved > 0 else { return }
             Task { @MainActor in
@@ -539,6 +558,35 @@ struct OrigamiReadingView: View {
                 scrollPosition.scrollTo(y: saved)
             }
         }
+    }
+
+    /// An arriving fragment, landed — but only a fragment of THIS
+    /// document; another reading's fragment is left for its own
+    /// window to consume. Scroll flows to the paragraph; Horizontal
+    /// and Focus turn to its page first.
+    @discardableResult
+    private func land(_ fragment: String, with proxy: ScrollViewProxy) -> Bool {
+        let mine = (doc.body ?? []).contains { $0.id == fragment }
+            || sections.contains { $0.heading?.id == fragment }
+        guard mine else { return false }
+        state.pendingFragment = nil
+        if readerMode == .horizontal || readerMode == .focus {
+            if let page = horizontalPages.firstIndex(where: { page in
+                page.contains { section in
+                    section.heading?.id == fragment
+                        || section.paragraphs.contains { $0.id == fragment }
+                }
+            }) {
+                withAnimation(.easeInOut(duration: 0.2)) { focusIndex = page }
+            }
+        }
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(120))
+            withAnimation(.easeInOut(duration: 0.3)) {
+                proxy.scrollTo(fragment, anchor: .top)
+            }
+        }
+        return true
     }
 
     private var progressKey: String { "readingProgress.\(doc.id)" }
@@ -557,8 +605,8 @@ struct OrigamiReadingView: View {
     // MARK: - KS: the foot
 
     /// Author's foot, carried across: the mode words at the bottom of
-    /// the page — Scroll | Horizontal — with the contents, the fold,
-    /// and the type standing quietly at the trailing edge.
+    /// the page — Scroll | Horizontal | Focus — with the contents, the
+    /// fold, and the type standing quietly at the trailing edge.
     private var bottomBar: some View {
         ZStack {
             HStack(spacing: 18) {
@@ -567,6 +615,10 @@ struct OrigamiReadingView: View {
                     .fill(.quaternary)
                     .frame(width: 1, height: 14)
                 modeWord("Horizontal", mode: .horizontal)
+                Rectangle()
+                    .fill(.quaternary)
+                    .frame(width: 1, height: 14)
+                modeWord("Focus", mode: .focus)
             }
             HStack(spacing: 14) {
                 if foldLevel > 0 {
@@ -638,7 +690,9 @@ struct OrigamiReadingView: View {
         }
         .buttonStyle(.plain)
         .help(mode == .scroll ? "The document as written, one flow"
-              : "Pages side by side — two, or more when the window is wide")
+              : mode == .horizontal
+                ? "Pages side by side — two, or more when the window is wide"
+                : "One section alone, to settle into — arrows move through")
     }
 
     /// KS: the contents — the document by its headings, each a click.
@@ -716,7 +770,7 @@ struct OrigamiReadingView: View {
         if let index = sections.firstIndex(of: section) {
             steppedIndex = index
         }
-        if readerMode == .horizontal {
+        if readerMode == .horizontal || readerMode == .focus {
             if let page = horizontalPages.firstIndex(where: { $0.contains(section) }) {
                 focusIndex = page
             }
@@ -1094,6 +1148,50 @@ struct OrigamiReadingView: View {
         }
     }
 
+    /// KS: Focus — one section alone on the page, to help the reading
+    /// settle. Previous/Next (and the arrow keys) move a section at a
+    /// time; the section scrolls within itself. The pages are
+    /// Horizontal's, so bodyless headings ride atop their section and
+    /// the two modes keep each other's place.
+    private func focusView(_ annotations: [String: [ResolvedAnnotation]]) -> some View {
+        let pages = horizontalPages
+        let index = min(max(focusIndex, 0), max(pages.count - 1, 0))
+        return VStack(spacing: 0) {
+            if pages.isEmpty {
+                ContentUnavailableView("Nothing to Read", systemImage: "doc.text",
+                                       description: Text("This document has no body."))
+            } else {
+                focusColumn(pages[index], annotations: annotations)
+                Divider()
+                HStack {
+                    Button {
+                        turnPages(by: -1)
+                    } label: {
+                        Label("Previous", systemImage: "chevron.left")
+                    }
+                    .keyboardShortcut(.leftArrow, modifiers: [])
+                    .disabled(index == 0)
+
+                    Spacer()
+                    Text(pageLabel(pages: pages, index: index, shown: 1))
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                    Spacer()
+
+                    Button {
+                        turnPages(by: 1)
+                    } label: {
+                        Label("Next", systemImage: "chevron.right")
+                    }
+                    .keyboardShortcut(.rightArrow, modifiers: [])
+                    .disabled(index >= pages.count - 1)
+                }
+                .padding(.horizontal, 20)
+                .padding(.vertical, 10)
+            }
+        }
+    }
+
     /// KS: the Horizontal pages — one section each, except that a
     /// heading with no body of its own (a part over its chapters, a
     /// heading straight into the next) never breaks to a page alone:
@@ -1338,12 +1436,12 @@ struct OrigamiReadingView: View {
         let sections = self.sections
         var focusSectionID: String?
         let pages = horizontalPages
-        if readerMode == .horizontal, !pages.isEmpty {
+        if readerMode != .scroll, !pages.isEmpty {
             let index = min(max(focusIndex, 0), pages.count - 1)
             focusSectionID = pages[index].first?.heading?.id
         }
         return OrigamiViewState(
-            style: readerMode == .horizontal ? .focus : .article,
+            style: readerMode != .scroll ? .focus : .article,
             closedSections: [],
             openStretch: openStretch.sorted(),
             focusSectionID: focusSectionID)
@@ -1847,6 +1945,40 @@ struct OrigamiReadingView: View {
             >= ReadingAI.minimumRun * 2
     }
 
+    /// Asks the model for every substantial paragraph's key sentence —
+    /// the one with the most to say — one paragraph at a time, caching
+    /// each answer; the bolding lands as the answers arrive.
+    private func computeKeySentences() {
+        guard ReadingAI.isAvailable else {
+            flashNotice("The on-device model isn\u{2019}t available, so nothing can be bolded.")
+            boldKeySentences = false
+            return
+        }
+        let candidates = (doc.body ?? []).filter { paragraph in
+            paragraph.heading == nil && paragraph.tableID == nil
+                && paragraph.text != "---"
+                && LiquidDoc.imageReference(in: paragraph.text) == nil
+                && keySentences[paragraph.id] == nil
+                && wantsKeySentence(paragraph.text)
+        }
+        guard !candidates.isEmpty else { return }
+        flashNotice("Reading for each paragraph\u{2019}s key sentence\u{2026}")
+        Task {
+            for paragraph in candidates {
+                guard boldKeySentences else { break }
+                let sentence = (try? await ReadingAI.keySentence(paragraph.text)) ?? nil
+                keySentences[paragraph.id] = sentence ?? ""
+            }
+        }
+    }
+
+    /// Only a paragraph of several sentences has filler for its key
+    /// sentence to stand out from — one or two stand as written.
+    private func wantsKeySentence(_ text: String) -> Bool {
+        OrigamiReading.flowLines(text, breakOnComma: false).count
+            >= ReadingAI.minimumRun
+    }
+
     /// One line at the bottom of the window, briefly.
     private func flashNotice(_ message: String) {
         Task {
@@ -1866,6 +1998,31 @@ struct OrigamiReadingView: View {
                             closeStretch: (id: String, isLast: Bool)? = nil)
         -> AttributedString {
         var attributed = rendered(readingText(for: paragraph))
+        // The b view function: the paragraph's key sentence — the
+        // model's cached choice — stands bold. The sentence is the
+        // paragraph's own words, so it is found in the rendered text
+        // whatever other view functions are on; flow's line breaks are
+        // applied to the sentence first so it still matches.
+        if boldKeySentences, paragraph.heading == nil,
+           let sentence = keySentences[paragraph.id], !sentence.isEmpty {
+            var needle = sentence
+            if flowReading {
+                needle = OrigamiReading.flowText(needle,
+                                                 breakOnComma: flowBreakOnComma,
+                                                 doubleBreakOnPeriod: false)
+            }
+            needle = String(rendered(needle).characters)
+            let plain = String(attributed.characters)
+            if let range = plain.range(of: needle),
+               let attributedRange = Range(range, in: attributed) {
+                let runs = attributed[attributedRange].runs
+                    .map { ($0.range, $0.inlinePresentationIntent) }
+                for (runRange, intent) in runs {
+                    attributed[runRange].inlinePresentationIntent =
+                        (intent ?? []).union(.stronglyEmphasized)
+                }
+            }
+        }
         for entry in highlights {
             guard let exact = entry.resolution.exact else { continue }
             let plain = String(attributed.characters)

@@ -34,6 +34,11 @@ struct KnowledgeSpaceApp: App {
     #else
     @State private var state = AppState()
     @NSApplicationDelegateAdaptor(MailOpenDelegate.self) private var mailOpenDelegate
+    /// The colour-coded reading, switched from the View menu — the
+    /// same stored choice the reader's Aa menu and Settings ▸
+    /// Colouring speak to.
+    @AppStorage("textColoringMode") private var coloringModeRaw =
+        TextColoringMode.off.rawValue
     #endif
 
     var body: some Scene {
@@ -196,10 +201,14 @@ struct KnowledgeSpaceApp: App {
                     get: { state.flowReading },
                     set: { state.flowReading = $0 }))
                     .keyboardShortcut("f", modifiers: [.command, .shift])
-                Toggle("Visual-Meta", isOn: Binding(
-                    get: { state.showsVisualMeta },
-                    set: { state.showsVisualMeta = $0 }))
-                    .keyboardShortcut("m", modifiers: [.command, .shift])
+                // Colour coding, as the reader's Aa menu offers it —
+                // Grammar paints by part of speech, Meaning by the
+                // people, places, and organizations named.
+                Picker("Colour Words By", selection: $coloringModeRaw) {
+                    ForEach(TextColoringMode.allCases) { mode in
+                        Text(mode.displayName).tag(mode.rawValue)
+                    }
+                }
                 Toggle("Show Superseded", isOn: Binding(
                     get: { state.showsSuperseded },
                     set: { state.showsSuperseded = $0 }))
@@ -210,6 +219,10 @@ struct KnowledgeSpaceApp: App {
             // as in Author — and otherwise they size the notes list's
             // text, as they always have.
             TextSizeOrOutlineCommands(state: state)
+            // The foot of the File menu: the front book as a folded,
+            // saddle-stitched booklet, standing disabled while nothing
+            // front can print. The shelves offer the same by right-click.
+            BookletPrintCommands(state: state)
         }
 
         // A work in a window of its own: double-clicking a book on the
@@ -222,6 +235,15 @@ struct KnowledgeSpaceApp: App {
                 .id(state.themeStamp)
         }
         .defaultSize(width: 760, height: 900)
+
+        // The camera watching for a printed page — File ▸ Hold Up a
+        // Page… — one window, reused.
+        Window("Hold Up a Page", id: "pageCamera") {
+            PageCaptureView()
+                .environment(state)
+                .foregroundStyle(AppGreys.text)
+        }
+        .defaultSize(width: 560, height: 440)
 
         Settings {
             SettingsView()
@@ -348,3 +370,29 @@ private struct TextSizeOrOutlineCommands: Commands {
         }
     }
 }
+
+#if os(macOS)
+/// The File menu's foot — where paper meets the app. Print Booklet…
+/// runs Author's imposition over whatever book is front: the reading
+/// publishes its .epub through the focused scene (see
+/// OrigamiReadingView), and the item stands disabled while no book is
+/// front. Hold Up a Page… goes the other way: the camera reads a
+/// printed page and opens its document at that place.
+private struct BookletPrintCommands: Commands {
+    let state: AppState
+    @FocusedValue(\.bookletSource) private var bookletSource
+    @Environment(\.openWindow) private var openWindow
+
+    var body: some Commands {
+        CommandGroup(after: .printItem) {
+            Button("Print Booklet\u{2026}") {
+                if let bookletSource { state.printBooklet(from: bookletSource) }
+            }
+            .disabled(bookletSource == nil)
+            Button("Hold Up a Page\u{2026}") {
+                openWindow(id: "pageCamera")
+            }
+        }
+    }
+}
+#endif

@@ -18,6 +18,8 @@ struct SettingsView: View {
                 .tabItem { Label("Author", systemImage: "person.text.rectangle") }
             AppearanceSettingsView()
                 .tabItem { Label("Appearance", systemImage: "paintpalette") }
+            ColoringSettingsView()
+                .tabItem { Label("Colouring", systemImage: "textformat.abc.dottedunderline") }
             TablesSettingsView()
                 .tabItem { Label("Tables", systemImage: "tablecells") }
             LaTeXSettingsView()
@@ -275,6 +277,126 @@ private struct ThemeColorEditorView: View {
         theme.setOverride(nil, for: role, dark: true)
         state.themeVersion += 1
         resetCount += 1
+    }
+}
+
+/// Colour coding — Doug Engelbart's grammar-of-the-view, honoured:
+/// every word tagged on this device and painted by its part of speech
+/// or its meaning, in colours the reader edits here. The idea's long
+/// lineage shapes the defaults: Montessori's grammar colours, the
+/// Fitzgerald Key's colour-organized language boards, colour-marked
+/// sentence teaching, and colour cueing as a reading support. Toggle
+/// it from the reader's Aa menu, Colour Words By. (Ported from
+/// Augmented Library's ColoringSettingsView — keep synced.)
+private struct ColoringSettingsView: View {
+    @AppStorage("textColoringMode") private var coloringModeRaw =
+        TextColoringMode.off.rawValue
+    @AppStorage("textColorRules") private var rulesRaw =
+        TextColorRule.encodeList(TextColorRule.defaultRules)
+
+    private var rules: [TextColorRule] { TextColorRule.decodeList(rulesRaw) }
+
+    var body: some View {
+        Form {
+            Section {
+                Picker("Colour words by", selection: $coloringModeRaw) {
+                    ForEach(TextColoringMode.allCases) { mode in
+                        Text(mode.displayName).tag(mode.rawValue)
+                    }
+                }
+                .pickerStyle(.segmented)
+            } footer: {
+                Text("Also in the reader\u{2019}s Aa menu: Colour Words By. Grammar paints every word by its part of speech; Meaning paints the people, places, and organizations the text names. Tagging runs on this Mac — nothing leaves it.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            section(for: .grammar, title: "Grammar — parts of speech",
+                    footer: "The defaults follow Montessori's family logic: naming words and their helpers share blues (nouns strong, adjectives softer, little words like \u{201C}the\u{201D} palest); action words share warm reds (verbs red, adverbs a softened orange); pronouns are purple — the mix of blue and red, since they stand in for a naming word while serving the action. Meaning-carrying words get the loud colours; connective scaffolding stays muted, so the page reads rather than dazzles.")
+            section(for: .meaning, title: "Meaning — named entities",
+                    footer: "Who, where, and what organization the text names — three distinct hues of their own.")
+
+            Section {
+                if rules != TextColorRule.defaultRules {
+                    Button("Reset to Defaults", systemImage: "arrow.counterclockwise") {
+                        rulesRaw = TextColorRule.encodeList(TextColorRule.defaultRules)
+                    }
+                }
+            }
+        }
+        .formStyle(.grouped)
+        // The categories run long; the pane keeps to the window's
+        // height and the form scrolls.
+        .frame(height: 540)
+    }
+
+    private func section(for mode: TextColoringMode, title: String,
+                         footer: String) -> some View {
+        Section {
+            ForEach(rules.filter { $0.category.mode == mode }) { rule in
+                HStack(spacing: 12) {
+                    Toggle(isOn: binding(for: rule.category, keyPath: \.enabled)) {
+                        EmptyView()
+                    }
+                    .labelsHidden()
+                    ColorPicker("", selection: colorBinding(for: rule.category))
+                        .labelsHidden()
+                    Text(rule.category.displayName)
+                    Spacer()
+                    // The category's own example, in its colour.
+                    Text(rule.category.exampleWord)
+                        .foregroundStyle(rule.enabled ? rule.color : Color.secondary)
+                        .font(.system(size: 13, design: .serif))
+                }
+            }
+        } header: {
+            Text(title)
+        } footer: {
+            Text(footer)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private func write(_ rules: [TextColorRule]) {
+        rulesRaw = TextColorRule.encodeList(rules)
+    }
+
+    private func binding<Value>(for category: TextColorCategory,
+                                keyPath: WritableKeyPath<TextColorRule, Value>)
+        -> Binding<Value> where Value: Equatable {
+        Binding(
+            get: {
+                TextColorRule.decodeList(rulesRaw)
+                    .first { $0.category == category }![keyPath: keyPath]
+            },
+            set: { value in
+                var list = TextColorRule.decodeList(rulesRaw)
+                guard let index = list.firstIndex(where: { $0.category == category })
+                else { return }
+                list[index][keyPath: keyPath] = value
+                write(list)
+            })
+    }
+
+    private func colorBinding(for category: TextColorCategory) -> Binding<Color> {
+        Binding(
+            get: {
+                TextColorRule.decodeList(rulesRaw)
+                    .first { $0.category == category }?.color ?? .primary
+            },
+            set: { color in
+                var list = TextColorRule.decodeList(rulesRaw)
+                guard let index = list.firstIndex(where: { $0.category == category }),
+                      let components = NSColor(color).usingColorSpace(.sRGB)
+                else { return }
+                let hex = String(format: "#%02X%02X%02X",
+                                 Int(round(components.redComponent * 255)),
+                                 Int(round(components.greenComponent * 255)),
+                                 Int(round(components.blueComponent * 255)))
+                list[index].hex = hex
+                write(list)
+            })
     }
 }
 

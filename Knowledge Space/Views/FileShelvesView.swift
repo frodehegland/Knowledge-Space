@@ -1,6 +1,7 @@
 #if os(macOS)
 import SwiftUI
 import AppKit
+import PDFKit
 
 // The file libraries: the works as files, each offered three ways —
 // Alphabetical (every title A–Z), Authors (the writers, their works
@@ -8,6 +9,30 @@ import AppKit
 // BibTeX names). PDF lists the Reader Library folder as it stands on
 // disk — the PDFs open into Reader, never moved. EPUB lists the EPUB
 // Library — works imported whole read right here.
+
+extension AppState {
+    /// Author's booklet, from any work the app holds: an EPUB is
+    /// paginated onto A4 pages first, a PDF imposed as it stands; the
+    /// print panel comes up preset — landscape, double-sided,
+    /// short-edge flip — fold the printed stack in half and it reads
+    /// as a book. Offered on the file shelves' context menus and as
+    /// File ▸ Print Booklet… over the front reading. (The imposition
+    /// lives in BookletImposer.swift/EPUBBookletRenderer.swift,
+    /// verbatim from Author — fix there, re-copy.)
+    func printBooklet(from url: URL) {
+        let title = url.deletingPathExtension().lastPathComponent
+        let source: PDFDocument? = url.pathExtension.lowercased() == "epub"
+            ? EPUBBookletRenderer.pdfDocument(fromEPUBAt: url)
+            : PDFDocument(url: url)
+        guard let source,
+              let booklet = BookletImposer.imposed(from: source, footerTitle: title) else {
+            showNote("\(title) could not be laid out as booklet pages.")
+            return
+        }
+        BookletImposer.runPrintOperation(for: booklet, jobTitle: title,
+                                         window: NSApp.keyWindow)
+    }
+}
 
 /// The journal or proceedings a record says its work appeared in.
 private func venue(of record: BibTeXRecord?) -> String? {
@@ -288,6 +313,9 @@ struct PDFLibraryView: View {
                     in: RoundedRectangle(cornerRadius: 6))
         .contextMenu {
             Button("Open in Reader") { NSWorkspace.shared.open(entry.file.url) }
+            Button("Print Booklet\u{2026}") {
+                state.printBooklet(from: entry.file.url)
+            }
             Button("Show in Finder") {
                 NSWorkspace.shared.activateFileViewerSelecting([entry.file.url])
             }
@@ -640,6 +668,9 @@ struct EPUBLibraryView: View {
                 Button("Import") { state.importOrigamiEPUB(from: url) }
             }
             if let epub = entry.url ?? entry.doc.flatMap(state.epubCompanionURL(for:)) {
+                Button("Print Booklet\u{2026}") {
+                    state.printBooklet(from: epub)
+                }
                 Button("Show in Finder") {
                     NSWorkspace.shared.activateFileViewerSelecting([epub])
                 }

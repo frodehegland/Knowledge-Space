@@ -125,6 +125,46 @@ public nonisolated enum ReadingAI {
         #endif
     }
 
+    /// The one sentence in a paragraph with the most to say, as the
+    /// on-device model reads it — the key claim, not the filler around
+    /// it. The model only CHOOSES a sentence: the words returned are
+    /// split from the original, so nothing can change. nil where the
+    /// paragraph is too short for the choice to mean anything, or the
+    /// answer names no sentence.
+    @MainActor
+    public static func keySentence(_ text: String) async throws -> String? {
+        #if canImport(FoundationModels)
+        guard isAvailable else { throw Unavailable() }
+        let sentences = OrigamiReading.flowLines(text, breakOnComma: false)
+        guard sentences.count >= minimumRun else { return nil }
+        let numbered = sentences.enumerated()
+            .map { "\($0.offset + 1). \($0.element)" }
+            .joined(separator: "\n")
+        let session = LanguageModelSession()
+        let prompt = """
+        The numbered lines below are the consecutive sentences of one \
+        paragraph. Choose the single sentence with the most to say — \
+        the paragraph's key claim or insight, never a transition or \
+        filler sentence. Answer with only that sentence's number — \
+        for example: 3.
+
+        \(numbered)
+        """
+        let response = try await session.respond(to: prompt)
+        guard let regex = try? NSRegularExpression(pattern: #"\d+"#) else { return nil }
+        let answer = response.content as NSString
+        guard let match = regex.firstMatch(
+                  in: response.content,
+                  range: NSRange(location: 0, length: answer.length)),
+              let number = Int(answer.substring(with: match.range)),
+              (1...sentences.count).contains(number)
+        else { return nil }
+        return sentences[number - 1]
+        #else
+        throw Unavailable()
+        #endif
+    }
+
     /// No paragraph reads shorter than this many sentences.
     public static let minimumRun = 3
 
