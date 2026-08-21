@@ -4,7 +4,7 @@ import SwiftUI
 /// module by id. Views appear as `.view(id)`.
 /// The Library section's shelves — the reference manager's doors.
 enum SourceShelf: String, Hashable {
-    case all, books, articles, authors, quotes
+    case all, books, articles, authors, journals, quotes
 }
 
 /// How a file library lists its works: every title A–Z, the authors
@@ -12,6 +12,9 @@ enum SourceShelf: String, Hashable {
 /// works appeared in (read from each record's BibTeX).
 enum FileShelfListing: String, Hashable {
     case alphabetical, authors, journals
+    /// EPUB shelf only: the files not yet read into the library —
+    /// each one Import away. The other listings show imported works.
+    case notImported
 }
 
 /// Which transcripts a Transcripts place lists: every kind together,
@@ -131,6 +134,7 @@ enum SidebarCatalog {
             SidebarPlace(name: "Books", systemImage: "book.closed", item: .sourceShelf(.books)),
             SidebarPlace(name: articlesLabel, systemImage: "doc.plaintext", item: .sourceShelf(.articles)),
             SidebarPlace(name: "Authors", systemImage: "person.text.rectangle", item: .sourceShelf(.authors)),
+            SidebarPlace(name: "Journals", systemImage: "newspaper", item: .sourceShelf(.journals)),
             SidebarPlace(name: "Quotes", systemImage: "quote.opening", item: .sourceShelf(.quotes)),
             SidebarPlace(name: "Notes", systemImage: "note.text", item: .notes),
             SidebarPlace(name: "AI Chat", systemImage: "bubble.left.and.bubble.right", item: .aiChats),
@@ -165,6 +169,10 @@ enum SidebarCatalog {
                      item: .epubShelf(.authors)),
         SidebarPlace(name: "Journals", systemImage: "newspaper",
                      item: .epubShelf(.journals)),
+        // The files still outside the library — imported, a work moves
+        // up into the listings above.
+        SidebarPlace(name: "Not Imported", systemImage: "tray.and.arrow.down",
+                     item: .epubShelf(.notImported)),
     ]
 
     /// The Digest: a different set of data — the user's own documents

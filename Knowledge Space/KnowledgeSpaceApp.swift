@@ -184,11 +184,11 @@ struct KnowledgeSpaceApp: App {
                 }
                 .disabled(state.index.folderURL == nil)
                 Divider()
-                // Temporary, for exercising Author's citation-sources
-                // metadata (EPUB / PDF / web manifestations) — most
-                // likely removed when shipping. See SourceCitations.swift.
-                Button("PDF-EPUB for Testing…") {
-                    state.importPDFEPUBForTesting()
+                // The world's PDFs as citable EPUBs, and Author's own
+                // EPUBs with their citation pools — one door for both.
+                // See SourceCitations.swift.
+                Button("PDF-EPUB…") {
+                    state.importPDFEPUB()
                 }
                 .disabled(state.index.folderURL == nil)
             }

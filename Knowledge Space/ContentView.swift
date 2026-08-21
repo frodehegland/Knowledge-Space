@@ -235,13 +235,11 @@ struct ContentView: View {
         .toolbar(isFullScreen ? .hidden : .automatic, for: .windowToolbar)
         // No title over the columns — the window shows only its cards.
         .toolbar(removing: .title)
-        .onReceive(NotificationCenter.default.publisher(
-            for: NSWindow.didEnterFullScreenNotification)) { _ in
-            isFullScreen = true
-        }
-        .onReceive(NotificationCenter.default.publisher(
-            for: NSWindow.willExitFullScreenNotification)) { _ in
-            isFullScreen = false
+        // Scoped to this window: the notifications are app-wide, and
+        // another window going full screen must not fold this one's
+        // columns away.
+        .background {
+            FullScreenWatcher { isFullScreen = $0 }
         }
         #endif
         .overlay(alignment: .bottom) {
@@ -952,6 +950,56 @@ private struct TimelineCalendarSheet: View {
 /// (buttons, .help tooltips), so panels that must stay while the
 /// pointer works their controls rely on it — the peeks, and the open
 /// note's controls panel.
+/// Whether the hosting window stands in full screen — observed on the
+/// window itself, not app-wide, so the reader or the Map entering full
+/// screen leaves the library window's columns standing.
+private struct FullScreenWatcher: NSViewRepresentable {
+    let onChange: (Bool) -> Void
+
+    func makeNSView(context: Context) -> WatcherView {
+        let view = WatcherView()
+        view.onChange = onChange
+        return view
+    }
+
+    func updateNSView(_ view: WatcherView, context: Context) {
+        view.onChange = onChange
+    }
+
+    final class WatcherView: NSView {
+        var onChange: ((Bool) -> Void)?
+        private var observers: [any NSObjectProtocol] = []
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            observers.forEach(NotificationCenter.default.removeObserver)
+            observers = []
+            guard let window else { return }
+            report(window.styleMask.contains(.fullScreen))
+            observers.append(NotificationCenter.default.addObserver(
+                forName: NSWindow.didEnterFullScreenNotification,
+                object: window, queue: .main) { [weak self] _ in
+                self?.report(true)
+            })
+            observers.append(NotificationCenter.default.addObserver(
+                forName: NSWindow.willExitFullScreenNotification,
+                object: window, queue: .main) { [weak self] _ in
+                self?.report(false)
+            })
+        }
+
+        private func report(_ isFullScreen: Bool) {
+            DispatchQueue.main.async { [onChange] in
+                onChange?(isFullScreen)
+            }
+        }
+
+        deinit {
+            observers.forEach(NotificationCenter.default.removeObserver)
+        }
+    }
+}
+
 struct HoverSensor: NSViewRepresentable {
     let onChange: (Bool) -> Void
 

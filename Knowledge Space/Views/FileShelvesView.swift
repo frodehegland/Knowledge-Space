@@ -34,14 +34,11 @@ extension AppState {
     }
 }
 
-/// The journal or proceedings a record says its work appeared in.
+/// The journal or proceedings a record says its work appeared in —
+/// the record's own venue rule (BibTeXRecord.venue), where a book
+/// naming no journal answers with its publisher.
 private func venue(of record: BibTeXRecord?) -> String? {
-    guard let record else { return nil }
-    let value = record.fields["journal"]
-        ?? record.fields["booktitle"]
-        ?? record.fields["series"]
-    let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines)
-    return (trimmed?.isEmpty ?? true) ? nil : trimmed
+    record?.venue
 }
 
 /// One group on a shelf — an author or a journal — with its count.
@@ -188,7 +185,9 @@ struct PDFLibraryView: View {
     private func shownEntries(of all: [PDFEntry]) -> [PDFEntry] {
         var shown = all
         switch listing {
-        case .alphabetical:
+        // Not Imported belongs to the EPUB shelf; here it never
+        // arrives, and would read as the plain list.
+        case .alphabetical, .notImported:
             break
         case .authors:
             guard let selectedGroup else { return [] }
@@ -208,7 +207,7 @@ struct PDFLibraryView: View {
 
     private func groups(of all: [PDFEntry]) -> [ShelfGroup] {
         switch listing {
-        case .alphabetical: return []
+        case .alphabetical, .notImported: return []
         case .authors: return gatherGroups(all.flatMap { $0.record?.individualAuthors ?? [] })
         case .journals: return gatherGroups(all.compactMap { venue(of: $0.record) })
         }
@@ -484,9 +483,13 @@ struct EPUBLibraryView: View {
     }
 
     private func shownEntries(of all: [EPUBShelfEntry]) -> [EPUBShelfEntry] {
-        var shown = all
+        // Not Imported is the files still outside the library; the
+        // named listings show fully imported works only.
+        var shown = listing == .notImported
+            ? all.filter { $0.doc == nil }
+            : all.filter { $0.doc != nil }
         switch listing {
-        case .alphabetical:
+        case .alphabetical, .notImported:
             break
         case .authors:
             guard let selectedGroup else { return [] }
@@ -505,10 +508,11 @@ struct EPUBLibraryView: View {
     }
 
     private func groups(of all: [EPUBShelfEntry]) -> [ShelfGroup] {
+        let imported = all.filter { $0.doc != nil }
         switch listing {
-        case .alphabetical: return []
-        case .authors: return gatherGroups(all.flatMap(\.authorNames))
-        case .journals: return gatherGroups(all.compactMap { venue(of: $0.record) })
+        case .alphabetical, .notImported: return []
+        case .authors: return gatherGroups(imported.flatMap(\.authorNames))
+        case .journals: return gatherGroups(imported.compactMap { venue(of: $0.record) })
         }
     }
 
@@ -541,10 +545,12 @@ struct EPUBLibraryView: View {
                         }
                     } else {
                         placeholder(message: listing == .alphabetical
-                            ? "The EPUB Library's works, every title A–Z. An imported one reads whole, right here; the rest are one Import away."
+                            ? "The library's imported works, every title A–Z — each reads whole, right here."
                             : listing == .authors
-                            ? "The writers on the shelf, their works under them."
-                            : "The journals and proceedings the works appeared in, as their records tell it.")
+                            ? "The writers on the shelf, their imported works under them."
+                            : listing == .journals
+                            ? "The journals and proceedings the works appeared in, as their records tell it."
+                            : "EPUB files not yet read into the library — each is one Import away, and moves up into the listings once it arrives.")
                     }
                 }
             }
@@ -630,7 +636,10 @@ struct EPUBLibraryView: View {
                     .lineLimit(2)
                 HStack(spacing: 6) {
                     if let doc = entry.doc {
-                        Text([doc.author, doc.listedDateText]
+                        // The venue rides in the caption — the journal
+                        // or publisher the record names, when it does.
+                        Text([doc.author, doc.listedDateText,
+                              venue(of: entry.record) ?? ""]
                             .filter { !$0.isEmpty }
                             .joined(separator: " · "))
                     } else {
@@ -673,6 +682,18 @@ struct EPUBLibraryView: View {
                 }
                 Button("Show in Finder") {
                     NSWorkspace.shared.activateFileViewerSelecting([epub])
+                }
+            }
+            Divider()
+            // The work whole: the file, and an imported work's
+            // document and annotations with it.
+            Button("Move to Trash", role: .destructive) {
+                let moved = state.trashEPUBWork(
+                    epub: entry.url ?? entry.doc.flatMap(state.epubCompanionURL(for:)),
+                    doc: entry.doc)
+                if moved {
+                    if selectedID == entry.id { selectedID = nil }
+                    rescan()
                 }
             }
         }

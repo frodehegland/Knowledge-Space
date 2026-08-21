@@ -250,7 +250,8 @@ extension AppState {
         let selfRecord = Self.selfBibTeX(id: docID,
                                          title: result.title,
                                          author: result.author,
-                                         date: result.date)
+                                         date: result.date,
+                                         publisher: result.publisher)
 
         let existing = index.allByID[docID]?.doc
         var doc: LiquidDoc
@@ -270,8 +271,11 @@ extension AppState {
                 known.date = date
             }
             // The user's word on the work's kind stands: a reshelved
-            // record keeps its entry type; only the tail refreshes.
+            // record keeps its entry type; only the tail refreshes. A
+            // self-record the EPUB itself carries beats the synthesized
+            // one — it is the author's own, fields and all.
             let head = known.references.first(where: { $0.id == docID })
+                ?? result.references.first(where: { $0.id == docID })
                 ?? LiquidDoc.Reference(id: docID, bibtex: selfRecord)
             known.references = [head] + result.references.filter { $0.id != docID }
             doc = known
@@ -290,7 +294,11 @@ extension AppState {
                 concepts: result.concepts,
                 layouts: result.layouts,
                 mapConnections: result.mapConnections,
-                references: [LiquidDoc.Reference(id: docID, bibtex: selfRecord)]
+                // A self-record the EPUB itself carries beats the
+                // synthesized one — it is the author's own, fields
+                // (journal, booktitle) and all.
+                references: [result.references.first(where: { $0.id == docID })
+                                ?? LiquidDoc.Reference(id: docID, bibtex: selfRecord)]
                     + result.references.filter { $0.id != docID },
                 tables: result.tables,
                 assets: result.assets,
@@ -354,8 +362,11 @@ extension AppState {
     /// The work's own BibTeX: a @book entry under the document's
     /// address — the Books shelf's word for an EPUB — with the year
     /// where the package named one.
-    private static func selfBibTeX(id: String, title: String,
-                                   author: String?, date: String?) -> String {
+    /// Internal, not private: the shelf-record backfill re-synthesizes
+    /// with it (see refreshShelfRecords).
+    static func selfBibTeX(id: String, title: String,
+                           author: String?, date: String?,
+                           publisher: String? = nil) -> String {
         func escaped(_ value: String) -> String {
             value.replacingOccurrences(of: "{", with: "(")
                 .replacingOccurrences(of: "}", with: ")")
@@ -366,6 +377,11 @@ extension AppState {
         }
         if let year = date?.prefix(4), year.count == 4, Int(year) != nil {
             fields.append("  year = {\(year)}")
+        }
+        // The publisher is a book's venue — how the shelves gather
+        // works that name no journal.
+        if let publisher, !publisher.isEmpty {
+            fields.append("  publisher = {\(escaped(publisher))}")
         }
         return "@book{\(id),\n" + fields.joined(separator: ",\n") + ",\n}"
     }

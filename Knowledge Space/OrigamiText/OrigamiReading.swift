@@ -478,9 +478,12 @@ nonisolated enum OrigamiReading {
     /// opened stretchtext), the block also carries it: one readable
     /// line, and the state on the address fragment so a reader
     /// following the citation can restore the view exactly.
+    /// `quote` narrows the quoted words to the reader's selection;
+    /// nil quotes the paragraph whole.
     static func citation(for paragraph: LiquidDoc.Paragraph,
                                 in doc: LiquidDoc,
-                                view state: OrigamiViewState? = nil) -> String {
+                                view state: OrigamiViewState? = nil,
+                                quote: String? = nil) -> String {
         // An excerpt cites its source: the address is the original
         // document and the original paragraph, the credit the
         // original's — with the section's own writer named first when
@@ -509,7 +512,7 @@ nonisolated enum OrigamiReading {
             sentence = line
             address = doc.id + "#" + paragraph.id
         }
-        var block = paragraph.text + "\n\u{2014} " + sentence
+        var block = (quote ?? paragraph.text) + "\n\u{2014} " + sentence
         if let line = state?.readableLine(in: doc) {
             block += "\n" + line
         }
@@ -657,6 +660,66 @@ nonisolated enum OrigamiReading {
         return out as String
     }
 
+    /// The URL scheme an inline note's fold carries: closed, the []
+    /// standing at the note's mark; open, the bracketed words
+    /// themselves — a click on any of them folds the note back.
+    static let inlineNoteScheme = "origami-inote"
+
+    /// The inline note id a fold points at — nil for other URLs.
+    static func inlineNoteID(from url: URL) -> String? {
+        guard url.scheme == inlineNoteScheme else { return nil }
+        let raw = String(url.absoluteString.dropFirst(inlineNoteScheme.count + 1))
+        return raw.removingPercentEncoding ?? raw
+    }
+
+    /// `[inote:id]` tokens — inline notes travelling as stretchtext —
+    /// resolved on the rendered text. Closed, the token stands as []
+    /// on the fold's own scheme; open, the note's words continue the
+    /// sentence in place, [ opening them and ] closing them, every
+    /// part a click to fold. The words come from the note filed with
+    /// the endnotes under the token's id.
+    static func inlineNotesResolved(_ attributed: AttributedString,
+                                    in doc: LiquidDoc,
+                                    open: Set<String>,
+                                    citations style: OrigamiCitationStyle,
+                                    markStyle: MarkedTextStyle = .orange,
+                                    appearance: ColorScheme = .light) -> AttributedString {
+        var out = attributed
+        // Each pass resolves the first remaining token; the cap is a
+        // guard against a note whose own words carry a token.
+        for _ in 0..<64 {
+            let plain = String(out.characters)
+            guard let match = plain.range(of: #"\[inote:[^\]]+\]"#,
+                                          options: .regularExpression),
+                  let attributedRange = Range(match, in: out) else { break }
+            let id = String(plain[match].dropFirst("[inote:".count).dropLast())
+            let escaped = id.addingPercentEncoding(withAllowedCharacters: keyAllowed) ?? id
+            guard let url = URL(string: inlineNoteScheme + ":" + escaped) else { break }
+            var replacement = AttributedString()
+            if open.contains(id), let note = endnote(withID: id, in: doc) {
+                var opening = AttributedString("[")
+                opening.link = url
+                replacement += opening
+                var words = inlineAttributed(note.text, in: doc, citations: style,
+                                             markStyle: markStyle, appearance: appearance)
+                // The words fold the note like the brackets do — except
+                // where they already link somewhere of their own.
+                let plainRuns = words.runs.compactMap { $0.link == nil ? $0.range : nil }
+                for range in plainRuns { words[range].link = url }
+                replacement += words
+                var closing = AttributedString("]")
+                closing.link = url
+                replacement += closing
+            } else {
+                var mark = AttributedString("[]")
+                mark.link = url
+                replacement = mark
+            }
+            out.replaceSubrange(attributedRange, with: replacement)
+        }
+        return out
+    }
+
     /// The URL scheme a rendered citation link carries. The readers
     /// catch it in an `OpenURLAction` and show the source's card.
     static let citationScheme = "origami-cite"
@@ -700,28 +763,32 @@ nonisolated enum OrigamiReading {
                 let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
                 return trimmed.isEmpty ? nil : trimmed
             }
-            // The number always comes from the file (it must agree with
-            // the source's visible reference list); the pool's own
-            // position stands in only for a document whose pool *is*
-            // the visible list — a native document with no imported
-            // display text to fall back on.
-            let number = reference?.number ?? (citedAs == nil ? index.map { $0 + 1 } : nil)
+            // The file's own number first (it agrees with the source's
+            // visible reference list where one travels); the pool's
+            // position stands in when the file carries none, so the
+            // numbered styles always have a number to show.
+            let number = reference?.number ?? index.map { $0 + 1 }
+            // As written only when what was written reads as an inline
+            // citation — a pasted passage or a long title is a record,
+            // not a label.
+            let inline = citedAs.flatMap { $0.count <= 80 ? $0 : nil }
+            let record = reference.flatMap { BibTeXRecord.records(in: $0.bibtex).first }
             var label: String
             switch style {
             case .authorDate:
-                // As written first — read, never re-derived; the BibTeX
-                // author–date for records that predate the carried
-                // text; a number when the entry names no author.
-                label = citedAs
-                    ?? authorDateLabel(
-                        of: reference.flatMap { BibTeXRecord.records(in: $0.bibtex).first })
-                        .map { "(\($0))" }
+                // As written first — read, never re-derived; the
+                // BibTeX author–date next; the work's title, clipped,
+                // when the record names no author; a number last.
+                label = inline
+                    ?? authorDateLabel(of: record).map { "(\($0))" }
+                    ?? record.flatMap { $0.title.isEmpty ? nil : $0.title }
+                        .map { "(\(clippedLabel($0)))" }
                     ?? number.map { "[\($0)]" }
                     ?? "[\(key)]"
             case .numeric:
-                label = number.map { "[\($0)]" } ?? citedAs ?? "[\(key)]"
+                label = number.map { "[\($0)]" } ?? inline ?? "[\(key)]"
             case .superscript:
-                label = number.map(superscriptDigits) ?? citedAs ?? "[\(key)]"
+                label = number.map(superscriptDigits) ?? inline ?? "[\(key)]"
             }
             if linked, reference != nil {
                 let escaped = key.addingPercentEncoding(withAllowedCharacters: keyAllowed) ?? key
@@ -730,6 +797,14 @@ nonisolated enum OrigamiReading {
             out = out.replacingCharacters(in: match.range, with: label) as NSString
         }
         return out as String
+    }
+
+    /// A title short enough to sit inline — clipped at a word break.
+    private static func clippedLabel(_ text: String) -> String {
+        guard text.count > 60 else { return text }
+        let cut = text.prefix(60)
+        let broken = cut.lastIndex(of: " ").map { cut[..<$0] } ?? cut
+        return broken + "\u{2026}"
     }
 
     /// 12 as ¹² — the raised small digits `<sup>` asks for, carried by

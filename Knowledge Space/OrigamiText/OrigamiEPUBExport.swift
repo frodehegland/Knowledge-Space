@@ -33,9 +33,9 @@ extension OrigamiReading {
             index += 1
         }
 
-        // Endnotes the slice references, appended under Notes with
-        // their original ids.
-        let noteIDs = tokenValues(pattern: #"\[note:([^\]]+)\]"#,
+        // Endnotes the slice references — inline notes' folds too —
+        // appended under Notes with their original ids.
+        let noteIDs = tokenValues(pattern: #"\[i?note:([^\]]+)\]"#,
                                   in: slice.map(\.text).joined(separator: "\n"))
         let noteParagraphs = noteIDs.compactMap { id in
             slice.contains { $0.id == id } ? nil : body.first { $0.id == id }
@@ -104,12 +104,17 @@ extension OrigamiReading {
     /// carries the original document's address with the paragraph
     /// fragment, so a citation exported onward (Author's EPUB) still
     /// opens the original document at the right place.
+    /// `quote` narrows the quotation to the reader's selection — the
+    /// words they chose, not the whole paragraph; the address still
+    /// carries the paragraph fragment, so the citation opens at the
+    /// right place either way.
     static func authorCitationPayload(for paragraph: LiquidDoc.Paragraph,
-                                             in doc: LiquidDoc)
+                                             in doc: LiquidDoc,
+                                             quote quoted: String? = nil)
         -> (content: String, bibtex: String) {
         let sourceID = doc.excerptOf?.id ?? doc.id
         let address = sourceID + "#" + paragraph.id
-        let quote = plainQuote(paragraph.text, in: doc)
+        let quote = plainQuote(quoted ?? paragraph.text, in: doc)
 
         var type = "misc"
         var fields: [(String, String)] = []
@@ -153,7 +158,7 @@ extension OrigamiReading {
     /// syntax gone — fit for a quotation field.
     static func plainQuote(_ text: String, in doc: LiquidDoc) -> String {
         var out = citationsResolved(text, in: doc, style: .authorDate)
-        if let regex = try? NSRegularExpression(pattern: #"\[note:[^\]]+\]"#) {
+        if let regex = try? NSRegularExpression(pattern: #"\[i?note:[^\]]+\]"#) {
             let ns = out as NSString
             out = regex.stringByReplacingMatches(
                 in: out, range: NSRange(location: 0, length: ns.length), withTemplate: "")
@@ -206,11 +211,19 @@ nonisolated enum OrigamiEPUBExporter {
         // document carries rides back out under data/, manifested —
         // the package file is the full truth for a figure's scene.
         let sceneFiles = doc.assets.filter(\.isLiquidSceneResource)
+        // The back matter every biblioref and noteref anchor points
+        // into — without it, the citations are broken links in every
+        // ordinary reader.
+        let backmatter = backmatterXHTML(for: doc)
         zip.add(path: "OEBPS/content.opf",
                 data: Data(packageOPF(for: doc, imageFiles: imageFiles,
-                                      sceneFiles: sceneFiles).utf8))
+                                      sceneFiles: sceneFiles,
+                                      hasBackmatter: backmatter != nil).utf8))
         zip.add(path: "OEBPS/nav.xhtml", data: Data(navXHTML(for: doc).utf8))
         zip.add(path: "OEBPS/content.xhtml", data: Data(xhtml.utf8))
+        if let backmatter {
+            zip.add(path: "OEBPS/backmatter.xhtml", data: Data(backmatter.utf8))
+        }
         zip.add(path: "OEBPS/origami.json",
                 data: try origamiJSON(for: doc, generator: generator))
         for file in imageFiles {
@@ -337,19 +350,29 @@ nonisolated enum OrigamiEPUBExporter {
         var out = escape(text)
         // Citations: the anchor carries the key and the entry's number
         // (its place in the reference list — the same number the pool
-        // entry carries, so readers never renumber); the visible label
-        // is the citation as written, or the author–date reading, for
-        // readers without the metadata.
+        // entry carries, so readers never renumber). The visible label
+        // is the universal default, "[1]" — the one form every EPUB
+        // reader shows sensibly, and the number a click on the
+        // bibliography answers; richer renderings (the author–date as
+        // written) ride in origami.json for readers that speak Origami.
         out = replacing(out, pattern: #"\[cite:([^\]]+)\]"#) { groups in
             let key = groups[0]
-            let label = OrigamiReading.citationsResolved(
-                "[cite:\(key)]", in: doc, style: .authorDate)
             let number = doc.references.firstIndex { $0.id == key }
                 .map { doc.references[$0].number ?? $0 + 1 }
+            let label = number.map { "[\($0)]" }
+                ?? OrigamiReading.citationsResolved(
+                    "[cite:\(key)]", in: doc, style: .authorDate)
             return "<a epub:type=\"biblioref\" role=\"doc-biblioref\" "
                 + "data-citation-key=\"\(key)\" "
                 + (number.map { "data-citation-number=\"\($0)\" " } ?? "")
                 + "href=\"backmatter.xhtml#bib-\(key)\">\(escape(label))</a>"
+        }
+        // Inline notes travelling as stretchtext — the ‡ a plain
+        // reader clicks through to the appendix; Origami readers
+        // fold the note open at the mark (class ot-inline-note).
+        out = replacing(out, pattern: #"\[inote:([^\]]+)\]"#) { groups in
+            "<a epub:type=\"noteref\" role=\"doc-noteref\" class=\"ot-inline-note\" "
+                + "href=\"backmatter.xhtml#\(groups[0])\">&#8225;</a>"
         }
         // Endnote daggers — the fragment is the note's id exactly,
         // the same id origami.json carries, so the token round-trips.
@@ -444,13 +467,17 @@ nonisolated enum OrigamiEPUBExporter {
 
     private static func packageOPF(for doc: LiquidDoc,
                                    imageFiles: [(name: String, mediaType: String, data: Data)],
-                                   sceneFiles: [LiquidDoc.Asset] = [])
+                                   sceneFiles: [LiquidDoc.Asset] = [],
+                                   hasBackmatter: Bool = false)
         -> String {
         var manifest = """
           <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
           <item id="content" href="content.xhtml" media-type="application/xhtml+xml"/>
           <item id="origami-metadata" href="origami.json" media-type="application/json"/>
         """
+        if hasBackmatter {
+            manifest += "\n  <item id=\"backmatter\" href=\"backmatter.xhtml\" media-type=\"application/xhtml+xml\"/>"
+        }
         for (index, file) in imageFiles.enumerated() {
             manifest += "\n  <item id=\"img\(index + 1)\" href=\"images/\(escape(file.name))\" media-type=\"\(escape(file.mediaType))\"/>"
         }
@@ -465,13 +492,124 @@ nonisolated enum OrigamiEPUBExporter {
             <dc:title>\(escape(doc.title))</dc:title>
             <dc:creator>\(escape(doc.author))</dc:creator>
             \(doc.date.map { "<dc:date>\(escape($0.isoString))</dc:date>" } ?? "")
+            \(publisher(of: doc).map { "<dc:publisher>\(escape($0))</dc:publisher>" } ?? "")
           </metadata>
           <manifest>
         \(manifest)
           </manifest>
-          <spine><itemref idref="content"/></spine>
+          <spine><itemref idref="content"/>\(hasBackmatter ? "<itemref idref=\"backmatter\" linear=\"no\"/>" : "")</spine>
         </package>
         """
+    }
+
+    /// The work's venue for dc:publisher, from its own head record —
+    /// what shelves a book under its journal or publisher on arrival.
+    private static func publisher(of doc: LiquidDoc) -> String? {
+        guard let head = doc.references.first(where: { $0.id == doc.id }),
+              let record = BibTeXRecord.records(in: head.bibtex).first
+        else { return nil }
+        for field in ["journal", "booktitle", "series", "publisher"] {
+            if let value = record.fields[field]?
+                .trimmingCharacters(in: .whitespacesAndNewlines),
+               !value.isEmpty {
+                return value
+            }
+        }
+        return nil
+    }
+
+    /// backmatter.xhtml: the bibliography every biblioref anchor
+    /// points into — readable entries in citation-number order, each
+    /// under its "bib-<key>" id — and the endnotes the body's daggers
+    /// reveal. The traditional reader's whole story: [1] in the text,
+    /// the entry one click away.
+    private static func backmatterXHTML(for doc: LiquidDoc) -> String? {
+        var sections: [String] = []
+        // The bibliography, numbered as the anchors are. The work's
+        // own head record is identity, not a citation — it stays out.
+        let cited = doc.references.enumerated()
+            .filter { $0.element.id != doc.id }
+            .map { (number: $0.element.number ?? $0.offset + 1,
+                    reference: $0.element) }
+            .sorted { $0.number < $1.number }
+        if !cited.isEmpty {
+            var items = ""
+            for entry in cited {
+                items += "<li id=\"bib-\(escape(entry.reference.id))\">"
+                    + escape(readableReference(entry.reference)) + "</li>\n"
+            }
+            sections.append("""
+            <section epub:type="bibliography" role="doc-bibliography">
+            <h2>References</h2>
+            <ol>
+            \(items)</ol>
+            </section>
+            """)
+        }
+        // Endnotes: the daggers' targets, their words from the body's
+        // own Notes section (the paragraphs carrying the notes' ids).
+        let bodyText = (doc.body ?? []).map(\.text).joined(separator: "\n")
+        var noteIDs: [String] = []
+        if let regex = try? NSRegularExpression(pattern: #"\[i?note:([^\]]+)\]"#) {
+            let ns = bodyText as NSString
+            for match in regex.matches(in: bodyText,
+                                       range: NSRange(location: 0, length: ns.length)) {
+                let id = ns.substring(with: match.range(at: 1))
+                if !noteIDs.contains(id) { noteIDs.append(id) }
+            }
+        }
+        if !noteIDs.isEmpty {
+            let paragraphsByID = (doc.body ?? []).reduce(into: [String: String]()) {
+                if $0[$1.id] == nil { $0[$1.id] = $1.text }
+            }
+            var items = ""
+            for id in noteIDs {
+                items += "<li id=\"\(escape(id))\">"
+                    + escape(paragraphsByID[id] ?? "") + "</li>\n"
+            }
+            sections.append("""
+            <section epub:type="endnotes" role="doc-endnotes">
+            <h2>Notes</h2>
+            <ol>
+            \(items)</ol>
+            </section>
+            """)
+        }
+        guard !sections.isEmpty else { return nil }
+        return """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">
+        <head><title>Back matter</title></head>
+        <body>
+        \(sections.joined(separator: "\n"))
+        </body>
+        </html>
+        """
+    }
+
+    /// A record as one bibliography line: authors, year, title, venue,
+    /// DOI — with the raw note standing in where a record has only that.
+    private static func readableReference(_ reference: LiquidDoc.Reference) -> String {
+        guard let record = BibTeXRecord.records(in: reference.bibtex).first else {
+            return reference.citedAs ?? reference.id
+        }
+        var parts: [String] = []
+        let authors = record.displayAuthors
+        if !authors.isEmpty { parts.append(authors) }
+        if !record.year.isEmpty { parts.append("(\(record.year))") }
+        if !record.title.isEmpty { parts.append("\u{201C}\(record.title)\u{201D}") }
+        for field in ["journal", "booktitle", "series", "publisher"] {
+            if let value = record.fields[field], !value.isEmpty {
+                parts.append(value)
+                break
+            }
+        }
+        if let doi = record.fields["doi"], !doi.isEmpty { parts.append("doi:\(doi)") }
+        if parts.isEmpty {
+            if let note = record.fields["note"], !note.isEmpty { return note }
+            return reference.citedAs ?? reference.id
+        }
+        return parts.joined(separator: ". ")
     }
 
     private static func navXHTML(for doc: LiquidDoc) -> String {

@@ -130,7 +130,70 @@ is the chunk's whole point.
 re-encoding — or, where re-encoding is unavoidable, carry the iTXt
 `visual-meta` chunk across to the output file.
 
-## 8. Minor: no `dc:date` / `document.date`
+## 8. Inline notes: "Stretchtext" is unimplemented, and note words go missing
+
+*(Added 21 August — from the "A Moment in Time…" exports of 19–21 August, all of
+which carry 7 endnotes whose `text` is empty in `origami.json` AND whose
+`backmatter.xhtml` `<li id="en-…">` entries are empty — the notes' words are
+nowhere in the package. Code read in
+`author_mac_forxcode/Liquid Author/Publishing/OrigamiTextExporter.swift`.)*
+
+The export dialog offers **Inline notes: Hide / Open / Stretchtext**, but the
+exporter implements only Open:
+
+```swift
+// OrigamiTextExporter.swift:83
+let inlineNoteMgr: InlineNoteManager? =
+    options.inlineNotes == .open ? textCore.inlineNoteManager : nil
+```
+
+With **Stretchtext** chosen the manager is nil, the inline-note branch
+(`attrs[.inlineNoteIdentifierForOutput]`, ~line 707) never fires, and every
+inline note is silently dropped — Stretchtext behaves exactly like Hide. It has
+been this way since the branch was introduced (commit `0ed07a3f`); the enum case
+and the menu item exist, the wiring does not. Note also that the popup defaults
+to Hide (index 0) and an unset `EPUBInlineNotes` default reads as Hide — so the
+out-of-the-box export drops inline notes too.
+
+Separately, the endnote branch can emit an id whose words it cannot find —
+`textCore.endnoteManager.endnote(with: enID)?.text ?? ""` writes the empty
+string into both `origami.json` and the backmatter `<li>` rather than failing
+loudly; that is what the seven empty notes in the evidence files are.
+
+*(Confirmed 21 August with `A Moment with Mariusz(…08_14_57Z).epub`: the inline
+note after "Sloan Foundation grant" exports as a bare `‡` in plain body text —
+no anchor, no aside, no words anywhere in the package. Three more findings from
+that test: (a) the run carrying `.inlineNoteIdentifier` falls through to plain
+text when the option is not Open, so "Hide" doesn't hide the marker — it leaks
+a dead `‡` into the flow; (b) `EPUBInlineNotes` had never been written on this
+Mac (checked the container plist), and `integer(forKey:)`'s unset default is
+0 = Hide — so an export that never visits the Publish sheet's EPUB panel drops
+inline notes silently; (c) `OrigamiTextOptionsSheetController` — the standalone
+dialog with the same three choices — is referenced nowhere; the only live
+control is the Publish sheet's popup, shown only when EPUB is the selected
+format.)*
+
+**IMPLEMENTED (21 August, by Claude, in `OrigamiTextExporter.swift` — needs an
+Author rebuild):** Stretchtext now exports each inline note as
+`<a epub:type="noteref" role="doc-noteref" class="ot-inline-note"
+href="backmatter.xhtml#en-fn-<id>">‡</a>` with the note's words filed among the
+back matter's endnotes (and in `origami.json → endnotes`) under `en-fn-<id>` —
+so a plain reader's ‡ is a working link to a readable appendix entry, the same
+journey a citation makes, while Origami readers fold the note open in place.
+Hide now strips the `‡` marker run instead of leaking it as dead text. The form
+is specified in ORIGAMI-EPUB-SPECIFICATION.md §3.4 ("An inline note as
+stretchtext"); Knowledge Space's importer reads the anchor as an `[inote:<id>]`
+token and its reader shows `[]` that expands to `[ the note's words ]` inline.
+
+Still open on the Author side: the unset `EPUBInlineNotes` default is Hide
+(should be Open — losing words silently is the format's one forbidden thing),
+the dead `OrigamiTextOptionsSheetController` should be deleted or wired, the
+Publish sheet's inline-notes popup should live in the Formatting grid rather
+than floating at the Citation Styles row, and an endnote id that resolves to
+no text still exports an empty note rather than failing loudly (the seven
+empty endnotes in the evidence files).
+
+## 9. Minor: no `dc:date` / `document.date`
 
 `origami.created` is present (`2026-08-15T22:41:53Z`) but neither `dc:date` nor
 `document.date` is written, so receiving libraries list the work without a

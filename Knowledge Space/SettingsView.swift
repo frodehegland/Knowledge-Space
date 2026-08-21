@@ -832,6 +832,15 @@ private struct LocationsSettingsView: View {
 /// Where the library is.
 private struct LibrarySettingsView: View {
     @Environment(AppState.self) private var state
+    /// The test-EPUB batch: whether it is running, and its last word —
+    /// "12 of 96 — Title…" while it works, the summary when it ends.
+    @State private var testConversionRunning = false
+    @State private var testConversionStatus: String?
+    /// The rubbish sweep: reading every shelf EPUB takes a moment.
+    @State private var rubbishSweepRunning = false
+    /// The record backfill, with its own running word.
+    @State private var recordRefreshRunning = false
+    @State private var recordRefreshStatus: String?
 
     var body: some View {
         // Controls at the left, their explanation beside them — the
@@ -856,8 +865,18 @@ private struct LibrarySettingsView: View {
             folderRow("EPUB Library",
                       path: state.epubLibraryURL?.path
                           ?? "Not set — EPUBs stay beside their records",
-                      explanation: "Where your EPUBs live — the Reader Library's twin. The EPUB shelf lists this folder; an import reads the work whole into the library and keeps the file here, paired with its record by name. Your files are never moved or renamed.") {
+                      explanation: "Where your EPUBs live — the Reader Library's twin. The EPUB shelf lists this folder; an import reads the work whole into the library and keeps the file here, paired with its record by name. Your files are never moved or renamed. Delete Rubbish reads every EPUB and offers to Trash those with no body text — or only a few characters — along with any documents imported from them.") {
                 Button("Choose…") { chooseEPUBLibrary() }
+                Button(rubbishSweepRunning ? "Reading…" : "Delete Rubbish EPUBs…",
+                       role: .destructive) {
+                    rubbishSweepRunning = true
+                    let state = self.state
+                    Task {
+                        await state.deleteRubbishEPUBs()
+                        rubbishSweepRunning = false
+                    }
+                }
+                .disabled(state.epubLibraryURL == nil || rubbishSweepRunning)
             }
             Divider()
             folderRow("Author Documents",
@@ -906,8 +925,53 @@ private struct LibrarySettingsView: View {
                 }
                 .disabled(state.archivedCount == 0)
             }
+            Divider()
+            folderRow("Shelf Records",
+                      path: recordRefreshStatus,
+                      explanation: "A one-shot backfill: every imported EPUB work whose record is the bare machine-made one — title, author, year, nothing more — gets it re-derived from its EPUB, journal and publisher included, so the Journals listing and the rows' captions fill in. A record that differs from the machine shape is someone's word and stands untouched. The refreshed documents change in the shared community folder for everyone who syncs it.") {
+                Button(recordRefreshRunning ? "Refreshing…" : "Refresh Records") {
+                    recordRefreshRunning = true
+                    let state = self.state
+                    Task {
+                        let summary = await state.refreshShelfRecords { line in
+                            recordRefreshStatus = line
+                        }
+                        recordRefreshStatus = summary
+                        recordRefreshRunning = false
+                    }
+                }
+                .disabled(recordRefreshRunning)
+            }
+            Divider()
+            folderRow("Test EPUBs",
+                      path: testConversionStatus,
+                      explanation: "Every Reader Library PDF converted to an Origami EPUB — \u{201C}test-\u{201D} before each name — onto the EPUB shelf, a real corpus for exercising the EPUB pipeline. Already-made files are skipped, so the batch resumes if stopped. Nothing joins the community folder unless a test book is imported from the shelf; Delete moves the test files, and any documents such imports made, to the Trash.") {
+                Button(testConversionRunning ? "Converting…" : "Convert All PDFs") {
+                    runTestConversion()
+                }
+                .disabled(testConversionRunning
+                          || state.readerLibraryURL == nil
+                          || state.epubLibraryURL == nil)
+                Button("Delete Test EPUBs…", role: .destructive) {
+                    state.deleteTestEPUBs()
+                }
+                .disabled(testConversionRunning)
+            }
         }
         .padding(20)
+    }
+
+    /// The batch, driven from here so the row can tell its progress.
+    private func runTestConversion() {
+        testConversionRunning = true
+        let state = self.state
+        Task {
+            let summary = await state.convertAllPDFsToTestEPUBs { line in
+                testConversionStatus = line
+            }
+            testConversionStatus = summary
+            testConversionRunning = false
+        }
     }
 
     /// One folder's row: its name, its path, and its buttons standing

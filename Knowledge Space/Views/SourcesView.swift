@@ -27,6 +27,18 @@ nonisolated struct BibTeXRecord: Sendable {
     /// True for the book-shaped entry types.
     var isBook: Bool { entryType.localizedCaseInsensitiveContains("book") }
 
+    /// The journal or proceedings the record says its work appeared in
+    /// — and for a book naming no journal, its publisher stands in, the
+    /// way Augmented Library shelves books.
+    var venue: String? {
+        let value = fields["journal"]
+            ?? fields["booktitle"]
+            ?? fields["series"]
+            ?? fields["publisher"]
+        let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines)
+        return (trimmed?.isEmpty ?? true) ? nil : trimmed
+    }
+
     /// The Books shelf's rule: a book as the record says (the user's
     /// assignment rewrites the entry type), or a work with an ISBN and
     /// no DOI. Everything else — DOI-bearing papers, Reader's PDFs —
@@ -410,6 +422,13 @@ struct SourcesView: View {
     @State private var search = ""
     /// A cited author on their way into the contacts, via ctrl-click.
     @State private var newPerson: Person?
+    /// The Journals shelf's open journal; nil shows the journals list.
+    @State private var selectedJournal: String?
+
+    /// The heading for works whose records name no journal or
+    /// proceedings — Augmented Library's own wording, so the two apps'
+    /// shelves agree on what belongs where.
+    static let noVenueName = "No journal or proceedings"
 
     /// The Authors shelf's open author — held by the app, not the
     /// view, so Show in Authors lands selected regardless of whether
@@ -455,6 +474,10 @@ struct SourcesView: View {
                     } == true
                 }
             }
+        case .journals:
+            if let selectedJournal {
+                entries = entries.filter { venueGroup($0) == selectedJournal }
+            }
         case .all, .quotes: break
         }
         guard !search.isEmpty else { return entries }
@@ -485,6 +508,25 @@ struct SourcesView: View {
         }
         return counts.sorted { $0.key.localizedCaseInsensitiveCompare($1.key) == .orderedAscending }
             .map { (name: $0.key, count: $0.value) }
+    }
+
+    /// The journal a shelved work files under — Augmented Library's
+    /// rule, kept word for word: the record's trimmed venue, or the
+    /// no-venue heading, so every work has a place on the shelf.
+    private func venueGroup(_ entry: ShelfEntry) -> String {
+        entry.record?.venue ?? Self.noVenueName
+    }
+
+    /// Every journal and proceedings on the shelf, with how many works
+    /// each holds — alphabetical, the way Augmented Library lists them.
+    private var shelfJournals: [(name: String, count: Int)] {
+        var counts: [String: Int] = [:]
+        for entry in allEntries {
+            counts[venueGroup(entry), default: 0] += 1
+        }
+        return counts
+            .map { (name: $0.key, count: $0.value) }
+            .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
     }
 
     /// Every quote on the shelf, with the source it stands on.
@@ -612,6 +654,8 @@ struct SourcesView: View {
             switch shelf {
             case .authors where selectedAuthor == nil:
                 authorList
+            case .journals where selectedJournal == nil:
+                journalList
             case .quotes:
                 quoteList
             default:
@@ -645,6 +689,18 @@ struct SourcesView: View {
                         self.selectedAuthor = nil
                     } label: {
                         Label(selectedAuthor, systemImage: "chevron.left")
+                    }
+                    .buttonStyle(.plain)
+                    Spacer()
+                }
+                .padding(8)
+            } else if shelf == .journals, let selectedJournal {
+                HStack {
+                    Button {
+                        self.selectedJournal = nil
+                    } label: {
+                        Label(selectedJournal, systemImage: "chevron.left")
+                            .lineLimit(1)
                     }
                     .buttonStyle(.plain)
                     Spacer()
@@ -756,6 +812,34 @@ struct SourcesView: View {
             }
         }
         #endif
+    }
+
+    /// The journals list: each journal or proceedings with how many
+    /// works it holds — a click opens the journal's works, the way the
+    /// Authors shelf opens a writer's.
+    private var journalList: some View {
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: 2) {
+                ForEach(shelfJournals, id: \.name) { journal in
+                    Button {
+                        selectedJournal = journal.name
+                    } label: {
+                        HStack {
+                            Text(journal.name)
+                                .lineLimit(2)
+                            Spacer()
+                            Text("\(journal.count)")
+                                .foregroundStyle(.secondary)
+                        }
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 5)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(8)
+        }
     }
 
     private var quoteList: some View {

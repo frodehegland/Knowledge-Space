@@ -382,19 +382,62 @@ extension AppState {
         pdfWindows.append(window)
     }
 
-    // MARK: The File menu's testing door
+    // MARK: The File menu's PDF-EPUB door
 
-    /// File ▸ PDF-EPUB for Testing… — temporary, most likely removed
-    /// when shipping: pick an Author-exported EPUB, parse its citation
-    /// metadata up front (with a note saying what was found), and
-    /// adopt it into the library so its citations exercise the whole
-    /// sources pipeline.
-    func importPDFEPUBForTesting() {
+    /// File ▸ PDF-EPUB… — the world's works, adopted: an Author-
+    /// exported EPUB imports with its citation pool (metadata parsed
+    /// and reported up front); a PDF converts to an Origami EPUB in
+    /// the EPUB Library — title, author, date, journal, and cited
+    /// references as best the PDF tells them — imports, and the PDF
+    /// itself moves home to the Reader Library.
+    func importPDFEPUB() {
         let panel = NSOpenPanel()
-        panel.allowedContentTypes = [.epub]
-        panel.allowsMultipleSelection = false
-        panel.message = "Choose an Author-exported EPUB — its citations' sources (EPUB / PDF / web) become openable here."
-        guard panel.runModal() == .OK, let url = panel.url else { return }
+        panel.allowedContentTypes = [.epub, .pdf]
+        panel.allowsMultipleSelection = true
+        panel.canChooseDirectories = true
+        panel.message = "Choose EPUBs, PDFs (each converted to an Origami EPUB on the way in, the PDF then filed in the Reader Library), or folders of either."
+        guard panel.runModal() == .OK, !panel.urls.isEmpty else { return }
+        // Folders unfold to the files inside them, all the way down.
+        var epubs: [URL] = []
+        var pdfs: [URL] = []
+        for url in panel.urls {
+            _ = url.startAccessingSecurityScopedResource()
+            var isDirectory: ObjCBool = false
+            if FileManager.default.fileExists(atPath: url.path,
+                                              isDirectory: &isDirectory),
+               isDirectory.boolValue {
+                let enumerator = FileManager.default.enumerator(
+                    at: url, includingPropertiesForKeys: nil,
+                    options: [.skipsHiddenFiles, .skipsPackageDescendants])
+                while let found = enumerator?.nextObject() as? URL {
+                    switch found.pathExtension.lowercased() {
+                    case "pdf": pdfs.append(found)
+                    case "epub": epubs.append(found)
+                    default: break
+                    }
+                }
+            } else if url.pathExtension.lowercased() == "pdf" {
+                pdfs.append(url)
+            } else {
+                epubs.append(url)
+            }
+        }
+        // One PDF alone converts, imports, and opens.
+        if epubs.isEmpty, pdfs.count == 1, let pdf = pdfs.first {
+            importPDFAsEPUB(from: pdf)
+            return
+        }
+        // Several of anything run quietly: EPUBs import as they are,
+        // PDFs convert first — no windows fly open; the shelf and the
+        // library fill as the notes tell it.
+        if !(epubs.count == 1 && pdfs.isEmpty) {
+            for epub in epubs { importOrigamiEPUB(from: epub) }
+            importPDFsAsEPUBs(pdfs)
+            return
+        }
+        // One EPUB alone keeps the original testing door: metadata
+        // parsed and reported up front, then imported and opened.
+        guard let url = epubs.first else { return }
         if let metadata = OrigamiMetadata.load(fromEPUB: url) {
             if let digest = FileHasher.sha256Hex(of: url) {
                 origamiMetadataByDigest[digest] = metadata

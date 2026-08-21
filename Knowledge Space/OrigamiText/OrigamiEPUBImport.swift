@@ -51,6 +51,10 @@ nonisolated enum OrigamiEPUBImporter {
         /// carries one — the receiving library may keep it, so
         /// citations to the book resolve wherever it arrives.
         let origamiID: String?
+        /// dc:publisher from the package metadata — a book's venue,
+        /// the way Augmented Library shelves books by their publisher
+        /// when no journal names itself. (KS addition — carry back.)
+        var publisher: String? = nil
         let body: [LiquidDoc.Paragraph]
         /// Set when the EPUB declares itself an excerpt of another
         /// document (origami.json "excerptOf").
@@ -81,6 +85,7 @@ nonisolated enum OrigamiEPUBImporter {
         let creator = firstTagText(in: opf, tag: "dc:creator")
         let date = firstTagText(in: opf, tag: "dc:date")
         let identifier = firstTagText(in: opf, tag: "dc:identifier")
+        let publisher = firstTagText(in: opf, tag: "dc:publisher")
 
         // The spine's first itemref names the content document.
         guard let contentHref = spineContentHref(in: opf),
@@ -335,10 +340,35 @@ nonisolated enum OrigamiEPUBImporter {
             }
         }
 
+        // A package whose pool does not know a cited key — an export
+        // without its bibliography, say — still carried the author's
+        // own rendering in every anchor. Those become records here:
+        // "(Engelbart, Kay, Nelson 1995)" parses to author and year, a
+        // short text is the work's title, and a long one (a pasted
+        // passage) is kept as the record's note — never as an inline
+        // label. Without this, such citations read as raw keys and no
+        // citation style has anything to say. (KS addition — carry
+        // back to Augmented Library.)
+        let pooledIDs = Set(references.map(\.id))
+        for (key, raw) in capture.citedAs where !pooledIDs.contains(key) {
+            let text = collapsedLineBreaks(raw)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !text.isEmpty else { continue }
+            references.append(LiquidDoc.Reference(
+                id: key,
+                bibtex: anchorBibTeX(from: text, key: key),
+                citedAs: text.count <= 80 ? text : nil,
+                number: capture.numbers[key]))
+        }
+
         // Endnotes travel in the metadata (the body only carries their
         // daggers); they return as a Notes section closing the body,
-        // each note under its stable id.
-        let endnotes = dictionaries(visualMeta?["endnotes"]).enumerated()
+        // each note under its stable id. Inline notes (footnote asides)
+        // join them: their metadata rides in `footnotes`, their words
+        // were captured from the body's asides — either way each files
+        // under the id its dagger points at, so the reveal works the
+        // same for both kinds.
+        var notes = dictionaries(visualMeta?["endnotes"]).enumerated()
             .compactMap { offset, node -> LiquidDoc.Paragraph? in
                 guard let text = (node["text"] as? String)?
                     .trimmingCharacters(in: .whitespacesAndNewlines),
@@ -346,9 +376,21 @@ nonisolated enum OrigamiEPUBImporter {
                 return LiquidDoc.Paragraph(id: node["id"] as? String ?? "en-\(offset + 1)",
                                            heading: nil, text: text)
             }
-        if !endnotes.isEmpty {
+        var notedIDs = Set(notes.map(\.id))
+        for node in dictionaries(visualMeta?["footnotes"]) {
+            guard let id = node["id"] as? String,
+                  let text = (node["text"] as? String)?
+                      .trimmingCharacters(in: .whitespacesAndNewlines),
+                  !text.isEmpty, notedIDs.insert(id).inserted else { continue }
+            notes.append(LiquidDoc.Paragraph(id: id, heading: nil, text: text))
+        }
+        for footnote in capture.footnotes where notedIDs.insert(footnote.id).inserted {
+            notes.append(LiquidDoc.Paragraph(id: footnote.id, heading: nil,
+                                             text: footnote.text))
+        }
+        if !notes.isEmpty {
             body.append(LiquidDoc.Paragraph(id: "notes", heading: 1, text: "Notes"))
-            body.append(contentsOf: endnotes)
+            body.append(contentsOf: notes)
         }
 
         // Links come back the way they were made: derived from the
@@ -416,6 +458,7 @@ nonisolated enum OrigamiEPUBImporter {
             date: document?["date"] as? String ?? date,
             identifier: document?["identifier"] as? String ?? identifier,
             origamiID: document?["origami-id"] as? String,
+            publisher: publisher,
             body: body,
             excerptOf: excerptOf,
             links: links,
@@ -436,6 +479,46 @@ nonisolated enum OrigamiEPUBImporter {
         let content: URL
         let base: URL
         let title: String
+    }
+
+    /// An anchor's display text as a BibTeX record, best effort:
+    /// "Names 1995" (parentheses shed) parses to author and year, a
+    /// short text is a title, a long one is kept whole as the note.
+    static func anchorBibTeX(from text: String, key: String) -> String {
+        func clean(_ value: String) -> String {
+            value.replacingOccurrences(of: "{", with: "(")
+                .replacingOccurrences(of: "}", with: ")")
+        }
+        var inner = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if inner.hasPrefix("("), inner.hasSuffix(")") {
+            inner = String(inner.dropFirst().dropLast())
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        var fields: [String] = []
+        let ns = inner as NSString
+        if inner.count <= 120,
+           let regex = try? NSRegularExpression(
+               pattern: #"^(.{2,100}?)[,;\s]+\(?((?:19|20)\d\d)\)?$"#),
+           let match = regex.firstMatch(
+               in: inner, range: NSRange(location: 0, length: ns.length)),
+           match.numberOfRanges >= 3 {
+            // Names then a year: the names, comma- or &-separated,
+            // become BibTeX authors.
+            let names = ns.substring(with: match.range(at: 1))
+                .replacingOccurrences(of: " & ", with: ", ")
+                .components(separatedBy: ",")
+                .map { $0.trimmingCharacters(in: .whitespaces) }
+                .filter { !$0.isEmpty }
+            if !names.isEmpty {
+                fields.append("  author = {\(clean(names.joined(separator: " and ")))}")
+            }
+            fields.append("  year = {\(ns.substring(with: match.range(at: 2)))}")
+        } else if inner.count <= 120 {
+            fields.append("  title = {\(clean(inner))}")
+        } else {
+            fields.append("  note = {\(clean(inner))}")
+        }
+        return "@misc{\(key),\n" + fields.joined(separator: ",\n") + ",\n}"
     }
 
     static func unpack(at url: URL, into directory: URL) throws -> Unpacked {
@@ -622,6 +705,11 @@ nonisolated enum OrigamiEPUBImporter {
         /// The key whose first occurrence is still accumulating
         /// fragments — nil once anything else interrupts.
         var openKey: String?
+        /// Inline notes read from the body's footnote asides — the
+        /// note's words under the aside's own id ("fn-…"), filed with
+        /// the endnotes so the host paragraph's dagger reveals them.
+        /// (KS addition — carry back to Augmented Library.)
+        var footnotes: [(id: String, text: String)] = []
     }
 
     /// The References list's own numbering, read from the bibliography
@@ -704,6 +792,26 @@ nonisolated enum OrigamiEPUBImporter {
                 if (element.attributes["class"] ?? "").contains("ot-stretchtext-content") {
                     let blockID = element.attributes["id"].map { idPrefix + $0 } ?? stableID()
                     for child in element.elements { visit(child, stretchID: blockID) }
+                } else if (element.attributes["epub:type"] ?? "").contains("footnote")
+                    || (element.attributes["role"] ?? "").contains("doc-footnote") {
+                    // An inline note (Author's footnote aside): its
+                    // words are the note's, not the flow's. Kept under
+                    // the aside's own id, where the host paragraph's
+                    // noteref dagger points — filed with the endnotes
+                    // after the body, never inlined as a stray
+                    // paragraph.
+                    if let id = element.attributes["id"] {
+                        let text = element.elements
+                            .map {
+                                collapsedLineBreaks(inlineText(
+                                    of: $0,
+                                    addressByCitationID: addressByCitationID,
+                                    capture: capture))
+                            }
+                            .joined(separator: " ")
+                            .trimmingCharacters(in: .whitespacesAndNewlines)
+                        if !text.isEmpty { capture?.footnotes.append((id, text)) }
+                    }
                 } else {
                     for child in element.elements { visit(child, stretchID: stretchID) }
                 }
@@ -965,6 +1073,18 @@ nonisolated enum OrigamiEPUBImporter {
                                     capture.openKey = nil
                                 }
                             }
+                        }
+                    } else if (inner.attributes["class"] ?? "").contains("ot-inline-note") {
+                        // An inline note travelling as stretchtext
+                        // (Author's Stretchtext export): the mark
+                        // folds the note's words open in place — [] —
+                        // while the words themselves are filed with
+                        // the endnotes, where the token's id finds
+                        // them. The ‡ the anchor shows plain readers
+                        // is chrome here, not content.
+                        if let href = inner.attributes["href"],
+                           let hash = href.firstIndex(of: "#") {
+                            out += "[inote:\(href[href.index(after: hash)...])]"
                         }
                     } else if (inner.attributes["epub:type"] ?? "").contains("noteref")
                         || (inner.attributes["role"] ?? "").contains("doc-noteref") {

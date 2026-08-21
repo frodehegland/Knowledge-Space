@@ -259,24 +259,38 @@ on whitespace (put the space outside the element). Importers also read `<b>` as 
 
 **A citation** points at an entry in the reference pool (§5.3) by key. The anchor carries
 the key in `data-citation-key` and the entry's 1-based place in the reference list in
-`data-citation-number`; the visible label is the citation as its author wrote it
-(author–date), so a plain reader sees a normal citation:
+`data-citation-number`; the visible label is the number, bracketed — `[1]` — the one
+form every EPUB reader shows sensibly without knowing this profile:
 
 ```xml
 <a epub:type="biblioref" role="doc-biblioref" data-citation-key="hegland2021vm"
    data-citation-number="1"
-   href="backmatter.xhtml#bib-hegland2021vm">(Hegland, 2021)</a>
+   href="backmatter.xhtml#bib-hegland2021vm">[1]</a>
 ```
 
-Importers identify the citation by `data-citation-key`, and **read, never regenerate**,
-what the anchor carries: the text content is always present and always correct to show
-verbatim (the author–date reading), and `data-citation-number` is the number a numbered
-citation style shows — a reader must not renumber on its own, or the in-text citations
-and the visible reference list would disagree. Adjacent anchors sharing one key collapse
-to one citation token, their text fragments read as one label. The raw key is a last
-resort shown bracketed (`[hegland2021vm]`) only when both text and number are missing;
-an unresolved citation never surfaces as machine syntax. The `href` is conventional
-(`backmatter.xhtml#bib-<key>`) — see §8 on strict validation.
+Three rules make this robust for every producer:
+
+1. **The label is `[n]`** and the `href` resolves to a real bibliography entry
+   (`backmatter.xhtml#bib-<key>`, §3.7) — so in a traditional reader the citation is a
+   working numbered citation: `[1]` in the text, the full reference one click away.
+   Richer renderings — the author–date as the author wrote it — travel as `citedAs` on
+   the pool entry (§5.3), where an Origami reader restyles citations to the reader's
+   chosen form. The anchor text is the floor, not the ceiling.
+2. **The key is complete, stable, and unique** within the work — never truncated (a cut
+   UUID collides), never regenerated between exports of the same document.
+3. **`data-citation-number` is authoritative.** A reader must not renumber on its own,
+   or the in-text citations and the visible reference list would disagree; the numbers
+   run in bibliography order.
+
+Importers identify the citation by `data-citation-key` and **read, never regenerate**,
+what the file carries: pool `citedAs` first, the anchor's text next, the number always.
+Adjacent anchors sharing one key collapse to one citation token, their text fragments
+read as one label. When the pool does not know a cited key (a malformed export), an
+importer should mint a record from the anchor's own text rather than drop the citation —
+parsing "Names YYYY" to author and year, keeping a short text as the title and a long
+one as the record's note — so the citation stays clickable and restylable. The raw key
+is a last resort shown bracketed, only when everything else is missing; an unresolved
+citation never surfaces as machine syntax.
 
 **An endnote dagger** marks where a note attaches. The note's *words* do not appear in
 the flow; they ride in `origami.json` (§5.4). The dagger:
@@ -287,6 +301,42 @@ the flow; they ride in `origami.json` (§5.4). The dagger:
 
 Here the `href` **fragment is load-bearing**: the part after `#` must be exactly the
 note's id in the `endnotes` array. `&#8224;` is the dagger character (†).
+
+**An inline note** (a footnote living beside its paragraph, not at the back) is the
+same noteref anchor pointing at a same-document footnote aside, which follows the host
+block:
+
+```xml
+<a epub:type="noteref" role="doc-noteref" href="#fn-1">&#8224;</a>
+…
+<aside epub:type="footnote" role="doc-footnote" id="fn-1">
+<p id="P-fn-1">The note's words, in place.</p></aside>
+```
+
+The note also rides in `origami.json` under `footnotes` (`{id, anchor, text}` — the id
+matching the aside's, the anchor naming the host block). A plain EPUB reader shows the
+aside beneath the paragraph (or as a popup — Apple Books treats `doc-footnote` asides
+so); an Origami importer files the note's words under its id with the endnotes and
+**never inlines the aside as body text** — the words are the note's, not the flow's,
+and the dagger reveals them on demand.
+
+**An inline note as stretchtext** (Author's "Inline notes: Stretchtext" export) folds
+open *in place* in an Origami reader while degrading to an appendix note everywhere
+else. The anchor carries `class="ot-inline-note"` and points at the note's entry among
+the back matter's endnotes; there is no same-document aside:
+
+```xml
+<a epub:type="noteref" role="doc-noteref" class="ot-inline-note"
+   href="backmatter.xhtml#en-fn-1">&#8225;</a>
+```
+
+The note's words ride with the endnotes — in `origami.json → endnotes` and in the back
+matter's Notes list — under the fragment's id (`en-fn-1`). In a plain EPUB reader the
+mark (`&#8225;`, ‡) is a working link to a readable appendix entry, the same journey a
+citation makes. An Origami reader shows the mark as `[]` and, opened, continues the
+sentence in place — `[` before the note's words, `]` after — a click on any of it
+folding the note back. Importers writing the Origami document format carry the mark as
+an `[inote:<id>]` token; the anchor's own glyph is chrome, not content.
 
 ### 3.5 Tables
 
@@ -322,6 +372,37 @@ paragraphs sharing one fold wrap in a single `<aside>`:
 - Paragraphs inside are ordinary blocks per §3.2 with their own stable ids.
 - A toggle anchor in the host paragraph (`<a class="ot-stretchtext…">›</a>`) is chrome
   from Author's dialect; producers need not emit one, and importers discard it.
+
+### 3.7 Back matter (`backmatter.xhtml`)
+
+A document that cites or carries endnotes **must** ship `backmatter.xhtml`, listed in
+the manifest and at the spine's end. It is what makes the package whole for a reader
+that knows nothing of this profile: every `[n]` in the text is a link that lands on a
+real, readable entry.
+
+```xml
+<section epub:type="bibliography" role="doc-bibliography">
+<h2>References</h2>
+<ol>
+<li id="bib-hegland2021vm">Frode Hegland. (2021). “Visual-Meta: An Approach to
+Surfacing Metadata”. Proceedings of the 32nd ACM Conference on Hypertext.</li>
+</ol>
+</section>
+<section epub:type="endnotes" role="doc-endnotes">
+<h2>Notes</h2>
+<ol>
+<li id="en-1">The note's words, in full.</li>
+</ol>
+</section>
+```
+
+- Every `data-citation-key` in the body has its `<li id="bib-<key>">`, in
+  `data-citation-number` order, carrying a human-readable reference line (authors, year,
+  title, venue, DOI — however much the record knows). An empty `<li>` is a broken
+  promise: the anchor's link goes nowhere useful.
+- Every noteref dagger's fragment has its `<li id="<note-id>">` with the note's words.
+- The pool (§5.3) remains the machine's truth — BibTeX, `citedAs`, `number`; the back
+  matter is the same truth in human form. They must agree.
 
 ## 4. Escaping and whitespace
 
@@ -562,6 +643,10 @@ target per citation key (`bib-<key>`) and per note id. Origami importers ignore 
    fragment has an `endnotes` entry; every `data-table-id` has a `tables` entry; every
    `<img src>` has a package file and a manifest item; every `scene-resource` field has
    a `data/` package file and a manifest item (§2.4).
+6a. Citation anchors read `[n]`, carry a complete (never truncated) stable
+   `data-citation-key` and a `data-citation-number`, and `backmatter.xhtml` holds a
+   readable `bib-<key>` entry for every one of them and a note body for every dagger
+   (§3.4, §3.7). A citing document without its back matter ships broken links.
 7. Speaker turns lead with `<strong class="speaker">Name:</strong>` and a space;
    continuations carry `data-speaker`.
 8. Titles, authors, and dates agree between the OPF and `origami.json`.

@@ -187,6 +187,9 @@ struct OrigamiReadingView: View {
     @State private var focusIndex = 0
     @State private var collapsed: Set<String> = []
     @State private var openStretch: Set<String> = []
+    /// Inline notes travelling as stretchtext: the ids whose [] is
+    /// unfolded, the words bracketed in place.
+    @State private var openInlineNotes: Set<String> = []
     @State private var commentTarget: CommentTarget?
     @State private var conceptTarget: LiquidDoc.Concept?
     @State private var citationTarget: CitationTarget?
@@ -1702,6 +1705,14 @@ struct OrigamiReadingView: View {
             else { return [] }
 
             var entries: [ParagraphMenuEntry] = [.separator]
+            // The chosen words as a citation: pasted into Author they
+            // arrive as (author, date) with the selection in the Quote
+            // field, and the vm-id address walks back to this very
+            // paragraph — so the citation, exported onward in Author's
+            // EPUB, opens the original here in full.
+            entries.append(.action(title: "Copy to Cite", symbol: "quote.opening") {
+                copyCitation(for: paragraph, quote: selected)
+            })
             entries.append(.action(title: "Highlight Selection", symbol: "highlighter") {
                 state.addHighlight(to: doc, paragraphID: paragraph.id, exact: selected)
             })
@@ -1769,6 +1780,16 @@ struct OrigamiReadingView: View {
                     openGlossary.remove(conceptID)
                 } else {
                     openGlossary.insert(conceptID)
+                }
+            }
+            return true
+        }
+        if let inlineID = OrigamiReading.inlineNoteID(from: url) {
+            withAnimation(.easeInOut(duration: 0.15)) {
+                if openInlineNotes.contains(inlineID) {
+                    openInlineNotes.remove(inlineID)
+                } else {
+                    openInlineNotes.insert(inlineID)
                 }
             }
             return true
@@ -1874,9 +1895,12 @@ struct OrigamiReadingView: View {
     /// block for anyone, and Author's citation payload — the quote and
     /// a full BibTeX entry whose vm-id addresses the original document
     /// and paragraph — so Author pastes it as a real citation.
-    private func copyCitation(for paragraph: LiquidDoc.Paragraph) {
-        let text = OrigamiReading.citation(for: paragraph, in: doc, view: viewState)
-        let payload = OrigamiReading.authorCitationPayload(for: paragraph, in: doc)
+    private func copyCitation(for paragraph: LiquidDoc.Paragraph,
+                              quote: String? = nil) {
+        let text = OrigamiReading.citation(for: paragraph, in: doc,
+                                           view: viewState, quote: quote)
+        let payload = OrigamiReading.authorCitationPayload(for: paragraph, in: doc,
+                                                           quote: quote)
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
         pasteboard.setString(text, forType: .string)
@@ -2041,6 +2065,12 @@ struct OrigamiReadingView: View {
                                                           display: glossaryDisplay,
                                                           open: openGlossary)
         }
+        // Inline notes travelling as stretchtext: [] at the note's
+        // mark; open, [ the note's words ] continue the sentence.
+        attributed = OrigamiReading.inlineNotesResolved(
+            attributed, in: doc, open: openInlineNotes,
+            citations: citationStyle, markStyle: markedStyle,
+            appearance: colorScheme)
         if let stretch = trailingStretch,
            let url = URL(string: OrigamiReading.stretchScheme + ":" + stretch.id) {
             let isOpen = openStretch.contains(stretch.id)
@@ -2747,7 +2777,8 @@ private struct SelectableParagraph: NSViewRepresentable {
                 // references: no underline.
                 attributes[.link] = link
                 if link.scheme != "origami-stretch", link.scheme != "origami-gloss",
-                   link.scheme != "origami-note", link.scheme != "origami-conceptcard" {
+                   link.scheme != "origami-note", link.scheme != "origami-inote",
+                   link.scheme != "origami-conceptcard" {
                     attributes[.underlineStyle] = NSUnderlineStyle.single.rawValue
                     attributes[.underlineColor] = ink.withAlphaComponent(0.35)
                 }
@@ -2860,8 +2891,8 @@ private struct SelectableParagraph: NSViewRepresentable {
                 if index < storage.length,
                    let url = storage.attribute(.link, at: index,
                                                effectiveRange: nil) as? URL,
-                   ["origami-stretch", "origami-gloss", "origami-note", "origami-cite",
-                    "origami-conceptcard"]
+                   ["origami-stretch", "origami-gloss", "origami-note", "origami-inote",
+                    "origami-cite", "origami-conceptcard"]
                        .contains(url.scheme ?? "") {
                     let glyphRange = layoutManager.glyphRange(
                         forCharacterRange: NSRange(location: index, length: 1),
