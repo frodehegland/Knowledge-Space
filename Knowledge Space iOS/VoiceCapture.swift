@@ -437,6 +437,9 @@ struct VoiceCaptureView: View {
     @State private var isImportant = false
     @State private var filingKind: LiquidDoc.DocumentType = .note
     @State private var filingFolder: String? = nil
+    /// Once dictation is done and the person taps in to edit, the big
+    /// record circle steps aside — the keyboard's own mic serves from there.
+    @FocusState private var editorFocused: Bool
 
     private var isRecording: Bool { recorder.state == .recording }
 
@@ -480,8 +483,10 @@ struct VoiceCaptureView: View {
                 filingMenu
                     .padding(.horizontal)
 
-                recordButton
-                    .padding(.bottom, 8)
+                if !editorFocused {
+                    recordButton
+                        .padding(.bottom, 8)
+                }
             }
             .padding()
             // No heading — the note names itself from its first words.
@@ -526,6 +531,7 @@ struct VoiceCaptureView: View {
                         .allowsHitTesting(false)
                 }
             }
+            .focused($editorFocused)
             .disabled(isRecording)   // hands off while dictating
     }
 
