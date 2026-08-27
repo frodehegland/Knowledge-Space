@@ -235,13 +235,20 @@ final class VisionArmMenu {
         // Select button when the arm hangs naturally.
         settingsHost?.position = togglePos - armLocal * 0.07
 
-        // Chip ring is centred at the toggle position.
-        let chipRadius: Float = 0.09
+        // Chips fan in a 180° arc on the dorsal face — from left edge to top
+        // centre to right edge — so every chip is on the viewer-facing side.
+        // A full 360° ring puts half the chips on the palmar side (buried in the
+        // arm) making them unreachable; the arc keeps sin(angle) ≥ 0 throughout.
+        let chipRadius: Float = 0.10
         let count = Self.filters.count
         for (index, spec) in Self.filters.enumerated() {
             guard let host = chipHosts[spec.id] else { continue }
-            let angle = 2 * Float.pi * Float(index) / Float(count) - Float.pi / 2
-            host.position = togglePos + right * chipRadius * cos(angle) + lift * chipRadius * sin(angle)
+            let t = count > 1 ? Float(index) / Float(count - 1) : 0.5
+            // angle runs π → 0  (left side → top → right side, all dorsal)
+            let angle = Float.pi * (1.0 - t)
+            host.position = togglePos
+                + right * (chipRadius * cos(angle))
+                + lift  * (chipRadius * sin(angle))
         }
     }
 
