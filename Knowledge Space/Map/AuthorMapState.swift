@@ -202,6 +202,10 @@ final class AuthorMapState {
     var weaveCenter: WeaveCenter = .keyword("hypertext")
     var isWeaveSpaceOpen = false
 
+    /// Whether the flexible room space is currently open — only one immersive
+    /// space can hold the room at a time.
+    var isFlexSpaceOpen = false
+
     /// The toolbar and settings windows report themselves open here, so
     /// the wrist bangles can toggle them from inside the space.
     var isControlsWindowOpen = false

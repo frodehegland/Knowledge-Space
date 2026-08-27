@@ -298,6 +298,9 @@ struct PageCaptureView: View {
     /// The last find, so a page still held up does not reopen its
     /// document every few seconds.
     @State private var lastHit: (doc: String, place: String?, at: Date)?
+    /// Set when macOS has the camera switched off for this app — the
+    /// one state a button can mend, so one appears beside the status.
+    @State private var cameraDenied = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -321,6 +324,10 @@ struct PageCaptureView: View {
                     .foregroundStyle(.secondary)
                     .lineLimit(2)
                 Spacer()
+                if cameraDenied {
+                    Button("Open Camera Settings") { openCameraSettings() }
+                        .help("System Settings ▸ Privacy & Security ▸ Camera — turn Knowledge Space on there, then reopen this window")
+                }
                 Button("Cancel") { dismiss() }
                     .keyboardShortcut(.cancelAction)
             }
@@ -331,12 +338,24 @@ struct PageCaptureView: View {
         .onDisappear { camera.stop() }
     }
 
+    /// System Settings ▸ Privacy & Security ▸ Camera — the pane where
+    /// this app's own camera switch lives. (macOS asks the app to
+    /// quit and reopen when the switch flips; the window is fresh on
+    /// the next Hold Up a Page.)
+    private func openCameraSettings() {
+        guard let url = URL(string:
+            "x-apple.systempreferences:com.apple.preference.security?Privacy_Camera")
+        else { return }
+        NSWorkspace.shared.open(url)
+    }
+
     /// The loop: a frame every beat, OCR, then the match — each stage
     /// off the main thread; the first clear find opens and closes. The
     /// status line beats with it, so a quiet window is never a mystery.
     private func watch() async {
         guard await PageCamera.authorized() else {
-            status = "The camera is not permitted — grant it in System Settings ▸ Privacy & Security ▸ Camera."
+            cameraDenied = true
+            status = "The camera is not permitted for Knowledge Space."
             return
         }
         let camera = self.camera

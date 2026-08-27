@@ -66,26 +66,35 @@ final class MapArmMenu {
     /// `Attachment` per chip and hand each entity back through `register`.
     var attachmentIDs: [String] { specs.map(\.id) }
 
-    /// Starts hand tracking and builds the chip entities under `root` —
-    /// a persistent entity the view keeps out of its own map sweep.
-    func start(in root: Entity) {
-        guard !started else { return }
-        started = true
-        Task { await startTracking(in: root) }
-    }
-
-    private func startTracking(in root: Entity) async {
-        let session = SpatialTrackingSession()
-        _ = await session.run(SpatialTrackingSession.Configuration(tracking: [.hand]))
-        self.session = session
-
+    /// Creates the wrist and knuckle AnchorEntities for both hands and returns
+    /// them so the caller can add them top-level to RealityViewContent.
+    /// AnchorEntities must be direct children of content — not nested under a
+    /// plain Entity — to receive hand-tracking updates from the system.
+    /// Call this synchronously from the RealityView make closure before start().
+    func prepareAnchors() -> [AnchorEntity] {
+        var result: [AnchorEntity] = []
         for side in [WristSide.left, .right] {
             let wrist = AnchorEntity(.hand(side.chirality, location: .joint(for: .wrist)))
             let knuckle = AnchorEntity(.hand(side.chirality, location: .joint(for: .middleFingerKnuckle)))
-            root.addChild(wrist)
-            root.addChild(knuckle)
             wrists[side] = Wrist(wrist: wrist, knuckle: knuckle)
+            result += [wrist, knuckle]
         }
+        return result
+    }
+
+    /// Starts the hand-tracking session. The wrist/knuckle anchors are already
+    /// in the scene (added by the caller via prepareAnchors); once the session
+    /// authorises the system begins driving them to the hand joints each frame.
+    func start() {
+        guard !started else { return }
+        started = true
+        Task { await startTracking() }
+    }
+
+    private func startTracking() async {
+        let session = SpatialTrackingSession()
+        _ = await session.run(SpatialTrackingSession.Configuration(tracking: [.hand]))
+        self.session = session
         buildHosts()
     }
 

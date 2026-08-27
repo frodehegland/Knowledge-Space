@@ -145,6 +145,28 @@ struct MapLibraryView: View {
                         .foregroundStyle(.secondary)
                 }
 
+                // Room-scale flexible space: all documents float free in
+                // the room, draggable to any position, reading the same
+                // .liquid.json format as the macOS app.
+                Button {
+                    Task { @MainActor in
+                        if state.isMapSpaceOpen {
+                            if state.hasUnsavedChanges { state.save() }
+                            await dismissImmersiveSpace()
+                        } else if state.isWeaveSpaceOpen {
+                            await dismissImmersiveSpace()
+                        }
+                        if !state.isFlexSpaceOpen {
+                            _ = await openImmersiveSpace(id: "FlexibleRoomSpace")
+                        }
+                        openWindow(id: "FlexSpaceControls")
+                        dismissWindow(id: "Library")
+                    }
+                } label: {
+                    Label("Room Space", systemImage: "rectangle.3.group")
+                }
+                .buttonStyle(.borderedProminent)
+
                 // The library in the round, filling the room. The
                 // folder map steps aside (saved first) — one immersive
                 // space at a time — and the browser steps aside too,
@@ -153,6 +175,8 @@ struct MapLibraryView: View {
                     Task { @MainActor in
                         if state.isMapSpaceOpen {
                             if state.hasUnsavedChanges { state.save() }
+                            await dismissImmersiveSpace()
+                        } else if state.isFlexSpaceOpen {
                             await dismissImmersiveSpace()
                         }
                         if !state.isWeaveSpaceOpen {
@@ -385,6 +409,24 @@ struct MapControlsView: View {
                 Task { @MainActor in
                     if state.isMapSpaceOpen {
                         if state.hasUnsavedChanges { state.save() }
+                        await dismissImmersiveSpace()
+                    }
+                    if !state.isFlexSpaceOpen {
+                        _ = await openImmersiveSpace(id: "FlexibleRoomSpace")
+                    }
+                    openWindow(id: "FlexSpaceControls")
+                }
+            } label: {
+                Label("Room Space", systemImage: "rectangle.3.group")
+            }
+            .labelStyle(.iconOnly)
+
+            Button {
+                Task { @MainActor in
+                    if state.isMapSpaceOpen {
+                        if state.hasUnsavedChanges { state.save() }
+                        await dismissImmersiveSpace()
+                    } else if state.isFlexSpaceOpen {
                         await dismissImmersiveSpace()
                     }
                     if !state.isWeaveSpaceOpen {

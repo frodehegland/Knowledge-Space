@@ -22,7 +22,10 @@ private let scanLog = Logger(subsystem: "com.origami.notes", category: "scan")
 
 // MARK: - The camera
 
+#if !os(visionOS)
 /// The system camera, one photo, handed back as UIImage.
+/// visionOS has no UIImagePickerController camera source; the Inspiration
+/// feature is iOS/iPadOS-only.
 struct CameraCapture: UIViewControllerRepresentable {
     let onPhoto: (UIImage?) -> Void
 
@@ -55,6 +58,7 @@ struct CameraCapture: UIViewControllerRepresentable {
         }
     }
 }
+#endif
 
 // MARK: - The reading
 

@@ -57,15 +57,16 @@ struct AuthorMapSpaceView: View {
             content.add(root)
             layout(root: root, attachments: attachments)
 
-            // The forearm menus live under their own root, so the map's
-            // per-frame sweep never touches the wrist anchors. Hand
-            // tracking starts, chips are registered, and a scene-update
-            // subscription re-lays them each frame as the hands move.
-            let armRoot = Entity()
-            armRoot.name = "ArmRoot"
-            content.add(armRoot)
+            // Forearm menu: wrist/knuckle AnchorEntities must be top-level in
+            // content — not nested under a plain Entity — so the system delivers
+            // hand-tracking transforms to them each frame. The chip hosts are
+            // children of those anchors, so they never interfere with the map's
+            // child sweep (which only touches children of root).
             armMenu.configure(armSpecs)
-            armMenu.start(in: armRoot)
+            for anchor in armMenu.prepareAnchors() {
+                content.add(anchor)
+            }
+            armMenu.start()
             for id in armMenu.attachmentIDs {
                 armMenu.register(attachments.entity(for: id), id: id)
             }
@@ -207,6 +208,18 @@ struct AuthorMapSpaceView: View {
             } else {
                 card.components.remove(BillboardComponent.self)
             }
+            // InputTargetComponent is required for SwiftUI attachment gestures
+            // (hover, tap, drag) to receive spatial input in an immersive space.
+            // Use the rendered bounds when available; fall back to a card-sized box.
+            let bounds = card.visualBounds(relativeTo: root).extents
+            let w = bounds.x > 0.01 ? bounds.x : 0.28
+            let h = bounds.y > 0.01 ? bounds.y : 0.12
+            card.components.set(CollisionComponent(
+                shapes: [.generateBox(size: SIMD3(w, h, 0.01))],
+                mode: .trigger,
+                filter: .sensor
+            ))
+            card.components.set(InputTargetComponent(allowedInputTypes: .indirect))
             card.position = roomPosition(of: node)
 
             if !nodeBillboarding,

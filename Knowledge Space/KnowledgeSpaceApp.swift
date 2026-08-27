@@ -131,6 +131,24 @@ struct KnowledgeSpaceApp: App {
         .defaultWindowPlacement { _, _ in
             WindowPlacement(.utilityPanel)
         }
+
+        // Room-scale flexible space: every .liquid.json document floats
+        // as a freely positionable card anywhere in the room. Reads the
+        // same format as the macOS app. Only one immersive space at a time.
+        ImmersiveSpace(id: "FlexibleRoomSpace") {
+            FlexibleRoomSpaceView()
+                .environment(mapState)
+        }
+
+        // Minimal control bar for the flexible room space.
+        Window("Room Space", id: "FlexSpaceControls") {
+            FlexSpaceControlsView()
+                .environment(mapState)
+        }
+        .windowResizability(.contentSize)
+        .defaultWindowPlacement { _, _ in
+            WindowPlacement(.utilityPanel)
+        }
         #else
         // A single, titled window: macOS lists "Knowledge Space" in the
         // Window menu by itself, so a closed window can always be
