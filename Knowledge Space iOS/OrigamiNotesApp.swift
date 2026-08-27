@@ -159,8 +159,35 @@ struct OrigamiNotesApp: App {
     @State private var model = NotesModel.shared
     @AppStorage(NotesTheme.key) private var themeRaw = NotesTheme.gentle.rawValue
     private var theme: NotesTheme { NotesTheme(rawValue: themeRaw) ?? .cool }
+    #if os(visionOS)
+    @State private var roomModel = VisionRoomModel()
+    #endif
 
     var body: some Scene {
+        #if os(visionOS)
+        // Launcher window: auto-enters the room on appearance.
+        WindowGroup(id: "VisionLibrary") {
+            VisionLibraryView()
+                .environment(model)
+                .environment(roomModel)
+        }
+        .defaultSize(width: 400, height: 260)
+
+        // Settings: folder picker, opened from the right-wrist button.
+        Window("Settings", id: "VisionSettings") {
+            VisionSettingsView()
+                .environment(model)
+                .environment(roomModel)
+        }
+        .defaultSize(width: 340, height: 180)
+
+        // The room itself: every .liquid.json document floats in world space.
+        ImmersiveSpace(id: "VisionRoomSpace") {
+            VisionRoomSpaceView()
+                .environment(model)
+                .environment(roomModel)
+        }
+        #else
         WindowGroup {
             NotesHomeView()
                 .environment(model)
@@ -171,6 +198,7 @@ struct OrigamiNotesApp: App {
                 // fixed designs, the system's own for Warm and Cool.
                 .preferredColorScheme(theme.enforcedScheme)
         }
+        #endif
     }
 }
 
@@ -1227,6 +1255,7 @@ struct NewNoteView: View {
             }
         }
         .fullScreenCover(isPresented: $scanning) {
+            #if !os(visionOS)
             CameraCapture { photo in
                 scanning = false
                 guard let photo else {
@@ -1255,6 +1284,11 @@ struct NewNoteView: View {
                 }
             }
             .ignoresSafeArea()
+            #else
+            // Inspiration scanning is iOS/iPadOS only — Vision Pro has no
+            // UIImagePickerController camera source.
+            EmptyView().onAppear { scanning = false }
+            #endif
         }
     }
 

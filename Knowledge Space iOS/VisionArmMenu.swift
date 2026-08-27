@@ -73,21 +73,17 @@ final class VisionArmMenu {
     private(set) var chipHosts: [String: Entity] = [:]
     /// Invisible interaction target for the pill button attachment.
     private var toggleHost: Entity?
+    /// Settings button — right arm only.
+    private var settingsHost: Entity?
+    private static let settingsEntityName = "arm:settings:r"
     private var wristAnchor: AnchorEntity?
     private var knuckleAnchor: AnchorEntity?
     var updateSubscription: EventSubscription?
-    /// Retained here (on the class) so it outlives any task body that created it.
-    private var session: SpatialTrackingSession?
-
-    /// Runs (or co-runs) the shared hand-tracking session.
-    /// Only the left arm actually starts the session; the right arm calls this
-    /// too but the guard prevents a second session from competing.
-    private static var sharedSession: SpatialTrackingSession?
-    private static var sessionStarted = false
 
     /// Called after the shared SpatialTrackingSession has started.
     func enableButton() {
         toggleHost?.isEnabled = true
+        settingsHost?.isEnabled = true
     }
 
     // MARK: Eager build — synchronous, call from make closure
@@ -137,6 +133,22 @@ final class VisionArmMenu {
             chipHosts[spec.id] = host
         }
 
+        // Settings button — right arm only, positioned along the forearm by layout().
+        if chirality == .right {
+            let settings = Entity()
+            settings.name = Self.settingsEntityName
+            settings.components.set(CollisionComponent(
+                shapes: [.generateBox(size: SIMD3(0.10, 0.04, 0.02))],
+                mode: .trigger,
+                filter: .sensor
+            ))
+            settings.components.set(InputTargetComponent(allowedInputTypes: .indirect))
+            settings.components.set(HoverEffectComponent())
+            settings.isEnabled = false
+            wrist.addChild(settings)
+            settingsHost = settings
+        }
+
         return [wrist, knuckle]
     }
 
@@ -147,6 +159,18 @@ final class VisionArmMenu {
             let childName = "aatn:" + toggleEntityName
             if host.findEntity(named: childName) == nil,
                let entity = attachments.entity(for: toggleEntityName) {
+                entity.name = childName
+                entity.components.set(BillboardComponent())
+                entity.scale = SIMD3(repeating: 0.35)
+                host.addChild(entity)
+            }
+        }
+
+        // Settings button (right arm only)
+        if let host = settingsHost {
+            let childName = "aatn:" + Self.settingsEntityName
+            if host.findEntity(named: childName) == nil,
+               let entity = attachments.entity(for: Self.settingsEntityName) {
                 entity.name = childName
                 entity.components.set(BillboardComponent())
                 entity.scale = SIMD3(repeating: 0.35)
@@ -206,6 +230,11 @@ final class VisionArmMenu {
         let togglePos = lift * 0.07
         toggleHost?.position = togglePos
 
+        // Settings button: 7 cm further toward the elbow (-armLocal direction)
+        // from the toggle, at the same dorsal lift — so it reads as "below" the
+        // Select button when the arm hangs naturally.
+        settingsHost?.position = togglePos - armLocal * 0.07
+
         // Chip ring is centred at the toggle position.
         let chipRadius: Float = 0.09
         let count = Self.filters.count
@@ -222,6 +251,15 @@ final class VisionArmMenu {
         var node: Entity? = entity
         while let current = node {
             if current.name == toggleEntityName { return true }
+            node = current.parent
+        }
+        return false
+    }
+
+    func isSettings(_ entity: Entity) -> Bool {
+        var node: Entity? = entity
+        while let current = node {
+            if current.name == Self.settingsEntityName { return true }
             node = current.parent
         }
         return false
@@ -258,6 +296,22 @@ struct VisionArmToggleButton: View {
                 Capsule()
                     .strokeBorder(Color.white.opacity(isExpanded ? 0.7 : 0.35), lineWidth: 1.5)
             )
+            .allowsHitTesting(false)
+    }
+}
+
+// MARK: - Settings button view
+
+struct VisionArmSettingsButton: View {
+    var body: some View {
+        Label("Settings", systemImage: "gearshape")
+            .labelStyle(.titleAndIcon)
+            .font(.system(size: 18, weight: .semibold))
+            .foregroundStyle(.white)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 10)
+            .background(Capsule().fill(.regularMaterial))
+            .overlay(Capsule().strokeBorder(Color.white.opacity(0.35), lineWidth: 1.5))
             .allowsHitTesting(false)
     }
 }

@@ -22,9 +22,10 @@ import UniformTypeIdentifiers
 
 // MARK: - Library
 
-/// The way into the room-scale space: shows the community folder's document
-/// count and the single button that opens the immersive space. If no folder
-/// has been chosen yet, offers the folder picker instead.
+/// Transitional launcher: immediately enters the room space once a folder is
+/// available. On first launch (no folder saved) it presents the picker; after
+/// that each launch goes straight into the immersive room. The folder can be
+/// changed later from the right-wrist Settings button.
 struct VisionLibraryView: View {
     @Environment(NotesModel.self) private var notes
     @Environment(VisionRoomModel.self) private var roomModel
@@ -32,62 +33,53 @@ struct VisionLibraryView: View {
     @Environment(\.dismissWindow) private var dismissWindow
 
     @State private var choosingFolder = false
+    @State private var didOpen = false
 
     var body: some View {
-        VStack(spacing: 24) {
-            Label("Knowledge Space", systemImage: "rectangle.3.group")
-                .font(.largeTitle.weight(.semibold))
-                .padding(.bottom, 4)
-
+        Group {
             if notes.folderURL == nil {
                 ContentUnavailableView {
                     Label("No Community Folder", systemImage: "folder")
                 } description: {
-                    Text("Choose your community folder. Every document in it — notes, journal, letters, articles — will float in the room.")
+                    Text("Choose the folder your community shares. Every document in it will float in the room.")
                 } actions: {
                     Button("Choose Folder…") { choosingFolder = true }
                         .buttonStyle(.borderedProminent)
                 }
             } else {
-                if roomModel.isScanning {
+                VStack(spacing: 12) {
                     ProgressView()
-                    Text("Reading the folder…")
+                    Text("Opening room…")
                         .foregroundStyle(.secondary)
-                } else {
-                    Text("\(roomModel.docs.count) document\(roomModel.docs.count == 1 ? "" : "s") ready")
-                        .foregroundStyle(.secondary)
-
-                    Button("Enter Room Space") {
-                        Task { @MainActor in
-                            _ = await openImmersiveSpace(id: "VisionRoomSpace")
-                            dismissWindow(id: "VisionLibrary")
-                        }
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .font(.title2)
-                    .disabled(roomModel.docs.isEmpty)
                 }
-
-                Button("Choose Another Folder…") { choosingFolder = true }
-                    .buttonStyle(.borderless)
-                    .foregroundStyle(.secondary)
             }
         }
         .padding(40)
-        .frame(minWidth: 360)
+        .frame(minWidth: 360, minHeight: 220)
         .fileImporter(isPresented: $choosingFolder,
                       allowedContentTypes: [.folder]) { result in
             if case .success(let url) = result {
                 notes.openFolder(url)
+                scanAndOpen(folder: url)
             }
         }
-        .onAppear { scanIfReady() }
-        .onChange(of: notes.folderURL) { _, _ in scanIfReady() }
+        .onAppear {
+            if let folder = notes.folderURL {
+                scanAndOpen(folder: folder)
+            } else {
+                choosingFolder = true
+            }
+        }
     }
 
-    private func scanIfReady() {
-        guard let folder = notes.folderURL else { return }
+    private func scanAndOpen(folder: URL) {
         roomModel.scan(folder: folder)
+        guard !didOpen else { return }
+        didOpen = true
+        Task { @MainActor in
+            _ = await openImmersiveSpace(id: "VisionRoomSpace")
+            dismissWindow(id: "VisionLibrary")
+        }
     }
 }
 
@@ -105,6 +97,8 @@ struct VisionLibraryView: View {
 /// @PhysicalMetric conversion needed.
 struct VisionRoomSpaceView: View {
     @Environment(VisionRoomModel.self) private var roomModel
+    @Environment(NotesModel.self) private var notes
+    @Environment(\.openWindow) private var openWindow
 
     /// Stored card positions in room metres (world origin, z-negative = forward).
     @State private var positions: [String: SIMD3<Float>] = [:]
@@ -214,6 +208,10 @@ struct VisionRoomSpaceView: View {
                     VisionFilterChip(spec: spec, isHidden: isDimmed)
                 }
             }
+            // Right arm: Settings button along the forearm.
+            Attachment(id: "arm:settings:r") {
+                VisionArmSettingsButton()
+            }
         }
         .task {
             // One shared session for both arms avoids competing session conflicts.
@@ -273,7 +271,12 @@ struct VisionRoomSpaceView: View {
                         menuRightExpanded = armMenuRight.isMenuExpanded
                         return
                     }
-                    // 5. Document card: expand / collapse.
+                    // 5. Settings button — open the folder-picker window.
+                    if armMenuRight.isSettings(value.entity) {
+                        openWindow(id: "VisionSettings")
+                        return
+                    }
+                    // 6. Document card: expand / collapse.
                     let host = value.entity
                     guard host.name.hasPrefix(Self.hostPrefix) else { return }
                     let id = String(host.name.dropFirst(Self.hostPrefix.count))
@@ -622,6 +625,49 @@ struct VisionRoomCard: View {
         case "personal":            return .orange
         default:
             return doc.wraps != nil ? Color(white: 0.7) : .white
+        }
+    }
+}
+
+// MARK: - Settings window
+
+/// Folder picker for the shared community folder, presented as a small
+/// floating window from the Settings button on the right wrist.
+struct VisionSettingsView: View {
+    @Environment(NotesModel.self) private var notes
+    @Environment(VisionRoomModel.self) private var roomModel
+    @Environment(\.dismissWindow) private var dismissWindow
+    @State private var choosingFolder = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("Settings")
+                .font(.title2.weight(.semibold))
+            Divider()
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Shared Folder")
+                    .font(.headline)
+                if let url = notes.folderURL {
+                    Text(url.lastPathComponent)
+                        .foregroundStyle(.secondary)
+                        .font(.callout)
+                } else {
+                    Text("No folder chosen")
+                        .foregroundStyle(.secondary)
+                        .font(.callout)
+                }
+                Button("Choose Folder…") { choosingFolder = true }
+                    .buttonStyle(.borderedProminent)
+            }
+        }
+        .padding(24)
+        .frame(minWidth: 300)
+        .fileImporter(isPresented: $choosingFolder, allowedContentTypes: [.folder]) { result in
+            if case .success(let url) = result {
+                notes.openFolder(url)
+                roomModel.scan(folder: url)
+                dismissWindow(id: "VisionSettings")
+            }
         }
     }
 }
