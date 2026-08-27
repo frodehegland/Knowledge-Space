@@ -5,6 +5,12 @@
       "idiom" : "universal",
       "platform" : "ios",
       "size" : "1024x1024"
+    },
+    {
+      "filename" : "kspgalmac-1024.png",
+      "idiom" : "vision",
+      "role" : "backArtwork",
+      "size" : "1024x1024"
     }
   ],
   "info" : {
