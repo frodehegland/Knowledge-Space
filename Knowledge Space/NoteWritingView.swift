@@ -679,7 +679,7 @@ private struct NoteTextEditor: NSViewRepresentable {
         // not blue — and answers the pointer with the hand.
         textView.linkTextAttributes = [
             .underlineStyle: NSUnderlineStyle.single.rawValue,
-            .foregroundColor: NSColor.black,
+            .foregroundColor: NSColor.labelColor,
             .cursor: NSCursor.pointingHand,
         ]
         // Glyph generation consults the view, so a linked document's
@@ -739,7 +739,7 @@ private struct NoteTextEditor: NSViewRepresentable {
         let attributes: [NSAttributedString.Key: Any] = [
             .font: font,
             .paragraphStyle: paragraph,
-            .foregroundColor: NSColor.black,
+            .foregroundColor: NSColor.labelColor,
         ]
         textView.typingAttributes = attributes
         textView.textStorage?.setAttributes(
