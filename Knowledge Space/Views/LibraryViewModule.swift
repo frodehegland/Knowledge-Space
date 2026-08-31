@@ -90,9 +90,6 @@ enum SidebarCatalog {
     /// seeing the correspondence, with New Note (added by the sidebar
     /// view) closing the list.
     static let top: [SidebarPlace] = [
-        // Important leads the column: everything marked with the orange
-        // bullet, the To Do standing on top.
-        SidebarPlace(name: "Important", systemImage: "circle.fill", item: .important),
         SidebarPlace(name: "Inbox", systemImage: "tray", item: .library),
         // The Timeline stands anchored on today — the calendar's future
         // above, the notes' record below. The Journal is that record
@@ -273,9 +270,8 @@ enum SidebarCatalog {
             // with them To Do) live in the column at the list's right
             // edge; New lives in ⌘N and the toolbar.
             var small: [(title: String, places: [SidebarPlace])] = []
-            // The unnamed head: Important first, then the Timeline and
-            // the Journal.
-            let head = [SidebarItem.important, .timelineToday, .timeline].compactMap { item in
+            // The unnamed head: the Timeline and the Journal.
+            let head = [SidebarItem.timelineToday, .timeline].compactMap { item in
                 top.first { $0.item == item }
             }
             if !head.isEmpty {
@@ -739,6 +735,15 @@ struct DocumentListView: View {
         }
     }
 
+    /// Important entries pinned to the top of every list except the
+    /// dedicated Important place (which already handles its own ordering).
+    /// Non-empty means the list renders a pinned band first, then a
+    /// divider, then the rest in their normal grouping.
+    private var importantBanner: [IndexEntry] {
+        guard !importantOnly else { return [] }
+        return displayedEntries.filter { $0.doc.important }
+    }
+
     /// A transcript is a document declared `transcript`, or — for
     /// documents from before the type existed — one whose body carries
     /// at least two distinct speaker attributions. Digital Letters'
@@ -786,6 +791,21 @@ struct DocumentListView: View {
                         }
                     }
                 }
+                // Important entries float above the rest in every list.
+                if !importantBanner.isEmpty {
+                    Section {
+                        Text("Important")
+                            .font(state.listHeadingFont)
+                            .foregroundStyle(.secondary)
+                            .listRowSeparator(.hidden)
+                            .padding(.top, 6)
+                        ForEach(importantBanner) { entry in
+                            entryRow(entry)
+                        }
+                    }
+                    Divider()
+                        .listRowSeparator(.hidden)
+                }
                 ForEach(groups, id: \.label) { group in
                     Section {
                         // The day stands as the first row of its group,
@@ -807,112 +827,7 @@ struct DocumentListView: View {
                             calendarRow(item)
                         }
                         ForEach(group.entries) { entry in
-                            Group {
-                                // "In the list" (Settings ▸ Appearance):
-                                // the clicked document grows in place —
-                                // a note into its writing page, other
-                                // kinds into their reading — all the
-                                // words held, no pane opening.
-                                if isExpanded(entry) {
-                                    // Thin rules above and below mark
-                                    // where the open document begins
-                                    // and the list resumes.
-                                    VStack(spacing: 0) {
-                                        openNoteRule
-                                        // The close spot stands left of
-                                        // the first line — a click there
-                                        // folds the document away. A
-                                        // read document (a transcript, a
-                                        // source) wears the chevron; a
-                                        // note's writing page keeps the
-                                        // spot unmarked, known to the
-                                        // hand. At the top right, Show
-                                        // Column brings the note's
-                                        // controls in as a column beside
-                                        // the words.
-                                        HStack(alignment: .top, spacing: 4) {
-                                            closeToggle(visible: !ContentView.isWritable(entry.doc))
-                                            // The open note wears the same
-                                            // orange Important bullet its
-                                            // closed row does, so the mark
-                                            // does not vanish when it opens.
-                                            if entry.doc.important {
-                                                Image(systemName: "circle.fill")
-                                                    .font(.system(size: 7))
-                                                    .foregroundStyle(.orange)
-                                                    .accessibilityLabel("Important")
-                                                    .padding(.top, 6)
-                                            }
-                                            // A note writes; every other
-                                            // kind — a transcript, a
-                                            // source — reads. Both carry
-                                            // the Show Column button, so
-                                            // the controls reach a read
-                                            // document as well.
-                                            if ContentView.isWritable(entry.doc) {
-                                                NoteWritingView(doc: entry.doc, inline: true)
-                                                    .id(entry.doc.id)
-                                                    .padding(.vertical, 6)
-                                            } else {
-                                                DocumentReaderView(doc: entry.doc, inline: true)
-                                                    .id(entry.doc.id)
-                                                    .padding(.vertical, 6)
-                                            }
-                                            if !inFullScreen {
-                                                columnToggle
-                                            }
-                                        }
-                                        openNoteRule
-                                    }
-                                } else {
-                                    DocumentRow(entry: entry, detail: detail(for: entry.doc),
-                                                filingFolder: actionListFiling(for: entry.doc),
-                                                actionPill: folderListAction(for: entry.doc),
-                                                expandedPreview: filedUnder != nil)
-                                        // While a note's words are being
-                                        // typed, the rest of the list
-                                        // recedes.
-                                        .opacity(state.dimsListWhileEditing && state.editingInList ? 0.3 : 1)
-                                        // Closed rows share the open
-                                        // note's left margin, so the
-                                        // reveal triangle sits in the
-                                        // list's own indent instead of
-                                        // pushing the open note aside.
-                                        .padding(.leading, state.notesOpenInList ? 18 : 0)
-                                }
-                            }
-                            .tag(entry.id)
-                            // An open document is not a selectable row:
-                            // without this, clicking — or selecting
-                            // text in — an expanded reading page makes
-                            // the List paint its accent over the whole
-                            // open document. (A note's editor eats the
-                            // clicks; a read-only page lets them fall
-                            // through to the row.)
-                            .selectionDisabled(isExpanded(entry))
-                            .listRowSeparator(.hidden)
-                            // A folder's rows keep the Filed list's
-                            // put-it-back.
-                            .contextMenu {
-                                if filedUnder != nil {
-                                    Button("Unfile") { state.unfile(entry.doc) }
-                                }
-                                #if os(macOS)
-                                if entry.doc.isDigest {
-                                    Button("Open Original") {
-                                        state.openDigestOriginal(entry.doc)
-                                    }
-                                }
-                                Button("Rename File…") {
-                                    state.renameFile(of: entry.doc)
-                                }
-                                if filedUnder != nil {
-                                    Button("Delete File…", role: .destructive) {
-                                        state.deleteFile(entry.doc)
-                                    }
-                                }
-                                #endif
-                            }
+                            entryRow(entry)
                         }
                     }
                 }
@@ -1059,6 +974,71 @@ struct DocumentListView: View {
     /// Whether this entry is the document open in the list itself.
     private func isExpanded(_ entry: IndexEntry) -> Bool {
         state.notesOpenInList && entry.id == state.selectedDocID
+    }
+
+    /// One entry row in the list — shared by both the Important banner
+    /// and the regular day groups so the rendering is never duplicated.
+    @ViewBuilder private func entryRow(_ entry: IndexEntry) -> some View {
+        Group {
+            if isExpanded(entry) {
+                VStack(spacing: 0) {
+                    openNoteRule
+                    HStack(alignment: .top, spacing: 4) {
+                        closeToggle(visible: !ContentView.isWritable(entry.doc))
+                        if entry.doc.important {
+                            Image(systemName: "circle.fill")
+                                .font(.system(size: 7))
+                                .foregroundStyle(.orange)
+                                .accessibilityLabel("Important")
+                                .padding(.top, 6)
+                        }
+                        if ContentView.isWritable(entry.doc) {
+                            NoteWritingView(doc: entry.doc, inline: true)
+                                .id(entry.doc.id)
+                                .padding(.vertical, 6)
+                        } else {
+                            DocumentReaderView(doc: entry.doc, inline: true)
+                                .id(entry.doc.id)
+                                .padding(.vertical, 6)
+                        }
+                        if !inFullScreen {
+                            columnToggle
+                        }
+                    }
+                    openNoteRule
+                }
+            } else {
+                DocumentRow(entry: entry, detail: detail(for: entry.doc),
+                            filingFolder: actionListFiling(for: entry.doc),
+                            actionPill: folderListAction(for: entry.doc),
+                            expandedPreview: filedUnder != nil)
+                    .opacity(state.dimsListWhileEditing && state.editingInList ? 0.3 : 1)
+                    .padding(.leading, state.notesOpenInList ? 18 : 0)
+            }
+        }
+        .tag(entry.id)
+        .selectionDisabled(isExpanded(entry))
+        .listRowSeparator(.hidden)
+        .contextMenu {
+            if filedUnder != nil {
+                Button("Unfile") { state.unfile(entry.doc) }
+            }
+            #if os(macOS)
+            if entry.doc.isDigest {
+                Button("Open Original") {
+                    state.openDigestOriginal(entry.doc)
+                }
+            }
+            Button("Rename File…") {
+                state.renameFile(of: entry.doc)
+            }
+            if filedUnder != nil {
+                Button("Delete File…", role: .destructive) {
+                    state.deleteFile(entry.doc)
+                }
+            }
+            #endif
+        }
     }
 
     /// The rules above and below an open document: finer and lighter
@@ -1222,9 +1202,18 @@ struct DocumentListView: View {
         // The Important list keeps its own two shelves — To Do on top,
         // the rest of Important beneath — instead of day headings.
         if importantOnly { return importantGroups(displayedEntries) }
+        // When the banner is showing important items at the top, exclude
+        // them from the regular groups so they don't appear twice.
+        let entries: [IndexEntry]
+        if importantBanner.isEmpty {
+            entries = displayedEntries
+        } else {
+            let bannerIDs = Set(importantBanner.map(\.id))
+            entries = displayedEntries.filter { !bannerIDs.contains($0.id) }
+        }
         switch grouping {
-        case .place: return placeGroups(displayedEntries)
-        case .time: return withCalendar(timeGroups(displayedEntries))
+        case .place: return placeGroups(entries)
+        case .time: return withCalendar(timeGroups(entries))
         }
     }
 

@@ -44,18 +44,7 @@ struct ContentView: View {
     var body: some View {
         @Bindable var state = state
         Group {
-            if isFullScreen {
-                fullScreenPane
-                    #if os(macOS)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .overlay(alignment: .leading) {
-                        peekSidebar
-                    }
-                    .overlay(alignment: .trailing) {
-                        peekOptionsColumn
-                    }
-                    #endif
-            } else if LibraryViewRegistry.module(for: state.sidebarSelection)?.hidesDocumentList == true {
+            if LibraryViewRegistry.module(for: state.sidebarSelection)?.hidesDocumentList == true {
                 // Whole-library views keep the sidebar — the way to every
                 // other place — and give the canvas the list column's room.
                 // Two-column split views declare .doubleColumn: told
@@ -1123,26 +1112,19 @@ struct DocumentRow: View {
                 .help("Show \(filingFolder)")
                 .fixedSize()
             }
-            // In the folder lists, a pill before the note says its
-            // action standing; clicking it opens that Action list.
+            // In the folder lists, a small icon before the note indicates
+            // its action standing; clicking it opens that Action list.
             if let actionPill {
                 Button {
                     state.sidebarSelection = .action(actionPill)
                     state.selectedDocID = nil
                 } label: {
-                    HStack(spacing: 3) {
-                        Image(systemName: SidebarCatalog.icon(for: actionPill))
-                        Text(actionPill.displayName)
-                    }
-                    .font(.caption2.weight(.medium))
-                    .foregroundStyle(.secondary)
-                    .padding(.horizontal, 7)
-                    .padding(.vertical, 2)
-                    .background(.quaternary, in: Capsule())
+                    Image(systemName: SidebarCatalog.icon(for: actionPill))
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
                 }
                 .buttonStyle(.plain)
                 .help("Show \(actionPill.displayName)")
-                .fixedSize()
             }
             // With the list as the page, a row is the note's own first
             // words — no separate title line — in the body's type (New
