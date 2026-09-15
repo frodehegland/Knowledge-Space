@@ -174,6 +174,14 @@ struct KnowledgeSpaceApp: App {
                 }
                 .keyboardShortcut("n", modifiers: .command)
                 .disabled(state.index.folderURL == nil)
+                // ⌘⇧N is a session: the longer writing of a meeting's or
+                // conference's session, with its own title, moment, and
+                // place editable at the note's foot.
+                Button("New Session") {
+                    state.newSession()
+                }
+                .keyboardShortcut("n", modifiers: [.command, .shift])
+                .disabled(state.index.folderURL == nil)
                 Button("New Person…") {
                     state.addingPerson = true
                 }
@@ -363,7 +371,10 @@ private struct TextSizeOrOutlineCommands: Commands {
                 if let readingType {
                     readingType.bigger()
                 } else {
+                    // The list and the open note move together, keeping
+                    // whatever gap Settings ▸ Appearance set between them.
                     state.listTextSize = min(state.listTextSize + 1, 36)
+                    state.noteTextSize = min(state.noteTextSize + 1, 38)
                 }
             }
             .keyboardShortcut("+", modifiers: [.command, .shift])
@@ -372,6 +383,7 @@ private struct TextSizeOrOutlineCommands: Commands {
                     readingType.smaller()
                 } else {
                     state.listTextSize = max(state.listTextSize - 1, 9)
+                    state.noteTextSize = max(state.noteTextSize - 1, 9)
                 }
             }
             .keyboardShortcut("-", modifiers: [.command, .shift])

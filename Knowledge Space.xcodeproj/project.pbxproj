@@ -573,6 +573,7 @@
 				INFOPLIST_KEY_NSContactsUsageDescription = "Knowledge Space reads Contacts only when you use “Find in Contacts…” to fill a person’s record. Nothing is ever written back to Contacts.";
 				INFOPLIST_KEY_NSHandsTrackingUsageDescription = "Hand tracking positions the arm-menu chips on your wrists.";
 				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "A note carries the place it was made. Your location is used once, when a note is created, to name that place — it is never stored as coordinates.";
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "The microphone records a session while you take its note — the words are transcribed on this Mac and distilled into key sentences and keywords.";
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphoneos*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphonesimulator*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents[sdk=iphoneos*]" = YES;
@@ -648,6 +649,7 @@
 				INFOPLIST_KEY_NSContactsUsageDescription = "Knowledge Space reads Contacts only when you use “Find in Contacts…” to fill a person’s record. Nothing is ever written back to Contacts.";
 				INFOPLIST_KEY_NSHandsTrackingUsageDescription = "Hand tracking positions the arm-menu chips on your wrists.";
 				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "A note carries the place it was made. Your location is used once, when a note is created, to name that place — it is never stored as coordinates.";
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "The microphone records a session while you take its note — the words are transcribed on this Mac and distilled into key sentences and keywords.";
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphoneos*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphonesimulator*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents[sdk=iphoneos*]" = YES;

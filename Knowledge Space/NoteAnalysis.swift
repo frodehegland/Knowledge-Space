@@ -82,6 +82,17 @@ nonisolated enum NoteAnalysis {
         return appending(kind, fields: fields, to: removing(kind, from: doc))
     }
 
+    /// Writes keywords found elsewhere — a session recording's — as the
+    /// same topics block `run` writes: one mechanism, however the
+    /// keywords were found, so every view reads them the same way.
+    static func writingTopics(_ topics: [String], to doc: LiquidDoc) -> LiquidDoc {
+        let cleaned = topics.map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+        guard !cleaned.isEmpty else { return doc }
+        return appending(.topics, fields: [("topics", cleaned.joined(separator: ", "))],
+                         to: removing(.topics, from: doc))
+    }
+
     /// The note's words alone: body paragraphs minus any Visual-Meta
     /// appendix and any earlier analysis blocks.
     private static func contentText(of doc: LiquidDoc) -> String {

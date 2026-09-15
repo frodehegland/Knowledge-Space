@@ -60,11 +60,22 @@ private struct AppearanceSettingsView: View {
     /// one for an external.
     @AppStorage("readingBodyFont") private var readingBodyFont = "New York"
     @AppStorage("readingHeadingFont") private var readingHeadingFont = "New York"
+    /// The reading page's size, kept as the reader's adjustment over
+    /// the platform's body size — the same value ⌘⇧+/− moves while
+    /// reading, so the stepper and the keys never disagree.
+    @AppStorage("readingFontDelta") private var readingFontDelta = 3.0
     @AppStorage("fullScreenWidthInternal") private var fullScreenWidthInternal = 67.0
     @AppStorage("fullScreenWidthExternal") private var fullScreenWidthExternal = 45.0
 
     /// The sentinel the pop-up's last item carries, as Author tags it.
     private static let editColorsTag = "__editThemeColors"
+
+    /// The body size the reading page actually shows — the platform's
+    /// body plus the reader's adjustment, floored as the reader is.
+    private var readingBodyPointSize: CGFloat {
+        max(NSFont.preferredFont(forTextStyle: .body).pointSize
+                + readingFontDelta, 8)
+    }
 
     var body: some View {
         @Bindable var state = state
@@ -136,6 +147,9 @@ private struct AppearanceSettingsView: View {
                     }
                 }
                 .pickerStyle(.menu)
+                Stepper(value: $readingFontDelta, in: -6...18, step: 1) {
+                    Text("Text size: \(Int(readingBodyPointSize)) pt")
+                }
                 Stepper(value: $fullScreenWidthInternal, in: 25...100, step: 1) {
                     Text("Width, built-in display: \(Int(fullScreenWidthInternal))%")
                 }
@@ -145,7 +159,7 @@ private struct AppearanceSettingsView: View {
             } header: {
                 Text("Reading")
             } footer: {
-                Text("How a document's citations read — (Author Date) as written, [Number] and Superscript by the reference list — and the reading page's type: the body's and headings' faces, and Author's full-screen measure, the text column as a percentage of the display's width, one value per kind of display.")
+                Text("How a document's citations read — (Author Date) as written, [Number] and Superscript by the reference list — and the reading page's type: the body's and headings' faces, the text size (the headings scale with it; ⌘⇧+ and ⌘⇧− move the same value while reading), and Author's full-screen measure, the text column as a percentage of the display's width, one value per kind of display.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -166,6 +180,9 @@ private struct AppearanceSettingsView: View {
                 Stepper(value: $state.listTextSize, in: 10...20, step: 1) {
                     Text("List text size: \(Int(state.listTextSize)) pt")
                 }
+                Stepper(value: $state.noteTextSize, in: 10...28, step: 1) {
+                    Text("Note text size: \(Int(state.noteTextSize)) pt")
+                }
                 Picker("List typeface", selection: $state.listFontFamily) {
                     Text("New York — the body's serif").tag("")
                     Text("San Francisco — the system face").tag("system-sans")
@@ -179,7 +196,7 @@ private struct AppearanceSettingsView: View {
             } header: {
                 Text("Notes List")
             } footer: {
-                Text("The size and face of the list's rows — the title and the body's first words — and the day headings over them, which follow the same choice. New York, the body's own type, is the design's default. Dimming fades the other rows to grey while a note is being written, so the open one stands out — off by default.")
+                Text("The size and face of the list's rows — the title and the body's first words — and the day headings over them, which follow the same choice. The note size is the open note's own words, in the writing view and flowed reading (⌘⇧+ and ⌘⇧− move both sizes together). New York, the body's own type, is the design's default. Dimming fades the other rows to grey while a note is being written, so the open one stands out — off by default.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -1162,7 +1179,7 @@ private struct AISettingsView: View {
     private var modelAvailability: String {
         switch SystemLanguageModel.default.availability {
         case .available:
-            return "Available — Apple Intelligence's on-device model. Everything AI in this app runs on it; nothing leaves this Mac."
+            return "Available — Apple Intelligence's on-device model, the zero-setup default. Nothing leaves this Mac."
         case .unavailable(.deviceNotEligible):
             return "Unavailable — this Mac does not support Apple Intelligence."
         case .unavailable(.appleIntelligenceNotEnabled):
@@ -1176,6 +1193,9 @@ private struct AISettingsView: View {
 
     var body: some View {
         Form {
+            // The model picker, paste box, and server list — Origami
+            // Text's local-LLM sections, ported whole (OrigamiLLM.swift).
+            LLMModelSettingsSections()
             Section {
                 LabeledContent("On-device model") {
                     Text(modelAvailability)
@@ -1183,7 +1203,7 @@ private struct AISettingsView: View {
                         .multilineTextAlignment(.trailing)
                 }
             } header: {
-                Text("Model")
+                Text("Apple\u{2019}s Model")
             }
             Section {
                 Picker("Prompt", selection: $selection) {

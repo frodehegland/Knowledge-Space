@@ -39,6 +39,22 @@ struct ContentView: View {
     /// open document's options column in as an overlay.
     @State private var showsPeekOptions = false
     @State private var peekOptionsHideTask: Task<Void, Never>?
+    /// The Actions sub-tab column belongs to the To Do tab: raised when
+    /// the tab is clicked, kept while the sub-tabs move among the
+    /// action lists, lowered when anything else moves the window —
+    /// the sidebar's places included.
+    @State private var showsActionSubTabs = false
+    /// True for the one selection change the To Do tab or a sub-tab
+    /// itself makes, so the watcher below can tell the tab's own
+    /// navigation from the sidebar's and close the column only for
+    /// the latter.
+    @State private var tabDroveSelection = false
+    /// The Actions column's width — dragged at its left edge, kept
+    /// across launches like the split view's own columns.
+    @AppStorage("actionSubTabsWidth") private var actionSubTabsWidth = 150.0
+    /// The width the drag began from, so the divider tracks the
+    /// pointer rather than compounding each change.
+    @State private var actionSubTabsDragStartWidth: Double?
     #endif
 
     var body: some View {
@@ -224,6 +240,42 @@ struct ContentView: View {
         .toolbar(isFullScreen ? .hidden : .automatic, for: .windowToolbar)
         // No title over the columns — the window shows only its cards.
         .toolbar(removing: .title)
+        // Three tabs stand centred at the top of the window — To Do,
+        // Notes, Journal — each a click to its sidebar place from
+        // anywhere, without reaching for the sidebar.
+        // The toolbar tabs are hidden for now — Notes, To Do, and
+        // Journal lead the sidebar instead; windowTabs stands ready
+        // should they return.
+        // In the To Do tab, the window's right edge grows a sub-tab
+        // column naming every Action standing, so the other lists are
+        // a click apart. The column belongs to the tab: reaching an
+        // action place through the sidebar leaves the edge alone. It
+        // stays through full screen — the action lists are the work
+        // there, not chrome around it.
+        .safeAreaInset(edge: .trailing, spacing: 0) {
+            // To Do always carries its column — a window restored
+            // straight onto it has seen no selection change to raise
+            // the flag; the other action lists show it only while the
+            // sub-tabs' own navigation holds it up.
+            if case .action(let current)? = state.sidebarSelection,
+               current == .toDo || showsActionSubTabs {
+                actionSubTabs(current: current)
+            }
+        }
+        // The To Do place brings the Actions column whichever door
+        // opens it — the sidebar row, a pill, a link. Its own
+        // sub-tabs keep it while roaming the other action lists;
+        // any other navigation closes it.
+        .onChange(of: state.sidebarSelection) { _, selection in
+            if selection == .action(.toDo) {
+                showsActionSubTabs = true
+                tabDroveSelection = false
+            } else if tabDroveSelection {
+                tabDroveSelection = false
+            } else {
+                showsActionSubTabs = false
+            }
+        }
         // Scoped to this window: the notifications are app-wide, and
         // another window going full screen must not fold this one's
         // columns away.
@@ -256,9 +308,9 @@ struct ContentView: View {
         // A theme change repaints the whole window: the colors are read
         // where they are used, so the window rebuilds around them.
         .id(state.theme)
-        // The Mac's toolbar stays bare — the title and the sidebar
-        // toggle alone, as the layout shows. New Note lives on ⌘N, the
-        // folder in Settings ▸ Library, and Find in the options column.
+        // The Mac's toolbar carries only the three tabs above. New Note
+        // lives on ⌘N, the folder in Settings ▸ Library, and Find in
+        // the options column.
         #if !os(macOS)
         .toolbar {
             ToolbarItem {
@@ -326,6 +378,137 @@ struct ContentView: View {
         NSApp.keyWindow?.toggleFullScreen(nil)
     }
 
+    /// The window's tabs: Timeline, To Do, Notes, and Journal in the
+    /// toolbar's centre — the Timeline and the Journal live here now,
+    /// not in the sidebar. Each drives the same sidebar selection; the
+    /// tab whose place the window stands on wears the fill, and from
+    /// any other place none do. Journal is the notes marked Journal
+    /// alone — the kind folder — while the whole record by time is
+    /// the Timeline's.
+    private var windowTabs: some View {
+        HStack(spacing: 2) {
+            windowTab("Timeline", .timelineToday)
+            windowTab("To Do", .action(.toDo))
+            windowTab("Notes", .notes)
+            windowTab("Journal", .filedFolder("Journal"))
+        }
+    }
+
+    private func windowTab(_ name: String, _ item: SidebarItem) -> some View {
+        // The To Do tab keeps the fill while its sub-tabs roam the
+        // other action lists — the window is still in the tab.
+        let isCurrent: Bool
+        if case .action = item, showsActionSubTabs,
+           case .action? = state.sidebarSelection {
+            isCurrent = true
+        } else {
+            isCurrent = state.sidebarSelection == item
+        }
+        return Button {
+            if state.sidebarSelection != item { tabDroveSelection = true }
+            state.sidebarSelection = item
+            // The To Do tab brings its Actions sub-tabs along; the
+            // other tabs put them away.
+            if case .action = item {
+                showsActionSubTabs = true
+            } else {
+                showsActionSubTabs = false
+            }
+            // Clicking Timeline — even already open — returns its list
+            // to Today, as its sidebar row did before the move here.
+            if item == .timelineToday {
+                state.timelineTodayPulse += 1
+            }
+        } label: {
+            Text(name)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(isCurrent ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary))
+                .padding(.horizontal, 10)
+                .padding(.vertical, 4)
+                .background(isCurrent ? AnyShapeStyle(.quaternary) : AnyShapeStyle(.clear),
+                            in: RoundedRectangle(cornerRadius: 6))
+                .contentShape(RoundedRectangle(cornerRadius: 6))
+        }
+        .buttonStyle(.plain)
+        .help("Show \(name)")
+    }
+
+    /// The Actions sub-tabs: standing on one Action list, a column on
+    /// the window's right edge names them all — To Do, In Progress,
+    /// Done, Cancelled, Questions — the current one filled, the window
+    /// tabs' idiom turned vertical. Its left edge drags to resize,
+    /// like the split view's own dividers; the width keeps.
+    private func actionSubTabs(current: LiquidDoc.Action) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text("Actions")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .textCase(.uppercase)
+                .padding(.bottom, 6)
+            ForEach(LiquidDoc.Action.allCases, id: \.self) { action in
+                actionSubTab(action, isCurrent: action == current)
+            }
+            Spacer()
+        }
+        .padding(14)
+        .frame(width: actionSubTabsWidth, alignment: .leading)
+        .greyColumnAppearance()
+        .overlay(alignment: .leading) { actionSubTabsResizeHandle }
+    }
+
+    /// The column's divider: an invisible strip on the left edge that
+    /// drags the width, wearing the split view's resize cursor.
+    private var actionSubTabsResizeHandle: some View {
+        Rectangle()
+            .fill(.clear)
+            .frame(width: 6)
+            .contentShape(Rectangle())
+            .onHover { inside in
+                if inside {
+                    NSCursor.resizeLeftRight.set()
+                } else {
+                    NSCursor.arrow.set()
+                }
+            }
+            .gesture(
+                DragGesture(coordinateSpace: .global)
+                    .onChanged { value in
+                        let start = actionSubTabsDragStartWidth ?? actionSubTabsWidth
+                        actionSubTabsDragStartWidth = start
+                        // The column sits at the right edge: dragging
+                        // the divider left widens it.
+                        actionSubTabsWidth = min(max(start - value.translation.width, 110), 340)
+                    }
+                    .onEnded { _ in actionSubTabsDragStartWidth = nil }
+            )
+    }
+
+    private func actionSubTab(_ action: LiquidDoc.Action, isCurrent: Bool) -> some View {
+        Button {
+            if state.sidebarSelection != .action(action) { tabDroveSelection = true }
+            state.sidebarSelection = .action(action)
+            state.selectedDocID = nil
+        } label: {
+            HStack(spacing: 6) {
+                Image(systemName: SidebarCatalog.icon(for: action))
+                    .font(.system(size: 11))
+                    .frame(width: 14)
+                Text(action.placeName)
+                    .font(.system(size: 12, weight: .medium))
+                    .lineLimit(1)
+            }
+            .foregroundStyle(isCurrent ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary))
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(isCurrent ? AnyShapeStyle(.quaternary) : AnyShapeStyle(.clear),
+                        in: RoundedRectangle(cornerRadius: 6))
+            .contentShape(RoundedRectangle(cornerRadius: 6))
+        }
+        .buttonStyle(.plain)
+        .help("Show \(action.placeName)")
+    }
+
     /// The heading over the notes column: each of the library's places
     /// names its list the way Inbox does — Inbox alone carries the
     /// calendar's reveal triangle.
@@ -387,10 +570,13 @@ struct ContentView: View {
             }
             .padding(.horizontal, 8)
             .padding(.vertical, 6)
-            // The entry box is wide, so it wears the page grey rather
-            // than standing as a white band; the border alone marks it.
+            // The entry box wears the page grey rather than standing
+            // as a white band; the border alone marks it.
             .background(RoundedRectangle(cornerRadius: 7).fill(AppGreys.page))
             .overlay(RoundedRectangle(cornerRadius: 7).strokeBorder(.quaternary))
+            // A modest measure — a find phrase, not a sentence — with
+            // the strip's rest left quiet.
+            .frame(maxWidth: 240)
             Button {
                 state.newNote()
             } label: {
@@ -400,6 +586,7 @@ struct ContentView: View {
             .buttonStyle(.plain)
             .disabled(state.index.folderURL == nil)
             .help("New Note (⌘N)")
+            Spacer(minLength: 0)
         }
         .padding(10)
         .frame(maxWidth: .infinity)
@@ -730,6 +917,9 @@ struct ContentView: View {
             // A thought is a note filed under Thoughts — its own writing
             // page, like the note it began as.
             || doc.documentType == LiquidDoc.DocumentType.thought.rawValue
+            // A session is a note grown a room — the same writing page,
+            // with its title, moment, and place editable at the foot.
+            || doc.documentType == LiquidDoc.DocumentType.session.rawValue
             || doc.documentType == LiquidDoc.DocumentType.letter.rawValue
             || doc.documentType == LiquidDoc.DocumentType.quote.rawValue
             || doc.documentType == LiquidDoc.DocumentType.annotation.rawValue

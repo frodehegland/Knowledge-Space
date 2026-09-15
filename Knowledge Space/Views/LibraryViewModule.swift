@@ -88,14 +88,20 @@ enum SidebarCatalog {
 
     /// The head of the column, unnamed: the Inbox and every way of
     /// seeing the correspondence, with New Note (added by the sidebar
-    /// view) closing the list.
+    /// view) closing the list. The Timeline and the Journal left the
+    /// column for the window's tabs.
+    /// The head of the pared-down sidebar: the window's three main
+    /// places — Notes, To Do, Journal — standing above the named
+    /// sections now that the toolbar tabs are hidden.
+    static let head: [SidebarPlace] = [
+        SidebarPlace(name: "Notes", systemImage: "note.text", item: .notes),
+        SidebarPlace(name: "To Do", systemImage: "checklist", item: .action(.toDo)),
+        SidebarPlace(name: "Journal", systemImage: "book.closed",
+                     item: .filedFolder("Journal")),
+    ]
+
     static let top: [SidebarPlace] = [
         SidebarPlace(name: "Inbox", systemImage: "tray", item: .library),
-        // The Timeline stands anchored on today — the calendar's future
-        // above, the notes' record below. The Journal is that record
-        // whole: every note, by time, the latest on top.
-        SidebarPlace(name: "Timeline", systemImage: "calendar.day.timeline.left", item: .timelineToday),
-        SidebarPlace(name: "Journal", systemImage: "clock", item: .timeline),
         SidebarPlace(name: "Places", systemImage: "mappin.and.ellipse", item: .place),
         // The Map view module, seated here under Places rather than
         // with the other views.
@@ -113,10 +119,9 @@ enum SidebarCatalog {
     ]
 
     /// The Small layout's Views: People (the contacts list — photos and
-    /// all) and the Map lead — Timeline has moved to the head of the
-    /// column — then every installed view module. Inbox, Places, and
-    /// Draft Letters are set aside for now; Transcripts stand as their
-    /// own section.
+    /// all) and the Map lead, then every installed view module. Inbox,
+    /// Places, and Draft Letters are set aside for now; Transcripts
+    /// stand as their own section.
     static var smallViews: [SidebarPlace] {
         let order: [SidebarItem] = [.people, .view("places")]
         return order.compactMap { item in top.first { $0.item == item } } + views
@@ -182,9 +187,11 @@ enum SidebarCatalog {
 
     /// The note column's standard files, each button's word beside the
     /// folder it files under. The sidebar's Filed section mirrors this.
+    /// Sessions is a kind folder like Thoughts: its place gathers every
+    /// note whose own documentType is `session`, filed or not.
     static let standardFiles: [(label: String, folder: String)] =
         [("Thought", "Thoughts"), ("Inspiration", "Inspirations"),
-         ("Journal", "Journal"), ("Note", "Notes")]
+         ("Journal", "Journal"), ("Note", "Notes"), ("Session", "Sessions")]
 
     /// The Action section: the note's standing, one place per state —
     /// the lifecycle axis, orthogonal to filing, read from the notes
@@ -231,6 +238,7 @@ enum SidebarCatalog {
         case "Inspirations": return "quote.bubble"
         case "Journal": return "book.closed"
         case "Notes": return "note.text"
+        case "Sessions": return "waveform"
         case "Letters": return "envelope"
         case AppState.archivedFolderName: return "archivebox"
         default: return "folder"
@@ -262,23 +270,19 @@ enum SidebarCatalog {
             result.insert(("Author", author), at: 5)
             #endif
         case .small:
-            // The pared-down default: Timeline on top, unnamed, then
-            // every filing folder under Files — Thoughts, Inspirations,
-            // Journal, Notes, Letters, the user's own (Work, Personal…),
-            // Archived last — then Views, where People and the Map lead
-            // the modules. Library and Digest set aside; Actions (and
-            // with them To Do) live in the column at the list's right
-            // edge; New lives in ⌘N and the toolbar.
-            var small: [(title: String, places: [SidebarPlace])] = []
-            // The unnamed head: the Timeline and the Journal.
-            let head = [SidebarItem.timelineToday, .timeline].compactMap { item in
-                top.first { $0.item == item }
+            // The pared-down default: Notes, To Do, and Journal at the
+            // head, then every filing folder under Files — Thoughts,
+            // Inspirations, Notes, Letters, the user's own (Work,
+            // Personal…), Archived last — then Views, where People and
+            // the Map lead the modules. Journal lives at the head, so
+            // Files does not repeat it; Library and Digest set aside;
+            // New lives in ⌘N and the toolbar.
+            var small: [(title: String, places: [SidebarPlace])] = [("", head)]
+            let fileFolders = filedFolders.filter {
+                $0.caseInsensitiveCompare("Journal") != .orderedSame
             }
-            if !head.isEmpty {
-                small.append(("", head))
-            }
-            if !filedFolders.isEmpty {
-                small.append(("Files", filed(filedFolders, displayName: folderDisplayName)))
+            if !fileFolders.isEmpty {
+                small.append(("Files", filed(fileFolders, displayName: folderDisplayName)))
             }
             // Transcripts stand as their own section in both layouts:
             // every kind under All, the AI conversations and the human
@@ -436,6 +440,9 @@ enum LibraryViewRegistry {
 /// stands and waits.
 struct ActionFilterColumn: View {
     @Environment(AppState.self) private var state
+    @State private var addingKeyword = false
+    @State private var newKeywordText = ""
+    @FocusState private var keywordFieldFocused: Bool
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
@@ -462,11 +469,96 @@ struct ActionFilterColumn: View {
                     .padding(.horizontal, 8)
                 calRow
             }
+            Divider()
+                .padding(.vertical, 8)
+                .padding(.horizontal, 8)
+            keywordsSection
             Spacer(minLength: 0)
         }
         .padding(.top, 12)
         .padding(.horizontal, 6)
         .frame(width: 126, alignment: .leading)
+    }
+
+    private var keywordsSection: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            HStack(spacing: 4) {
+                Text("Keywords")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.tertiary)
+                    .padding(.leading, 8)
+                Spacer(minLength: 0)
+                Button {
+                    withAnimation(.snappy) {
+                        addingKeyword.toggle()
+                        if !addingKeyword { newKeywordText = "" }
+                    }
+                } label: {
+                    Image(systemName: addingKeyword ? "xmark" : "plus")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.tertiary)
+                }
+                .buttonStyle(.plain)
+                .padding(.trailing, 8)
+                .help(addingKeyword ? "Cancel" : "Add a keyword")
+            }
+            .padding(.bottom, 4)
+            if addingKeyword {
+                TextField("New keyword…", text: $newKeywordText)
+                    .textFieldStyle(.plain)
+                    .font(.callout)
+                    .padding(.vertical, 5)
+                    .padding(.horizontal, 8)
+                    .background(Color.primary.opacity(0.04),
+                                in: RoundedRectangle(cornerRadius: 6))
+                    .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(.quaternary))
+                    .focused($keywordFieldFocused)
+                    .onAppear { keywordFieldFocused = true }
+                    .onSubmit { submitNewKeyword() }
+                    .padding(.bottom, 2)
+            }
+            ForEach(state.savedKeywords, id: \.self) { keyword in
+                keywordRow(keyword)
+            }
+        }
+    }
+
+    private func keywordRow(_ keyword: String) -> some View {
+        let chosen = state.listKeywordFilter?.caseInsensitiveCompare(keyword) == .orderedSame
+        return Button {
+            withAnimation(.snappy) {
+                state.listKeywordFilter = chosen ? nil : keyword
+            }
+        } label: {
+            Text(keyword)
+                .font(.callout)
+                .lineLimit(1)
+                .foregroundStyle(chosen ? Color.primary : SidebarCatalog.iconTint)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.vertical, 5)
+                .padding(.horizontal, 8)
+                .background(
+                    RoundedRectangle(cornerRadius: 6)
+                        .fill(chosen ? Color.primary.opacity(0.08) : .clear))
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help(chosen ? "Show everything again"
+              : "Only notes with \(keyword) in this list")
+        .contextMenu {
+            Button("Remove \(keyword)", role: .destructive) {
+                state.removeKeyword(keyword)
+            }
+        }
+    }
+
+    private func submitNewKeyword() {
+        let trimmed = newKeywordText.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmed.isEmpty {
+            state.addKeyword(trimmed)
+        }
+        newKeywordText = ""
+        addingKeyword = false
     }
 
     private var allRow: some View {
@@ -636,8 +728,14 @@ struct DocumentListView: View {
             // kind the note carries between devices). Archived notes
             // keep out; the timeline already excludes them.
             if let kind = AppState.kindFolder(for: filedUnder) {
+                // A session is a kind of journal in this world: the
+                // Journal place gathers the sessions with the journals.
+                var kinds: Set<String> = [kind]
+                if kind == LiquidDoc.DocumentType.journal.rawValue {
+                    kinds.insert(LiquidDoc.DocumentType.session.rawValue)
+                }
                 for entry in state.index.timeline
-                where entry.doc.documentType == kind && !seen.contains(entry.id) {
+                where kinds.contains(entry.doc.documentType ?? "") && !seen.contains(entry.id) {
                     entries.append(entry)
                     seen.insert(entry.id)
                 }
@@ -666,10 +764,29 @@ struct DocumentListView: View {
             }
         }
         if notesOnly {
-            // Notes proper: the `note` document type alone — journals,
-            // letters, and every other kind keep to their own places.
-            return state.filteredEntries.filter {
-                $0.doc.documentType == LiquidDoc.DocumentType.note.rawValue
+            // The Notes tab is the catch-all of the window's three:
+            // anything that is not a To Do item and not a Journal note
+            // — thoughts, sessions, inspirations, and the rest of the
+            // author's own writing all show here. Kinds with their own
+            // doors keep to them: the reference shelf and digests are
+            // already out of the lists, captured AI chats stay under
+            // AI Chats, and a letter still being written under Draft
+            // Letters.
+            let notes = state.filteredEntries.filter { entry in
+                entry.doc.actionValue != .toDo
+                    && entry.doc.documentType != LiquidDoc.DocumentType.journal.rawValue
+                    // A session is a kind of journal — it lives in the
+                    // Journal place, not here.
+                    && entry.doc.documentType != LiquidDoc.DocumentType.session.rawValue
+                    && !entry.doc.isAIConversation
+                    && !(entry.doc.documentType == LiquidDoc.DocumentType.letter.rawValue
+                         && state.isDraft(entry.doc))
+            }
+            // The sidebar's icons under Notes choose the order: time
+            // (the list's own, newest first) or title.
+            guard state.notesSortByTitle else { return notes }
+            return notes.sorted {
+                $0.doc.title.localizedStandardCompare($1.doc.title) == .orderedAscending
             }
         }
         if aiChatsOnly {
@@ -698,7 +815,10 @@ struct DocumentListView: View {
             guard !entry.doc.isLibraryKind else { return false }
             let type = entry.doc.documentType
             let isLetter = type == LiquidDoc.DocumentType.letter.rawValue
+            // A session awaits its verdict like a note — it sits in the
+            // Inbox until filed or given a standing.
             return (type == LiquidDoc.DocumentType.note.rawValue || isLetter
+                || type == LiquidDoc.DocumentType.session.rawValue
                 || state.isUnread(entry.doc))
                 && !(isLetter && state.isDraft(entry.doc))
                 && entry.doc.action == nil
@@ -725,13 +845,39 @@ struct DocumentListView: View {
         }
     }
 
-    /// The Actions column's filter, laid over whatever scope the
-    /// sidebar chose. The open document keeps its seat — changing a
-    /// note's standing must not snatch it out from under the writer.
-    private var displayedEntries: [IndexEntry] {
-        guard let filter = state.listActionFilter else { return scopedEntries }
+    /// To Do items live in the To Do tab alone: every other list —
+    /// the Timeline, the Journal, the folders, the Inbox — leaves
+    /// them out. The action lists keep them (they are the To Do tab),
+    /// the Important place keeps its own gathering, and the open
+    /// document keeps its seat — setting the standing must not snatch
+    /// the note out from under the writer.
+    private var withoutToDoEntries: [IndexEntry] {
+        // Asking a list for To Do by its own filter is deliberate —
+        // honor it.
+        guard action == nil, !importantOnly,
+              state.listActionFilter != .toDo else { return scopedEntries }
         return scopedEntries.filter {
+            $0.doc.actionValue != .toDo || $0.id == state.selectedDocID
+        }
+    }
+
+    /// The Actions column's filter applied to the scoped entries. The
+    /// open document keeps its seat — changing its standing must not
+    /// snatch it out from under the writer.
+    private var actionFilteredEntries: [IndexEntry] {
+        guard let filter = state.listActionFilter else { return withoutToDoEntries }
+        return withoutToDoEntries.filter {
             $0.doc.actionValue == filter || $0.id == state.selectedDocID
+        }
+    }
+
+    /// The Keywords column's filter applied on top of the action filter.
+    private var displayedEntries: [IndexEntry] {
+        guard let keyword = state.listKeywordFilter else { return actionFilteredEntries }
+        return actionFilteredEntries.filter {
+            $0.id == state.selectedDocID
+                || $0.doc.title.localizedCaseInsensitiveContains(keyword)
+                || ($0.doc.body ?? []).contains { $0.text.localizedCaseInsensitiveContains(keyword) }
         }
     }
 
@@ -813,13 +959,17 @@ struct DocumentListView: View {
                         // no header bar of its own. A shade lighter than
                         // the notes' words, and receding with the rows
                         // while one is written in.
-                        Text(group.label)
-                            .font(state.listHeadingFont)
-                            .foregroundStyle(.secondary)
-                            .listRowSeparator(.hidden)
-                            .padding(.top, 6)
-                            .opacity(state.dimsListWhileEditing && state.editingInList ? 0.3 : 1)
-                            .id("day-\(group.label)")
+                        // The title-sorted Notes list runs unlabelled —
+                        // its one group carries no day to name.
+                        if !group.label.isEmpty {
+                            Text(group.label)
+                                .font(state.listHeadingFont)
+                                .foregroundStyle(.secondary)
+                                .listRowSeparator(.hidden)
+                                .padding(.top, 6)
+                                .opacity(state.dimsListWhileEditing && state.editingInList ? 0.3 : 1)
+                                .id("day-\(group.label)")
+                        }
                         // The day's appointments above its notes: Apple
                         // Calendar's events, quiet rows that read but
                         // never open.
@@ -858,11 +1008,18 @@ struct DocumentListView: View {
             .overlay {
                 if state.index.folderURL != nil, displayedEntries.isEmpty,
                    !state.index.isScanning {
-                    if let filter = state.listActionFilter, !scopedEntries.isEmpty {
+                    if let filter = state.listActionFilter,
+                       actionFilteredEntries.isEmpty, !scopedEntries.isEmpty {
                         ContentUnavailableView(
                             "Nothing \(filter.displayName)",
                             systemImage: SidebarCatalog.icon(for: filter),
                             description: Text("No note here carries this standing — choose it again in the Actions column to see everything."))
+                    } else if let keyword = state.listKeywordFilter,
+                              !actionFilteredEntries.isEmpty {
+                        ContentUnavailableView(
+                            "No matches for \(keyword)",
+                            systemImage: "magnifyingglass",
+                            description: Text("No note in this list contains this keyword — click it again in the Keywords column to see everything."))
                     } else if draftLettersOnly {
                         ContentUnavailableView(
                             "No Draft Letters",
@@ -1210,6 +1367,11 @@ struct DocumentListView: View {
         } else {
             let bannerIDs = Set(importantBanner.map(\.id))
             entries = displayedEntries.filter { !bannerIDs.contains($0.id) }
+        }
+        // Title-sorted Notes read as one alphabetical run — day
+        // headings would shuffle meaninglessly between the letters.
+        if notesOnly, state.notesSortByTitle {
+            return entries.isEmpty ? [] : [DayGroup(label: "", date: .now, entries: entries)]
         }
         switch grouping {
         case .place: return placeGroups(entries)

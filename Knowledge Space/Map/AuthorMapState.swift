@@ -370,7 +370,12 @@ final class AuthorMapState {
             includingPropertiesForKeys: [.isRegularFileKey],
             options: [.skipsHiddenFiles, .skipsPackageDescendants]
         ) {
-            for case let url as URL in enumerator where LiquidDoc.isDocumentFile(url) {
+            for case let url as URL in enumerator {
+                if KnowledgeSpaceFolders.isExcludedScanDirectory(url) {
+                    enumerator.skipDescendants()
+                    continue
+                }
+                guard LiquidDoc.isDocumentFile(url) else { continue }
                 guard let data = try? Data(contentsOf: url),
                       let doc = try? LiquidDoc.decode(data: data, fileURL: url) else {
                     found.documents.append(FolderDocument(url: url, title: url.lastPathComponent))

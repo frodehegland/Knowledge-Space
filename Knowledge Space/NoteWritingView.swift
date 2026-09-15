@@ -37,6 +37,12 @@ struct NoteWritingView: View {
     @State private var baseDiskData: Data?
     @State private var loaded = false
     @State private var autosave: Task<Void, Never>?
+    /// A session's own fields at the note's foot — the title and place
+    /// buffers, committed a moment after typing pauses (and on leaving),
+    /// each write merging onto the file's current bytes.
+    @State private var sessionTitle = ""
+    @State private var sessionLocation = ""
+    @State private var sessionCommit: Task<Void, Never>?
     @FocusState private var writing: Bool
     #if os(macOS)
     /// The AppKit editor's focus, mirrored both ways.
@@ -58,7 +64,7 @@ struct NoteWritingView: View {
                 // AppKit-backed, so the context menu is ours: the
                 // basics, spelling, and Show in <View> — nothing else.
                 NoteTextEditor(text: $text,
-                               fontSize: state.listTextSize + 1,
+                               fontSize: state.noteTextSize,
                                fontFamily: state.listFontFamily,
                                inline: inline,
                                focused: $editorFocused,
@@ -73,10 +79,9 @@ struct NoteWritingView: View {
                     .frame(minHeight: inline ? 44 : 0)
                 #else
                 TextEditor(text: $text)
-                    // An open note reads in the list's own face, one
-                    // point larger than its rows (Settings ▸ Appearance
-                    // sets both).
-                    .font(state.listFont(size: state.listTextSize + 1))
+                    // An open note reads in the list's own face, at
+                    // its own size (Settings ▸ Appearance sets both).
+                    .font(state.listFont(size: state.noteTextSize))
                     .lineSpacing(6)
                     .scrollContentBackground(.hidden)
                     // Inline, the editor holds all its words and the
@@ -92,6 +97,9 @@ struct NoteWritingView: View {
                     .frame(minHeight: inline ? 44 : 0)
                     .focused($writing)
                 #endif
+            }
+            if isSessionNote {
+                sessionFields
             }
             if state.showsVisualMeta {
                 metadataReading
@@ -115,6 +123,12 @@ struct NoteWritingView: View {
             text = Self.editingText(of: doc)
             baseText = text
             baseDiskData = try? Data(contentsOf: doc.fileURL)
+            if isSessionNote {
+                // The title field stands unfilled until the author gives
+                // one — "Untitled" is the file's placeholder, not words.
+                sessionTitle = doc.title == "Untitled" ? "" : doc.title
+                sessionLocation = doc.location ?? ""
+            }
             #if os(macOS)
             loadDismissedNames()
             #endif
@@ -159,8 +173,11 @@ struct NoteWritingView: View {
             if inline { state.editingInList = editorFocused }
         }
         #endif
+        .onChange(of: sessionTitle) { scheduleSessionCommit() }
+        .onChange(of: sessionLocation) { scheduleSessionCommit() }
         .onDisappear {
             save()
+            commitSessionFields()
             if inline, state.editingInList { state.editingInList = false }
         }
         // The writing page stands on the design's page grey.
@@ -183,6 +200,94 @@ struct NoteWritingView: View {
         return [root]
     }
     #endif
+
+    // MARK: The session's fields
+
+    private var isSessionNote: Bool {
+        doc.documentType == LiquidDoc.DocumentType.session.rawValue
+    }
+
+    /// The session's own fields at the note's foot: the title (unfilled
+    /// until the author gives one), the session's moment, and its place —
+    /// all editable, since a session's note is often finished after the
+    /// room has emptied. Every write merges onto the file's current bytes
+    /// (mutateNoteFile); the words above are never re-serialized.
+    private var sessionFields: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Divider()
+            TextField("Title", text: $sessionTitle, prompt: Text("Session title"))
+                .textFieldStyle(.plain)
+                .font(state.listFont(size: state.noteTextSize + 1).weight(.semibold))
+                .onSubmit { commitSessionFields() }
+            HStack(spacing: 14) {
+                DatePicker("Session date and time", selection: sessionMoment,
+                           displayedComponents: [.date, .hourAndMinute])
+                    .labelsHidden()
+                    .fixedSize()
+                TextField("Location", text: $sessionLocation, prompt: Text("Location"))
+                    .textFieldStyle(.plain)
+                    .onSubmit { commitSessionFields() }
+            }
+            .font(.system(size: 12))
+            .foregroundStyle(.secondary)
+            #if os(macOS)
+            if #available(macOS 27, *) {
+                SessionRecorderRow(doc: doc) { sections in
+                    // The distilled sections join the buffer and go
+                    // through the editor's single save path — never a
+                    // second writer racing the words.
+                    let hadWords = !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    text = hadWords ? text + sections : String(sections.dropFirst(2))
+                    save()
+                }
+            }
+            #endif
+        }
+        .padding(.horizontal, 20)
+        .padding(.top, 6)
+        .padding(.bottom, 10)
+        .frame(maxWidth: measure ?? .infinity, alignment: .leading)
+        .frame(maxWidth: .infinity, alignment: centersContent ? .center : .leading)
+    }
+
+    /// The session's moment: the human-assigned `date` at day-and-time
+    /// precision, seeded at creation; `created` stays the immutable
+    /// timestamp underneath. Each pick writes at once — a discrete act,
+    /// unlike typing.
+    private var sessionMoment: Binding<Date> {
+        Binding(
+            get: { doc.date?.editableMoment ?? doc.created },
+            set: { picked in
+                state.mutateNoteFile(doc) { $0.date = LiquidDate(moment: picked) }
+            })
+    }
+
+    /// Typing in the title or place settles a moment after it pauses —
+    /// a whole-file write per keystroke would be careless to the shared
+    /// folder.
+    private func scheduleSessionCommit() {
+        guard loaded, isSessionNote else { return }
+        sessionCommit?.cancel()
+        sessionCommit = Task {
+            try? await Task.sleep(for: .seconds(1))
+            guard !Task.isCancelled else { return }
+            commitSessionFields()
+        }
+    }
+
+    private func commitSessionFields() {
+        sessionCommit?.cancel()
+        guard loaded, isSessionNote else { return }
+        let title = sessionTitle.trimmingCharacters(in: .whitespaces)
+        let place = sessionLocation.trimmingCharacters(in: .whitespaces)
+        let wantedTitle = title.isEmpty ? "Untitled" : title
+        let wantedPlace = place.isEmpty ? nil : place
+        guard wantedTitle != doc.title || wantedPlace != doc.location else { return }
+        state.mutateNoteFile(doc) {
+            $0.title = wantedTitle
+            $0.location = wantedPlace
+        }
+    }
 
     /// Metadata / Hide Metadata, quiet at the note's foot.
     private var metadataToggle: some View {
@@ -247,10 +352,10 @@ struct NoteWritingView: View {
     private var flowedColumn: some View {
         VStack(alignment: .leading, spacing: 12) {
             ForEach(LiquidDoc.parseBody(from: text)) { paragraph in
-                // Flowed, the note keeps the open note's rule: one
-                // point over its list rows, not the reader's measure.
+                // Flowed, the note keeps the open note's own size,
+                // not the reader's measure.
                 ParagraphView(paragraph: paragraph, flowed: true,
-                              bodySize: CGFloat(state.listTextSize) + 1)
+                              bodySize: CGFloat(state.noteTextSize))
             }
         }
         .frame(maxWidth: measure ?? .infinity, alignment: .leading)
@@ -543,10 +648,15 @@ struct NoteWritingView: View {
         let body = LiquidDoc.parseBody(from: text) + preserved
 
         // A derived title stays derived — the first four words of
-        // whatever the note now says. A real title stays itself.
+        // whatever the note now says. A real title stays itself. A
+        // session's title is never derived: its own field at the foot
+        // is the only hand that writes it, and an unfilled field means
+        // untitled, not "the first four words".
         let oldContent = Self.contentParagraphs(of: source).map(\.text).joined(separator: " ")
-        let titleWasDerived = source.title == Self.derivedTitle(for: oldContent)
-            || source.title == "Untitled"
+        let isSession = source.documentType == LiquidDoc.DocumentType.session.rawValue
+        let titleWasDerived = !isSession
+            && (source.title == Self.derivedTitle(for: oldContent)
+                || source.title == "Untitled")
         let title = titleWasDerived
             ? Self.derivedTitle(for: text.trimmingCharacters(in: .whitespacesAndNewlines))
             : source.title

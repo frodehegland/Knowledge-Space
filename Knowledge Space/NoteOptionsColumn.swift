@@ -19,6 +19,13 @@ struct NoteOptionsColumn: View {
     @State private var errorText: String?
     @State private var editingLocation = false
     @State private var locationText = ""
+    /// The column's width — dragged at its left edge like the split
+    /// view's own dividers, kept across launches, shared by every
+    /// window's copy of the column.
+    @AppStorage("noteOptionsWidth") private var columnWidth = 180.0
+    /// The width the drag began from, so the divider tracks the
+    /// pointer rather than compounding each change.
+    @State private var dragStartWidth: Double?
 
     private var modelAvailable: Bool {
         SystemLanguageModel.default.availability == .available
@@ -51,10 +58,42 @@ struct NoteOptionsColumn: View {
             .padding(14)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .frame(width: 180)
+        .frame(width: columnWidth)
         // The sidebar's grey, mirrored on the window's other edge.
         .greyColumnAppearance()
+        #if os(macOS)
+        .overlay(alignment: .leading) { resizeHandle }
+        #endif
     }
+
+    #if os(macOS)
+    /// The column's divider: an invisible strip on the left edge that
+    /// drags the width, wearing the split view's resize cursor.
+    private var resizeHandle: some View {
+        Rectangle()
+            .fill(.clear)
+            .frame(width: 6)
+            .contentShape(Rectangle())
+            .onHover { inside in
+                if inside {
+                    NSCursor.resizeLeftRight.set()
+                } else {
+                    NSCursor.arrow.set()
+                }
+            }
+            .gesture(
+                DragGesture(coordinateSpace: .global)
+                    .onChanged { value in
+                        let start = dragStartWidth ?? columnWidth
+                        dragStartWidth = start
+                        // The column sits at the note's right edge:
+                        // dragging the divider left widens it.
+                        columnWidth = min(max(start - value.translation.width, 150), 360)
+                    }
+                    .onEnded { _ in dragStartWidth = nil }
+            )
+    }
+    #endif
 
     /// The same controls under the note: each section keeps its
     /// column's width and they stand shoulder to shoulder, the bar

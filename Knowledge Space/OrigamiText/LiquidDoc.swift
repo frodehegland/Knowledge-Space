@@ -182,7 +182,11 @@ nonisolated struct LiquidDoc: Identifiable, Hashable, Sendable {
         // the document so the standing travels between devices (the Map's
         // Thoughts view reads it). Set on macOS when a note is filed
         // there, cleared back to note when it is filed elsewhere.
-        case letter, note, thought, book, rfc, personal, project, meeting, transcript, extract, article, external, source, quote, annotation, digest, journal, inspiration
+        // A session is the author's longer writing from one session of
+        // a meeting or conference — a note grown a room, carrying the
+        // session's own moment in `date` and its venue in `location`,
+        // both editable after the fact.
+        case letter, note, thought, session, book, rfc, personal, project, meeting, transcript, extract, article, external, source, quote, annotation, digest, journal, inspiration
         // Explicit lowercase raw value: `decode` lowercases every
         // documentType token, so a camelCase raw value here would never
         // match a decoded document. This is the only multi-word kind, so
@@ -194,6 +198,7 @@ nonisolated struct LiquidDoc: Identifiable, Hashable, Sendable {
             case .letter: "Letter"
             case .note: "Note"
             case .thought: "Thought"
+            case .session: "Session"
             case .book: "Book"
             case .rfc: "RFC"
             case .personal: "Personal"

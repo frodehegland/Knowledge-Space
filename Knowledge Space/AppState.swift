@@ -57,6 +57,17 @@ final class AppState {
     /// persisted: a filter that survives a relaunch reads as lost notes.
     var listActionFilter: LiquidDoc.Action? = nil
 
+    /// The Keywords column's standing filter — narrows the current list
+    /// to notes containing this word in their title or body. Session
+    /// state, never persisted: a filter surviving a relaunch reads as
+    /// lost notes.
+    var listKeywordFilter: String? = nil
+
+    /// The user's saved keywords, shown in the Keywords column for
+    /// one-click filtering. Persisted across launches.
+    private(set) var savedKeywords: [String] =
+        UserDefaults.standard.stringArray(forKey: "savedKeywords") ?? []
+
     /// Show Cal, in the Actions column: whether the Timeline weaves
     /// Apple Calendar's events — today's and the future's — among its
     /// notes. On until switched off; remembered between launches.
@@ -154,6 +165,24 @@ final class AppState {
         return stored == 0 ? 14 : stored
     }() {
         didSet { UserDefaults.standard.set(listTextSize, forKey: "listTextSize") }
+    }
+
+    /// How the Notes place orders its list: by time (newest first,
+    /// the default) or by title — chosen with the icons under the
+    /// sidebar's Notes row, Origami Text's idiom.
+    var notesSortByTitle: Bool =
+        UserDefaults.standard.bool(forKey: "notesSortByTitle") {
+        didSet { UserDefaults.standard.set(notesSortByTitle, forKey: "notesSortByTitle") }
+    }
+
+    /// The point size of an open note's own words — the writing view
+    /// and its flowed reading. Chosen in Settings ▸ Appearance; 16 by
+    /// default, one point over the old rule of the list's size plus one.
+    var noteTextSize: Double = {
+        let stored = UserDefaults.standard.double(forKey: "noteTextSize")
+        return stored == 0 ? 16 : stored
+    }() {
+        didSet { UserDefaults.standard.set(noteTextSize, forKey: "noteTextSize") }
     }
 
     /// The typeface of the notes list — the rows and the open note
@@ -339,8 +368,8 @@ final class AppState {
         if hidden {
             hiddenViewIDs.insert(id)
             // The view being read leaves the sidebar: land somewhere
-            // real — the Timeline, which has a row in every layout
-            // (the Inbox no longer stands in the small column).
+            // real — the Timeline, which always stands in the window's
+            // tabs (the Inbox no longer stands in the small column).
             if sidebarSelection == .view(id) { sidebarSelection = .timelineToday }
         } else {
             hiddenViewIDs.remove(id)
@@ -508,6 +537,25 @@ final class AppState {
         mutateNoteFile(doc) { $0.important = isImportant }
     }
 
+    // MARK: - Keywords
+
+    func addKeyword(_ word: String) {
+        let trimmed = word.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, !savedKeywords.contains(where: {
+            $0.caseInsensitiveCompare(trimmed) == .orderedSame
+        }) else { return }
+        savedKeywords.append(trimmed)
+        UserDefaults.standard.set(savedKeywords, forKey: "savedKeywords")
+    }
+
+    func removeKeyword(_ word: String) {
+        savedKeywords.removeAll { $0.caseInsensitiveCompare(word) == .orderedSame }
+        if listKeywordFilter?.caseInsensitiveCompare(word) == .orderedSame {
+            listKeywordFilter = nil
+        }
+        UserDefaults.standard.set(savedKeywords, forKey: "savedKeywords")
+    }
+
     // MARK: - Filing (the system shared with Origami Text)
 
     /// The one folder with special meaning: a document filed here leaves
@@ -614,6 +662,7 @@ final class AppState {
         "Thoughts": LiquidDoc.DocumentType.thought.rawValue,
         "Inspirations": LiquidDoc.DocumentType.inspiration.rawValue,
         "Journal": LiquidDoc.DocumentType.journal.rawValue,
+        "Sessions": LiquidDoc.DocumentType.session.rawValue,
     ]
 
     /// The kind a filing folder names, if it names one.
@@ -772,7 +821,7 @@ final class AppState {
         writeFilingFolderManifest()
         persistFiling()
         // The place being read is gone: land somewhere real — the
-        // Timeline, which has a row in every layout.
+        // Timeline, which always stands in the window's tabs.
         if case .filedFolder(let selected) = sidebarSelection,
            selected.caseInsensitiveCompare(name) == .orderedSame {
             sidebarSelection = .timelineToday
@@ -1058,6 +1107,14 @@ final class AppState {
         makeNewDocument(type: .letter, landing: .draftLetters)
     }
 
+    /// A new session note (⌘⇧N): the longer writing of one session in a
+    /// meeting or conference. Born carrying the moment in `date` and the
+    /// place in `location`, both editable at the note's foot — a session
+    /// is often finished after the room has emptied.
+    func newSession() {
+        makeNewDocument(type: .session, landing: .library)
+    }
+
     private func makeNewDocument(type: LiquidDoc.DocumentType, landing: SidebarItem,
                                  action: LiquidDoc.Action? = nil,
                                  fileUnder: String? = nil) {
@@ -1088,6 +1145,10 @@ final class AppState {
                             fileURL: folderURL.appendingPathComponent(id)
                                 .appendingPathExtension(LiquidDoc.fileExtension))
         if let action { doc.action = action.rawValue }
+        // A session carries its own moment from birth — the editable
+        // date-and-time its foot offers; `created` stays the immutable
+        // timestamp underneath.
+        if type == .session { doc.date = LiquidDate(moment: created) }
         // A laptop moves between notes — refresh the place for the next.
         placeFinder.begin()
         do {

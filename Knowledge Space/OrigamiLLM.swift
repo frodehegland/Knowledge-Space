@@ -1,0 +1,1133 @@
+// Local-LLM support, ported from Origami Text (LiquidView/OrigamiLLM.swift
+// — keep the two copies in step), endpoints-first: Apple's on-device
+// model is the zero-setup default, and any OpenAI-compatible
+// chat-completions endpoint the user points the app at (Ollama,
+// LM Studio, MLX-LM server, remote) sits beside it in one picker.
+// Feature code asks OrigamiLLM to respond and never touches a concrete
+// provider; a missing model falls back to Apple's with a notice, never
+// a failure. In Knowledge Space the session recorder's distilling asks
+// here first; the differences from Origami Text's copy are the Keychain
+// service name and the settings footer's words.
+#if os(macOS)
+import Foundation
+import Security
+import SwiftUI
+#if canImport(FoundationModels)
+import FoundationModels
+#endif
+
+// MARK: - Errors (spec §2, §9 — the canonical copy)
+
+nonisolated enum OrigamiLLMError: LocalizedError {
+    case serverUnreachable(String)
+    case authRequired(String)
+    case appleUnavailable
+    case generationFailed(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .serverUnreachable(let host):
+            "Can\u{2019}t reach \(host). Is the server running?"
+        case .authRequired(let host):
+            "\(host) needs an API key. Add one in Settings."
+        case .appleUnavailable:
+            "The on-device model isn\u{2019}t available on this Mac."
+        case .generationFailed(let why):
+            why
+        }
+    }
+}
+
+// MARK: - An endpoint (spec §6)
+
+/// One server the user added: its base URL and the models found on it.
+/// The API key, when one is needed, lives in the Keychain — never here.
+nonisolated struct OrigamiEndpoint: Codable, Identifiable, Hashable {
+    /// Normalised: scheme://host[:port], no trailing slash, no /v1.
+    var base: String
+    var models: [String] = []
+    /// Byte size keyed by model id — populated from Ollama's /api/tags;
+    /// empty for servers that don't expose it (LM Studio, hosted APIs).
+    var modelSizes: [String: Int64] = [:]
+    var hasKey = false
+
+    var id: String { base }
+
+    var hostLabel: String { URL(string: base)?.host() ?? base }
+
+    /// Loopback and .local hosts — content stays on the local network.
+    var isLocal: Bool {
+        let host = URL(string: base)?.host() ?? ""
+        return host == "localhost" || host == "127.0.0.1"
+            || host == "::1" || host.hasSuffix(".local")
+    }
+}
+
+// MARK: - The store: selection, endpoints, fallback (spec §2)
+
+@MainActor @Observable
+final class OrigamiLLM {
+    static let shared = OrigamiLLM()
+
+    /// The active model: "apple", or "endpoint|<base>|<model>".
+    /// Persisted; the picker binds to it directly.
+    var selectedID: String {
+        didSet { UserDefaults.standard.set(selectedID, forKey: "selectedModelID") }
+    }
+
+    private(set) var endpoints: [OrigamiEndpoint] {
+        didSet { persistEndpoints() }
+    }
+
+    /// The last automatic fallback, for a non-blocking notice — read
+    /// and cleared by whoever shows it.
+    var fallbackNotice: String?
+
+    private init() {
+        selectedID = UserDefaults.standard.string(forKey: "selectedModelID") ?? "apple"
+        endpoints = Self.loadEndpoints()
+    }
+
+    static func endpointID(base: String, model: String) -> String {
+        "endpoint|\(base)|\(model)"
+    }
+
+    /// The selection resolved to an endpoint model — nil means Apple's.
+    func selectedEndpointModel() -> (endpoint: OrigamiEndpoint, model: String)? {
+        let parts = selectedID.split(separator: "|", maxSplits: 2).map(String.init)
+        guard parts.count == 3, parts[0] == "endpoint",
+              let endpoint = endpoints.first(where: { $0.base == parts[1] })
+        else { return nil }
+        return (endpoint, parts[2])
+    }
+
+    var selectedDisplayName: String {
+        selectedEndpointModel().map { "\($0.endpoint.hostLabel) \u{00B7} \($0.model)" }
+            ?? "Apple\u{2019}s built-in model"
+    }
+
+    // MARK: Endpoints
+
+    func addOrUpdateEndpoint(base: String, models: [String],
+                              sizes: [String: Int64] = [:], key: String?) {
+        let base = ChatCompletionsClient.normalizedBase(base)
+        var entry = endpoints.first { $0.base == base }
+            ?? OrigamiEndpoint(base: base)
+        entry.models = models
+        if !sizes.isEmpty { entry.modelSizes = sizes }
+        if let key {
+            LLMKeychain.write(key.isEmpty ? nil : key, account: base)
+            entry.hasKey = !key.isEmpty
+        }
+        endpoints.removeAll { $0.base == base }
+        endpoints.append(entry)
+        endpoints.sort { $0.base < $1.base }
+    }
+
+    /// Removing an endpoint clears its key; a selection pointing at it
+    /// reverts to Apple's model.
+    func removeEndpoint(_ base: String) {
+        endpoints.removeAll { $0.base == base }
+        LLMKeychain.write(nil, account: base)
+        if selectedEndpointModel() == nil, selectedID != "apple" {
+            selectedID = "apple"
+        }
+    }
+
+    func apiKey(for base: String) -> String? {
+        LLMKeychain.read(account: base)
+    }
+
+    /// Refreshes one endpoint's model list (settings-open, and after a
+    /// generation-time "model not found").
+    func refreshModels(for base: String) async {
+        guard let models = try? await ChatCompletionsClient.models(
+            base: base, key: apiKey(for: base)) else { return }
+        let sizes = await ChatCompletionsClient.modelSizes(base: base, key: apiKey(for: base))
+        addOrUpdateEndpoint(base: base, models: models, sizes: sizes, key: nil)
+    }
+
+    // MARK: Generation, with the fallback (spec §2)
+
+    /// The selected model answers; when it cannot, Apple's built-in
+    /// model does, and `fallbackNotice` says so — a user action never
+    /// fails solely because the preferred model is missing. Streaming
+    /// lands on `onPartial` as the words arrive.
+    func respond(instructions: String?, to prompt: String,
+                 onPartial: (@MainActor (String) -> Void)? = nil)
+        async throws -> (text: String, modelName: String) {
+        if let (endpoint, model) = selectedEndpointModel() {
+            do {
+                let text = try await ChatCompletionsClient.respond(
+                    base: endpoint.base, model: model,
+                    key: apiKey(for: endpoint.base),
+                    instructions: instructions, prompt: prompt,
+                    onPartial: onPartial)
+                return (text, "\(endpoint.hostLabel) \u{00B7} \(model)")
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                fallbackNotice = """
+                    \(model) wasn\u{2019}t available \u{2014} used Apple\u{2019}s \
+                    built-in model instead.
+                    """
+            }
+        }
+        let text = try await appleRespond(instructions: instructions,
+                                          to: prompt, onPartial: onPartial)
+        return (text, "Apple\u{2019}s built-in model")
+    }
+
+    private func appleRespond(instructions: String?, to prompt: String,
+                              onPartial: (@MainActor (String) -> Void)?)
+        async throws -> String {
+        #if canImport(FoundationModels)
+        guard case .available = SystemLanguageModel.default.availability else {
+            throw OrigamiLLMError.appleUnavailable
+        }
+        let session = instructions.map { LanguageModelSession(instructions: $0) }
+            ?? LanguageModelSession()
+        if let onPartial {
+            var text = ""
+            for try await partial in session.streamResponse(to: prompt) {
+                text = partial.content
+                onPartial(text)
+            }
+            return text
+        }
+        return try await session.respond(to: prompt).content
+        #else
+        throw OrigamiLLMError.appleUnavailable
+        #endif
+    }
+
+    // MARK: The paste box (spec §7)
+
+    enum PasteOutcome {
+        case endpoint(base: String, models: [String])
+        case needsKey(base: String)
+        case huggingFace(repo: String)
+        case invalid(String)
+    }
+
+    /// Classifies one pasted string: a server URL (tried live), a
+    /// Hugging Face repo (the MLX runtime's slot, not yet installed),
+    /// or neither — with the two accepted forms spelled out.
+    nonisolated static func classify(_ pasted: String) async -> PasteOutcome {
+        let trimmed = pasted.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.lowercased().hasPrefix("http://") || trimmed.lowercased().hasPrefix("https://") {
+            if let repo = huggingFaceRepo(in: trimmed) { return .huggingFace(repo: repo) }
+            let base = ChatCompletionsClient.normalizedBase(trimmed)
+            do {
+                let models = try await ChatCompletionsClient.models(base: base, key: nil)
+                return .endpoint(base: base, models: models)
+            } catch OrigamiLLMError.authRequired {
+                return .needsKey(base: base)
+            } catch {
+                return .invalid("Can\u{2019}t reach \(base). Is the server running?")
+            }
+        }
+        if trimmed.range(of: #"^[\w.-]+/[\w.-]+$"#, options: .regularExpression) != nil {
+            return .huggingFace(repo: trimmed)
+        }
+        return .invalid("""
+            Paste a server address (like http://localhost:11434) or a \
+            Hugging Face model id (like mlx-community/Qwen3-8B-4bit).
+            """)
+    }
+
+    private nonisolated static func huggingFaceRepo(in url: String) -> String? {
+        guard let components = URL(string: url), components.host()?.contains("huggingface.co") == true
+        else { return nil }
+        let parts = components.path().split(separator: "/").map(String.init)
+        guard parts.count >= 2 else { return nil }
+        return "\(parts[0])/\(parts[1])"
+    }
+
+    // MARK: Local-server detection (spec §6.1)
+
+    /// Probes the well-known local servers — Ollama and LM Studio — on
+    /// settings-open only, never in the background. Already-added
+    /// bases are left out.
+    func detectLocalServers() async -> [(base: String, models: [String])] {
+        let candidates = ["http://localhost:11434", "http://localhost:1234"]
+        var found: [(String, [String])] = []
+        for base in candidates where !endpoints.contains(where: { $0.base == base }) {
+            if let models = try? await ChatCompletionsClient.models(
+                base: base, key: nil, timeout: 0.8), !models.isEmpty {
+                found.append((base, models))
+            }
+        }
+        return found
+    }
+
+    // MARK: Persistence
+
+    private static func loadEndpoints() -> [OrigamiEndpoint] {
+        guard let data = UserDefaults.standard.data(forKey: "llmEndpoints"),
+              let decoded = try? JSONDecoder().decode([OrigamiEndpoint].self, from: data)
+        else { return [] }
+        return decoded
+    }
+
+    private func persistEndpoints() {
+        if let data = try? JSONEncoder().encode(endpoints) {
+            UserDefaults.standard.set(data, forKey: "llmEndpoints")
+        }
+    }
+}
+
+// MARK: - The chat-completions client (spec §6)
+
+/// The OpenAI-compatible wire: GET /v1/models to discover, POST
+/// /v1/chat/completions with stream:true to generate — the dialect
+/// Ollama, LM Studio, MLX-LM's server, and the hosted providers all
+/// speak.
+nonisolated enum ChatCompletionsClient {
+
+    /// scheme://host[:port] with trailing slashes and a trailing /v1
+    /// stripped — users paste http://localhost:11434, not .../v1.
+    static func normalizedBase(_ raw: String) -> String {
+        var base = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        while base.hasSuffix("/") { base.removeLast() }
+        if base.lowercased().hasSuffix("/v1") { base.removeLast(3) }
+        while base.hasSuffix("/") { base.removeLast() }
+        return base
+    }
+
+    static func models(base: String, key: String?,
+                       timeout: TimeInterval = 2) async throws -> [String] {
+        guard let url = URL(string: base + "/v1/models") else {
+            throw OrigamiLLMError.serverUnreachable(base)
+        }
+        var request = URLRequest(url: url, timeoutInterval: timeout)
+        if let key { request.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization") }
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+            if status == 401 || status == 403 {
+                throw OrigamiLLMError.authRequired(URL(string: base)?.host() ?? base)
+            }
+            guard status == 200,
+                  let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let list = object["data"] as? [[String: Any]] else {
+                throw OrigamiLLMError.serverUnreachable(URL(string: base)?.host() ?? base)
+            }
+            return list.compactMap { $0["id"] as? String }.sorted()
+        } catch let error as OrigamiLLMError {
+            throw error
+        } catch {
+            throw OrigamiLLMError.serverUnreachable(URL(string: base)?.host() ?? base)
+        }
+    }
+
+    /// Tries Ollama's /api/tags to get byte sizes for each model.
+    /// Returns an empty dict silently for servers that don't support it.
+    static func modelSizes(base: String, key: String?,
+                           timeout: TimeInterval = 2) async -> [String: Int64] {
+        guard let url = URL(string: base + "/api/tags") else { return [:] }
+        var request = URLRequest(url: url, timeoutInterval: timeout)
+        if let key { request.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization") }
+        guard let (data, response) = try? await URLSession.shared.data(for: request),
+              (response as? HTTPURLResponse)?.statusCode == 200,
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let list = object["models"] as? [[String: Any]] else { return [:] }
+        var sizes: [String: Int64] = [:]
+        for entry in list {
+            if let name = entry["name"] as? String,
+               let size = entry["size"] as? Int64 {
+                sizes[name] = size
+            }
+        }
+        return sizes
+    }
+
+    /// One generation, streamed (SSE) and gathered; `onPartial` sees
+    /// the text grow. Cancellation cancels the transport.
+    static func respond(base: String, model: String, key: String?,
+                        instructions: String?, prompt: String,
+                        onPartial: (@MainActor (String) -> Void)? = nil)
+        async throws -> String {
+        guard let url = URL(string: base + "/v1/chat/completions") else {
+            throw OrigamiLLMError.serverUnreachable(base)
+        }
+        var messages: [[String: String]] = []
+        if let instructions, !instructions.isEmpty {
+            messages.append(["role": "system", "content": instructions])
+        }
+        messages.append(["role": "user", "content": prompt])
+        var request = URLRequest(url: url, timeoutInterval: 300)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        if let key { request.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization") }
+        request.httpBody = try? JSONSerialization.data(withJSONObject: [
+            "model": model, "messages": messages, "stream": true,
+        ] as [String: Any])
+
+        let host = URL(string: base)?.host() ?? base
+        do {
+            let (bytes, response) = try await URLSession.shared.bytes(for: request)
+            let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+            if status == 401 || status == 403 { throw OrigamiLLMError.authRequired(host) }
+            guard status == 200 else {
+                throw OrigamiLLMError.generationFailed(
+                    "\(host) answered with status \(status).")
+            }
+            var text = ""
+            for try await line in bytes.lines {
+                guard line.hasPrefix("data:") else { continue }
+                let payload = line.dropFirst(5).trimmingCharacters(in: .whitespaces)
+                if payload == "[DONE]" { break }
+                guard let data = payload.data(using: .utf8),
+                      let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                      let choices = object["choices"] as? [[String: Any]],
+                      let delta = choices.first?["delta"] as? [String: Any],
+                      let piece = delta["content"] as? String else { continue }
+                text += piece
+                if let onPartial {
+                    let sofar = text
+                    await MainActor.run { onPartial(sofar) }
+                }
+            }
+            guard !text.isEmpty else {
+                throw OrigamiLLMError.generationFailed("\(host) sent an empty reply.")
+            }
+            return text
+        } catch let error as OrigamiLLMError {
+            throw error
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            throw OrigamiLLMError.serverUnreachable(host)
+        }
+    }
+}
+
+// MARK: - Ollama, the short road (Knowledge Space addition)
+
+/// Ollama the application: installed or not, and started with one
+/// click — the sandbox may launch another app, just not install one.
+nonisolated enum OllamaApp {
+    static let downloadPage = URL(string: "https://ollama.com/download/mac")!
+
+    static var isInstalled: Bool {
+        FileManager.default.fileExists(atPath: "/Applications/Ollama.app")
+    }
+
+    /// Opening the app starts its background server; it lives in the
+    /// menu bar and asks nothing further.
+    @MainActor static func launch() {
+        let configuration = NSWorkspace.OpenConfiguration()
+        configuration.activates = false
+        NSWorkspace.shared.openApplication(
+            at: URL(fileURLWithPath: "/Applications/Ollama.app"),
+            configuration: configuration)
+    }
+}
+
+/// Downloads models through Ollama's own API — never the Terminal.
+/// POST /api/pull streams JSON lines carrying completed/total; the
+/// finished model is added to the endpoint and becomes the selection,
+/// since downloading a model is the clearest way of choosing it.
+@MainActor @Observable
+final class OllamaPuller {
+    static let shared = OllamaPuller()
+
+    /// Model id → download fraction 0…1 while a pull runs.
+    private(set) var progress: [String: Double] = [:]
+    private(set) var failures: [String: String] = [:]
+    private var tasks: [String: Task<Void, Never>] = [:]
+
+    func isPulling(_ model: String) -> Bool { tasks[model] != nil }
+
+    func pull(model: String, base: String) {
+        guard tasks[model] == nil else { return }
+        failures[model] = nil
+        progress[model] = 0
+        tasks[model] = Task {
+            do {
+                try await stream(model: model, base: base)
+                // The new model joins the picker at once — and becomes
+                // the selection.
+                await OrigamiLLM.shared.refreshModels(for: base)
+                OrigamiLLM.shared.selectedID = OrigamiLLM.endpointID(base: base, model: model)
+            } catch is CancellationError {
+                // Cancelled by the user — no news to report.
+            } catch {
+                failures[model] = error.localizedDescription
+            }
+            progress[model] = nil
+            tasks[model] = nil
+        }
+    }
+
+    func cancel(model: String) {
+        tasks[model]?.cancel()
+        tasks[model] = nil
+        progress[model] = nil
+    }
+
+    private func stream(model: String, base: String) async throws {
+        guard let url = URL(string: base + "/api/pull") else {
+            throw OrigamiLLMError.serverUnreachable(base)
+        }
+        var request = URLRequest(url: url, timeoutInterval: 3600)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        // "model" is the current key; "name" the older one — send both.
+        request.httpBody = try? JSONSerialization.data(withJSONObject: [
+            "model": model, "name": model, "stream": true,
+        ] as [String: Any])
+        let (bytes, response) = try await URLSession.shared.bytes(for: request)
+        guard (response as? HTTPURLResponse)?.statusCode == 200 else {
+            throw OrigamiLLMError.generationFailed(
+                "Ollama answered with status \((response as? HTTPURLResponse)?.statusCode ?? 0).")
+        }
+        for try await line in bytes.lines {
+            guard let data = line.data(using: .utf8),
+                  let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+            else { continue }
+            if let problem = object["error"] as? String {
+                throw OrigamiLLMError.generationFailed(problem)
+            }
+            if let total = object["total"] as? Double, total > 0,
+               let completed = object["completed"] as? Double {
+                progress[model] = min(completed / total, 1)
+            }
+        }
+    }
+}
+
+// MARK: - Keychain (spec §6 — keys never in defaults)
+
+private nonisolated enum LLMKeychain {
+    private static let service = "info.futuretextlab.knowledgespace.llm"
+
+    static func read(account: String) -> String? {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: account,
+            kSecReturnData as String: true,
+        ]
+        var out: AnyObject?
+        guard SecItemCopyMatching(query as CFDictionary, &out) == errSecSuccess,
+              let data = out as? Data else { return nil }
+        return String(data: data, encoding: .utf8)
+    }
+
+    static func write(_ value: String?, account: String) {
+        let base: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: account,
+        ]
+        SecItemDelete(base as CFDictionary)
+        guard let value, let data = value.data(using: .utf8) else { return }
+        var add = base
+        add[kSecValueData as String] = data
+        SecItemAdd(add as CFDictionary, nil)
+    }
+}
+
+// MARK: - The settings sections (spec §8, hosted by Settings ▸ AI)
+
+/// The model picker, the paste box, and the endpoint list — dropped
+/// into the AI settings tab's Form.
+struct LLMModelSettingsSections: View {
+    @State private var llm = OrigamiLLM.shared
+    @State private var puller = OllamaPuller.shared
+    @State private var pasted = ""
+    @State private var isClassifying = false
+    @State private var status: String?
+    /// A base waiting on its API key (the paste box's auth branch).
+    @State private var keyBase: String?
+    @State private var keyText = ""
+    /// A reachable non-local server awaiting the §11 confirmation.
+    @State private var pendingRemote: (base: String, models: [String])?
+    /// The one-tap banner for a detected local server (§6.1).
+    @State private var detected: (base: String, models: [String])?
+    @State private var showingRecommendations = false
+
+    /// The Ollama server downloads can be asked of — an added endpoint
+    /// first, a detected-but-unadded one otherwise (downloading from it
+    /// adds it).
+    private var ollamaBase: String? {
+        if let added = llm.endpoints.first(where: { $0.base.contains(":11434") }) {
+            return added.base
+        }
+        if let detected, detected.base.contains(":11434") { return detected.base }
+        return nil
+    }
+
+    private var installedModelIDs: [String] {
+        llm.endpoints.flatMap(\.models) + (detected?.models ?? [])
+    }
+
+    /// The one-click row: the recommended model's name, its weight,
+    /// and Download — a progress bar while it comes, the selection
+    /// when it lands.
+    @ViewBuilder private func recommendedDownloadRow(base: String,
+                                                     pick: OllamaRecommendation) -> some View {
+        HStack(spacing: 10) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("\(pick.displayName) \u{2014} recommended for this Mac")
+                Text(String(format: "%.0f\u{00A0}GB download \u{00B7} becomes the chosen model when it lands", pick.diskGB))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+            if puller.isPulling(pick.id) {
+                ProgressView(value: puller.progress[pick.id] ?? 0)
+                    .frame(width: 120)
+                Text((puller.progress[pick.id] ?? 0)
+                    .formatted(.percent.precision(.fractionLength(0))))
+                    .font(.caption)
+                    .monospacedDigit()
+                    .foregroundStyle(.secondary)
+                Button("Cancel") { puller.cancel(model: pick.id) }
+                    .buttonStyle(.borderless)
+            } else {
+                Button("Download") { puller.pull(model: pick.id, base: base) }
+            }
+        }
+        if let failure = puller.failures[pick.id] {
+            Text(failure)
+                .font(.caption)
+                .foregroundStyle(.orange)
+        }
+    }
+
+    var body: some View {
+        Section {
+            Picker("Choose Model", selection: Binding(
+                get: { llm.selectedID },
+                set: { llm.selectedID = $0 })) {
+                Text("Apple\u{2019}s built-in \u{2014} on this Mac").tag("apple")
+                ForEach(llm.endpoints) { endpoint in
+                    ForEach(endpoint.models, id: \.self) { model in
+                        Text("\(endpoint.hostLabel) \u{00B7} \(model)")
+                            .tag(OrigamiLLM.endpointID(base: endpoint.base, model: model))
+                    }
+                }
+            }
+        } header: {
+            Text("Language Model")
+        } footer: {
+            Text("""
+                Apple\u{2019}s built-in model runs on this Mac \u{2014} no text \
+                leaves it. A server model sends the text it reads to that \
+                server. The session recorder\u{2019}s distilling (key sentences \
+                and keywords) uses the chosen model; when it isn\u{2019}t \
+                reachable, Apple\u{2019}s model answers and says so. The AI \
+                views and note analyses keep to Apple\u{2019}s model for now.
+                """)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+
+        Section {
+            // The short road (Knowledge Space): the pane walks the
+            // whole way itself — get Ollama, start it, download the
+            // model this Mac should have — each step replacing the
+            // last as it is taken.
+            if llm.endpoints.isEmpty && detected == nil {
+                if OllamaApp.isInstalled {
+                    HStack {
+                        Text("Ollama is installed but not running.")
+                        Spacer()
+                        Button("Start Ollama") { OllamaApp.launch() }
+                    }
+                } else {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("""
+                            Local AI in two steps: install Ollama \u{2014} free, \
+                            a minute \u{2014} and come back here. The app finds it \
+                            and offers the model suited to this Mac.
+                            """)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Link("Get Ollama for Mac", destination: OllamaApp.downloadPage)
+                    }
+                }
+            }
+            if let detected {
+                HStack {
+                    let name = detected.base.contains("11434") ? "Ollama" : "LM Studio"
+                    Text("\(name) is running with \(detected.models.count) model\(detected.models.count == 1 ? "" : "s").")
+                    Spacer()
+                    Button("Add") {
+                        llm.addOrUpdateEndpoint(base: detected.base,
+                                                models: detected.models, key: nil)
+                        self.detected = nil
+                        status = "Added."
+                    }
+                }
+            }
+            // One click from bare to brilliant: the recommended model,
+            // downloaded through Ollama's own API — no Terminal — and
+            // chosen the moment it lands.
+            if let base = ollamaBase,
+               let pick = OllamaModelCatalog.bestPick(for: .current),
+               !installedModelIDs.contains(where: {
+                   OllamaModelCatalog.matches(installed: $0, id: pick.id)
+               }) {
+                recommendedDownloadRow(base: base, pick: pick)
+            }
+            HStack {
+                TextField("A server address, or a Hugging Face model id",
+                          text: $pasted)
+                    .onSubmit { classifyPasted() }
+                Button("Add") { classifyPasted() }
+                    .disabled(isClassifying
+                              || pasted.trimmingCharacters(in: .whitespaces).isEmpty)
+            }
+            if let keyBase {
+                SecureField("API key for \(keyBase)", text: $keyText)
+                Button("Add with Key") { retryWithKey(keyBase) }
+                    .disabled(keyText.isEmpty || isClassifying)
+            }
+            if let pendingRemote {
+                // §11: a non-local server sees the reader's text — said
+                // before it is added, not after.
+                Text("\(pendingRemote.base) is not on this Mac: document text will be sent to that server.")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+                Button("Add Anyway") {
+                    llm.addOrUpdateEndpoint(base: pendingRemote.base,
+                                            models: pendingRemote.models,
+                                            key: keyText.isEmpty ? nil : keyText)
+                    self.pendingRemote = nil
+                    keyText = ""
+                    status = "Added."
+                }
+            }
+            if isClassifying {
+                HStack(spacing: 8) {
+                    ProgressView().controlSize(.small)
+                    Text("Asking the server\u{2026}").foregroundStyle(.secondary)
+                }
+            } else if let status {
+                Text(status).font(.caption).foregroundStyle(.secondary)
+            }
+            Button("Find a model for this Mac\u{2026}") {
+                showingRecommendations = true
+            }
+            .popover(isPresented: $showingRecommendations, arrowEdge: .trailing) {
+                ModelRecommendationsView(specs: .current, ollamaBase: ollamaBase)
+            }
+        } header: {
+            Text("Add a Model or Server")
+        } footer: {
+            Text("""
+                Ollama and LM Studio are found automatically while they run. \
+                With Ollama running, models download right here \u{2014} no \
+                Terminal; a Hugging Face id is remembered but not fetched.
+                """)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+
+        if !llm.endpoints.isEmpty {
+            Section("Servers") {
+                ForEach(llm.endpoints) { endpoint in
+                    HStack {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(endpoint.base)
+                            Text("\(endpoint.models.count) model\(endpoint.models.count == 1 ? "" : "s")\(endpoint.hasKey ? " \u{00B7} key in Keychain" : "")")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        Button("Refresh") {
+                            Task { await llm.refreshModels(for: endpoint.base) }
+                        }
+                        .buttonStyle(.borderless)
+                        Button(role: .destructive) {
+                            llm.removeEndpoint(endpoint.base)
+                        } label: {
+                            Image(systemName: "minus.circle")
+                        }
+                        .buttonStyle(.borderless)
+                    }
+                }
+            }
+        }
+
+        // The detection probe runs while the pane is open — never in
+        // the background (§6.1). It keeps watching quietly so the user
+        // who installs or starts Ollama mid-visit sees the next step
+        // appear by itself; with everything added, the probe finds no
+        // candidates and the loop is a cheap heartbeat.
+        Section {
+            EmptyView()
+        }
+        .task {
+            for endpoint in llm.endpoints {
+                await llm.refreshModels(for: endpoint.base)
+            }
+            while !Task.isCancelled {
+                detected = await llm.detectLocalServers().first
+                try? await Task.sleep(for: .seconds(3))
+            }
+        }
+
+    }
+
+    private func classifyPasted() {
+        let text = pasted
+        guard !text.trimmingCharacters(in: .whitespaces).isEmpty else { return }
+        isClassifying = true
+        status = nil
+        keyBase = nil
+        pendingRemote = nil
+        Task { @MainActor in
+            defer { isClassifying = false }
+            switch await OrigamiLLM.classify(text) {
+            case .endpoint(let base, let models):
+                let entry = OrigamiEndpoint(base: base)
+                if entry.isLocal {
+                    llm.addOrUpdateEndpoint(base: base, models: models, key: nil)
+                    status = "Added \(models.count) model\(models.count == 1 ? "" : "s")."
+                    pasted = ""
+                } else {
+                    pendingRemote = (base, models)
+                }
+            case .needsKey(let base):
+                keyBase = base
+                status = nil
+            case .huggingFace(let repo):
+                status = """
+                    \(repo) is a Hugging Face model \u{2014} in-app downloads \
+                    arrive with the MLX runtime. For now, point the app at a \
+                    server (Ollama can run it: \u{201C}ollama pull\u{201D}).
+                    """
+            case .invalid(let message):
+                status = message
+            }
+        }
+    }
+
+    private func retryWithKey(_ base: String) {
+        isClassifying = true
+        Task { @MainActor in
+            defer { isClassifying = false }
+            do {
+                let models = try await ChatCompletionsClient.models(base: base, key: keyText)
+                let entry = OrigamiEndpoint(base: base)
+                if entry.isLocal {
+                    llm.addOrUpdateEndpoint(base: base, models: models, key: keyText)
+                    status = "Added \(models.count) model\(models.count == 1 ? "" : "s")."
+                    keyBase = nil
+                    keyText = ""
+                    pasted = ""
+                } else {
+                    pendingRemote = (base, models)
+                    keyBase = nil
+                }
+            } catch {
+                status = error.localizedDescription
+            }
+        }
+    }
+}
+
+// MARK: - Mac hardware snapshot
+
+fileprivate struct MacSpecs {
+    let ramGB: Int
+    let isAppleSilicon: Bool
+
+    static var current: MacSpecs {
+        let ram = Int(ProcessInfo.processInfo.physicalMemory / 1_073_741_824)
+        var flag: Int32 = 0
+        var size = MemoryLayout<Int32>.size
+        sysctlbyname("hw.optional.arm64", &flag, &size, nil, 0)
+        return MacSpecs(ramGB: ram, isAppleSilicon: flag == 1)
+    }
+}
+
+// MARK: - Curated model catalogue (researched August 2026)
+
+fileprivate struct OllamaRecommendation: Identifiable {
+    let id: String          // Ollama pull ID, e.g. "qwen3:14b"
+    let displayName: String
+    let summary: String
+    let diskGB: Double
+    let minRAMGB: Int
+}
+
+fileprivate enum OllamaModelCatalog {
+    static let all: [OllamaRecommendation] = [
+        // ── 8 GB ─────────────────────────────────────────────────────────
+        OllamaRecommendation(
+            id: "phi4-mini", displayName: "Phi-4-mini 3.8B",
+            summary: "Remarkable 128K context for a 3.8B model; fast on any Mac; best choice for long EPUB passages on 8 GB",
+            diskGB: 2.5, minRAMGB: 8),
+        OllamaRecommendation(
+            id: "llama3.2:3b", displayName: "Llama 3.2 3B",
+            summary: "Lightweight and quick; good for short summaries when speed matters most",
+            diskGB: 2.0, minRAMGB: 8),
+        OllamaRecommendation(
+            id: "qwen3:4b", displayName: "Qwen 3 4B",
+            summary: "Outperforms older 7B models; thinking mode for step-by-step reasoning; fits any Mac",
+            diskGB: 2.7, minRAMGB: 8),
+        OllamaRecommendation(
+            id: "qwen3:8b", displayName: "Qwen 3 8B",
+            summary: "Best accuracy on 8 GB Macs; stronger reasoning than Llama 3.1 8B; built-in thinking mode",
+            diskGB: 5.2, minRAMGB: 8),
+        // ── 16 GB ────────────────────────────────────────────────────────
+        OllamaRecommendation(
+            id: "qwen3:14b", displayName: "Qwen 3 14B",
+            summary: "128K\u{2013}1M context; strongest multilingual; standout accuracy for 16 GB Macs",
+            diskGB: 9.0, minRAMGB: 16),
+        // ── 24 GB ────────────────────────────────────────────────────────
+        OllamaRecommendation(
+            id: "mistral-small:22b", displayName: "Mistral Small 22B",
+            summary: "High summarisation accuracy in benchmarks; fast inference; good all-rounder for 24 GB",
+            diskGB: 14.0, minRAMGB: 24),
+        // ── 32 GB ────────────────────────────────────────────────────────
+        OllamaRecommendation(
+            id: "qwen3:27b", displayName: "Qwen 3 27B",
+            summary: "Near-frontier quality; best dense model for 32 GB Macs",
+            diskGB: 17.0, minRAMGB: 32),
+        OllamaRecommendation(
+            id: "qwen3:30b-a3b", displayName: "Qwen 3 30B-A3B (MoE)",
+            summary: "MoE: 3B active params, 30B total \u{2014} faster than the dense 27B and often smarter; the best value at 32 GB",
+            diskGB: 19.0, minRAMGB: 32),
+        // ── 64 GB ────────────────────────────────────────────────────────
+        OllamaRecommendation(
+            id: "llama3.3:70b", displayName: "Llama 3.3 70B",
+            summary: "Deep document analysis and RAG; one of the strongest dense 70B models available",
+            diskGB: 43.0, minRAMGB: 64),
+        OllamaRecommendation(
+            id: "qwen3:70b", displayName: "Qwen 3 70B",
+            summary: "Frontier-class reasoning and multilingual; trades blows with hosted models on most benchmarks",
+            diskGB: 47.0, minRAMGB: 64),
+        // ── 80 GB ────────────────────────────────────────────────────────
+        OllamaRecommendation(
+            id: "llama4:scout", displayName: "Llama 4 Scout (MoE)",
+            summary: "10M-token context \u{2014} an entire EPUB library in one pass; MoE (17B active of 109B total); needs \u{2265}80 GB RAM",
+            diskGB: 69.0, minRAMGB: 80),
+    ]
+
+    static func recommendations(for specs: MacSpecs) -> [OllamaRecommendation] {
+        all.filter { $0.minRAMGB <= specs.ramGB }
+    }
+
+    /// The one model a Mac should start with. MoE picks are favoured
+    /// over the dense giants a big Mac could hold: distilling runs
+    /// beside the live transcriber, and small-active-parameter speed
+    /// beats a slow heavyweight there.
+    static func bestPick(for specs: MacSpecs) -> OllamaRecommendation? {
+        let pick = specs.ramGB >= 32 ? "qwen3:30b-a3b"
+            : specs.ramGB >= 16 ? "qwen3:14b"
+            : "qwen3:8b"
+        return all.first { $0.id == pick }
+    }
+
+    /// Whether an installed model id satisfies a catalogue id —
+    /// Ollama lists "qwen3:8b" as itself but "llama3.1" as
+    /// "llama3.1:latest", so the match forgives the tag.
+    static func matches(installed: String, id: String) -> Bool {
+        installed == id || installed.hasPrefix(id + ":")
+    }
+}
+
+// MARK: - Recommendations sheet
+
+fileprivate struct ModelRecommendationsView: View {
+    let specs: MacSpecs
+    /// A running Ollama to download through — rows offer Download when
+    /// it is here, Copy command when it is not.
+    var ollamaBase: String? = nil
+    @Environment(\.dismiss) private var dismiss
+    @State private var copiedID: String?
+    @State private var llm = OrigamiLLM.shared
+
+    private var installedModelIDs: Set<String> {
+        Set(llm.endpoints.flatMap { $0.models })
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+
+            // Title row
+            HStack(alignment: .firstTextBaseline) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Models for your Mac")
+                        .font(.headline)
+                    HStack(spacing: 10) {
+                        Label("\(specs.ramGB)\u{00A0}GB memory", systemImage: "memorychip")
+                        if specs.isAppleSilicon {
+                            Label("Apple Silicon", systemImage: "cpu")
+                        }
+                    }
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                }
+                Spacer()
+                Button("Done") { dismiss() }
+                    .keyboardShortcut(.defaultAction)
+            }
+            .padding()
+
+            Text("All models run on Ollama. Click \u{201C}Copy command\u{201D} on any row, then paste it in Terminal after installing Ollama.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.horizontal)
+                .padding(.bottom, 10)
+
+            Divider()
+
+            ScrollView {
+                LazyVStack(spacing: 0) {
+                    ForEach(OllamaModelCatalog.all) { model in
+                        RecommendationRow(
+                            model: model,
+                            isCompatible: model.minRAMGB <= specs.ramGB,
+                            isInstalled: installedModelIDs.contains {
+                                OllamaModelCatalog.matches(installed: $0, id: model.id)
+                            },
+                            ollamaBase: ollamaBase,
+                            copiedID: $copiedID)
+                        Divider().padding(.leading)
+                    }
+                }
+            }
+
+            Divider()
+
+            HStack {
+                Text("Researched August 2026.")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+                Spacer()
+                Link("Browse all at ollama.com", destination: URL(string: "https://ollama.com/library")!)
+                    .font(.caption)
+            }
+            .padding()
+        }
+        .frame(width: 520, height: 480)
+    }
+}
+
+private struct RecommendationRow: View {
+    let model: OllamaRecommendation
+    let isCompatible: Bool
+    let isInstalled: Bool
+    var ollamaBase: String? = nil
+    @Binding var copiedID: String?
+    @State private var puller = OllamaPuller.shared
+
+    private var pullCommand: String { "ollama pull \(model.id)" }
+    private var isCopied: Bool { copiedID == model.id }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 5) {
+
+            // Name + size badges
+            HStack(spacing: 6) {
+                Text(model.displayName)
+                    .fontWeight(.semibold)
+                Spacer()
+                Label(String(format: "%.0f\u{00A0}GB RAM", Double(model.minRAMGB)),
+                      systemImage: "memorychip")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                Text(String(format: "%.0f\u{00A0}GB download", model.diskGB))
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 5)
+                    .padding(.vertical, 2)
+                    .background(.secondary.opacity(0.12), in: Capsule())
+            }
+
+            // Description
+            Text(model.summary)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            // Status pills
+            if isCompatible || isInstalled {
+                HStack(spacing: 6) {
+                    if isCompatible {
+                        Text("Compatible with this Mac")
+                            .font(.caption2)
+                            .foregroundStyle(.green)
+                            .padding(.horizontal, 7)
+                            .padding(.vertical, 3)
+                            .background(.green.opacity(0.12), in: Capsule())
+                    }
+                    if isInstalled {
+                        Text("Installed")
+                            .font(.caption2)
+                            .foregroundStyle(.blue)
+                            .padding(.horizontal, 7)
+                            .padding(.vertical, 3)
+                            .background(.blue.opacity(0.12), in: Capsule())
+                    }
+                }
+            }
+
+            // The action: with Ollama running, Download — through its
+            // own API, progress in place, chosen when it lands. Without
+            // it, the Terminal command to copy, as before.
+            HStack(spacing: 8) {
+                Text(pullCommand)
+                    .font(.system(.caption2, design: .monospaced))
+                    .foregroundStyle(.tertiary)
+                Spacer()
+                if let base = ollamaBase, !isInstalled {
+                    if puller.isPulling(model.id) {
+                        ProgressView(value: puller.progress[model.id] ?? 0)
+                            .frame(width: 100)
+                        Text((puller.progress[model.id] ?? 0)
+                            .formatted(.percent.precision(.fractionLength(0))))
+                            .font(.caption2)
+                            .monospacedDigit()
+                            .foregroundStyle(.secondary)
+                        Button("Cancel") { puller.cancel(model: model.id) }
+                            .buttonStyle(.borderless)
+                            .controlSize(.small)
+                    } else {
+                        Button {
+                            puller.pull(model: model.id, base: base)
+                        } label: {
+                            Label("Download", systemImage: "arrow.down.circle")
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                    }
+                } else if ollamaBase == nil {
+                    Button {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(pullCommand, forType: .string)
+                        copiedID = model.id
+                        Task {
+                            try? await Task.sleep(for: .seconds(2))
+                            if copiedID == model.id { copiedID = nil }
+                        }
+                    } label: {
+                        Label(isCopied ? "Copied" : "Copy command",
+                              systemImage: isCopied ? "checkmark" : "doc.on.doc")
+                            .animation(.default, value: isCopied)
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .tint(isCopied ? .green : nil)
+                }
+            }
+            if let failure = puller.failures[model.id] {
+                Text(failure)
+                    .font(.caption2)
+                    .foregroundStyle(.orange)
+            }
+        }
+        .padding(.horizontal)
+        .padding(.vertical, 10)
+    }
+}
+#endif
