@@ -171,13 +171,6 @@ final class AppState {
         didSet { UserDefaults.standard.set(listTextSize, forKey: "listTextSize") }
     }
 
-    /// How the Notes place orders its list: by time (newest first,
-    /// the default) or by title — chosen with the icons under the
-    /// sidebar's Notes row, Origami Text's idiom.
-    var notesSortByTitle: Bool =
-        UserDefaults.standard.bool(forKey: "notesSortByTitle") {
-        didSet { UserDefaults.standard.set(notesSortByTitle, forKey: "notesSortByTitle") }
-    }
 
     /// The point size of an open note's own words — the writing view
     /// and its flowed reading. Chosen in Settings ▸ Appearance; 16 by

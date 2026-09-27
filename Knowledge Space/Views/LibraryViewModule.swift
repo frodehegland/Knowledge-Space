@@ -769,7 +769,7 @@ struct DocumentListView: View {
             // already out of the lists, captured AI chats stay under
             // AI Chats, and a letter still being written under Draft
             // Letters.
-            let notes = state.filteredEntries.filter { entry in
+            return state.filteredEntries.filter { entry in
                 entry.doc.actionValue != .toDo
                     && entry.doc.documentType != LiquidDoc.DocumentType.journal.rawValue
                     // A session is a kind of journal — it lives in the
@@ -778,12 +778,6 @@ struct DocumentListView: View {
                     && !entry.doc.isAIConversation
                     && !(entry.doc.documentType == LiquidDoc.DocumentType.letter.rawValue
                          && state.isDraft(entry.doc))
-            }
-            // The sidebar's icons under Notes choose the order: time
-            // (the list's own, newest first) or title.
-            guard state.notesSortByTitle else { return notes }
-            return notes.sorted {
-                $0.doc.title.localizedStandardCompare($1.doc.title) == .orderedAscending
             }
         }
         if aiChatsOnly {
@@ -1355,11 +1349,6 @@ struct DocumentListView: View {
         } else {
             let bannerIDs = Set(importantBanner.map(\.id))
             entries = displayedEntries.filter { !bannerIDs.contains($0.id) }
-        }
-        // Title-sorted Notes read as one alphabetical run — day
-        // headings would shuffle meaninglessly between the letters.
-        if notesOnly, state.notesSortByTitle {
-            return entries.isEmpty ? [] : [DayGroup(label: "", date: .now, entries: entries)]
         }
         switch grouping {
         case .place: return placeGroups(entries)

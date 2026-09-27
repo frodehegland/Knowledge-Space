@@ -163,13 +163,6 @@ struct LibrarySidebarView: View {
                                 hoveredItem = inside ? place.item : nil
                             }
                             #endif
-                            // Origami Text's idiom: the chosen Notes
-                            // row grows two quiet icons beneath it —
-                            // the list's order, by time or by title.
-                            if place.item == .notes,
-                               state.sidebarSelection == .notes {
-                                notesSortIcons
-                            }
                         }
                         // New left the column for ⌘N and the toolbar;
                         // New Letter rests until Digital Letters'
@@ -243,33 +236,6 @@ struct LibrarySidebarView: View {
         // the app's own name, "Knowledge Space", to stand whole, and
         // the longest section entries with it.
         .navigationSplitViewColumnWidth(min: 280, ideal: 295)
-    }
-
-    /// The sort icons under the sidebar's Notes row — Origami Text's
-    /// idiom: time (the list's own order, newest first) and title,
-    /// the chosen one standing dark.
-    private var notesSortIcons: some View {
-        HStack(spacing: 16) {
-            notesSortIcon("clock", byTitle: false, help: "Sort by time")
-            notesSortIcon("textformat", byTitle: true, help: "Sort by title")
-            Spacer(minLength: 0)
-        }
-        .padding(.leading, 26)
-        .padding(.vertical, 2)
-        .listRowSeparator(.hidden)
-    }
-
-    private func notesSortIcon(_ symbol: String, byTitle: Bool, help: String) -> some View {
-        Button {
-            state.notesSortByTitle = byTitle
-        } label: {
-            Image(systemName: symbol)
-                .font(.system(size: 12))
-                .foregroundStyle(state.notesSortByTitle == byTitle
-                                 ? AnyShapeStyle(.primary) : AnyShapeStyle(.tertiary))
-        }
-        .buttonStyle(.plain)
-        .help(help)
     }
 
     /// A section heading that folds its rows away: the title with a
