@@ -535,34 +535,11 @@ struct VoiceCaptureView: View {
             .disabled(isRecording)   // hands off while dictating
     }
 
+    /// The shared filing pop-up — the Mac's left-column order, small
+    /// type — under this sheet's wide label.
     private var filingMenu: some View {
-        let customFolders = model.filingFolders.filter {
-            !["thoughts", "inspirations", "journal", "archived"]
-                .contains($0.lowercased())
-        }
-        let label: String = {
-            if let f = filingFolder { return model.displayName(for: f) }
-            return filingKind == .note ? "Note" : filingKind.displayName
-        }()
-        return Menu {
-            ForEach([LiquidDoc.DocumentType.note, .thought, .journal, .inspiration],
-                    id: \.self) { k in
-                Button(k == .note ? "Note" : k.displayName) {
-                    filingKind = k
-                    filingFolder = nil
-                }
-            }
-            if !customFolders.isEmpty {
-                Divider()
-                ForEach(customFolders, id: \.self) { folder in
-                    // The alias shows; the canonical name files.
-                    Button(model.displayName(for: folder)) {
-                        filingFolder = folder
-                        filingKind = .note
-                    }
-                }
-            }
-        } label: {
+        let label = model.displayName(for: model.filingChoice(kind: filingKind, folder: filingFolder))
+        return FilingPicker(kind: $filingKind, folder: $filingFolder) {
             HStack {
                 Text("File under:")
                     .foregroundStyle(.secondary)

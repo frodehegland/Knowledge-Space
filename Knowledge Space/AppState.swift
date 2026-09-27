@@ -136,7 +136,11 @@ final class AppState {
     /// Full — chosen in Settings ▸ Appearance; the column rebuilds when
     /// it changes.
     var sidebarLayout: SidebarLayout = SidebarLayout.current {
-        didSet { UserDefaults.standard.set(sidebarLayout.rawValue, forKey: SidebarLayout.key) }
+        didSet {
+            UserDefaults.standard.set(sidebarLayout.rawValue, forKey: SidebarLayout.key)
+            // The layout reshapes the column's sections; the phone follows.
+            writeFolderOrderManifest()
+        }
     }
     /// Whether the window currently stands as the two-column "In the
     /// list" arrangement: documents open in the list itself and no
@@ -670,6 +674,7 @@ final class AppState {
         }
         sidebarFolderOrder = whole
         UserDefaults.standard.set(whole, forKey: "sidebarFolderOrder")
+        writeFolderOrderManifest()
     }
 
     func isArchived(_ doc: LiquidDoc) -> Bool {
@@ -751,6 +756,46 @@ final class AppState {
               let data = try? JSONSerialization.data(withJSONObject: filingFolders) else { return }
         let url = folderURL.appendingPathComponent("filing-folders.json")
         try? data.write(to: url, options: .atomic)
+        writeFolderOrderManifest()
+    }
+
+    /// The left column's folders, section by section, exactly as the
+    /// person sees them — in the Small layout the head's Journal and
+    /// writing folders, then Files in their own Move Up / Move Down
+    /// order with Archived last. Canonical names; renames travel in
+    /// filing-folder-aliases.json.
+    var sidebarFolderSections: [[String]] {
+        SidebarCatalog.sections(filedFolders: sidebarFiledFolders, layout: sidebarLayout)
+            .map { section in
+                section.places.compactMap { place -> String? in
+                    if case .filedFolder(let folder) = place.item { return folder }
+                    return nil
+                }
+            }
+            .filter { !$0.isEmpty }
+    }
+
+    @ObservationIgnored private var lastWrittenFolderSections: [[String]]?
+
+    /// Writes the column's folder order beside filing-folders.json, so
+    /// the phone's filing pop-up lists the folders as this Mac's left
+    /// column does. Plain, self-describing JSON; written only when the
+    /// order has changed.
+    func writeFolderOrderManifest() {
+        let sections = sidebarFolderSections
+        guard sections != lastWrittenFolderSections,
+              let folderURL = index.folderURL else { return }
+        let manifest: [String: Any] = [
+            "description": "The filing folders in the order the Mac's left column shows them, one array per sidebar section. Knowledge Space on iOS orders its filing pop-up by this.",
+            "sections": sections,
+        ]
+        guard let data = try? JSONSerialization.data(withJSONObject: manifest,
+                                                     options: [.prettyPrinted, .sortedKeys])
+        else { return }
+        let url = folderURL.appendingPathComponent("filing-folder-order.json")
+        if (try? data.write(to: url, options: .atomic)) != nil {
+            lastWrittenFolderSections = sections
+        }
     }
 
     /// The user's renames: canonical folder name (lowercased) → the name
@@ -830,6 +875,8 @@ final class AppState {
     private func persistFiling() {
         UserDefaults.standard.set(filedFolders, forKey: "filedFolders")
         index.setArchivedIDs(archivedDocumentIDs)
+        // A folder newly in use joins the column, so its order may move.
+        writeFolderOrderManifest()
     }
 
     #if os(macOS)

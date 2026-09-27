@@ -279,6 +279,87 @@ final class NotesModel {
         folderAliases[folder.lowercased()] ?? folder
     }
 
+    /// The Mac's left-column folder order, section by section, read from
+    /// filing-folder-order.json — empty until the Mac has written it.
+    var folderSections: [[String]] = []
+
+    /// One line of the filing pop-up: a standard kind, or a folder.
+    enum FilingChoice: Hashable {
+        case kind(LiquidDoc.DocumentType)
+        case folder(String)
+    }
+
+    /// The name the Mac's column gives a choice: each kind stands there
+    /// as its folder. Note — the default, no category — takes the Notes
+    /// folder's place, so the pop-up offers one Note, not two.
+    private func columnName(for choice: FilingChoice) -> String {
+        switch choice {
+        case .kind(.thought): "Thoughts"
+        case .kind(.journal): "Journal"
+        case .kind(.inspiration): "Inspirations"
+        case .kind: "Notes"
+        case .folder(let folder): folder
+        }
+    }
+
+    /// Folder names that only repeat a kind — the plural the Mac files
+    /// under, a stray singular, or Archived — never offered as folders
+    /// of their own: the kind's line stands for them.
+    private static let kindFolderWords: [String: LiquidDoc.DocumentType] = [
+        "note": .note, "notes": .note,
+        "thought": .thought, "thoughts": .thought,
+        "inspiration": .inspiration, "inspirations": .inspiration,
+        "journal": .journal,
+    ]
+
+    /// The choice a note's filing stands for. A note filed under a kind's
+    /// folder (the Mac files a Note under "Notes") reads as that kind.
+    func filingChoice(kind: LiquidDoc.DocumentType, folder: String?) -> FilingChoice {
+        guard let folder else { return .kind(kind) }
+        if let word = Self.kindFolderWords[folder.lowercased()] { return .kind(word) }
+        return .folder(folder)
+    }
+
+    /// The name a choice shows in the pop-up.
+    func displayName(for choice: FilingChoice) -> String {
+        switch choice {
+        case .kind(let kind): kind == .note ? "Note" : kind.displayName
+        case .folder(let folder): displayName(for: folder)
+        }
+    }
+
+    /// The filing pop-up's choices, in the Mac's left-column order and
+    /// sections. Anything the Mac's column doesn't list yet follows in
+    /// a last section; with no order from the Mac, the kinds stand
+    /// first and the folders after, A–Z.
+    var filingSections: [[FilingChoice]] {
+        let kinds: [FilingChoice] = [LiquidDoc.DocumentType.note, .thought, .journal, .inspiration]
+            .map { .kind($0) }
+        let folders: [FilingChoice] = filingFolders
+            .filter {
+                $0.lowercased() != "archived" && Self.kindFolderWords[$0.lowercased()] == nil
+            }
+            .map { .folder($0) }
+        guard !folderSections.isEmpty else {
+            return [kinds, folders].filter { !$0.isEmpty }
+        }
+        var remaining = kinds + folders
+        var result: [[FilingChoice]] = []
+        for section in folderSections {
+            var placed: [FilingChoice] = []
+            for name in section {
+                if let index = remaining.firstIndex(where: {
+                    columnName(for: $0).caseInsensitiveCompare(name) == .orderedSame
+                }) {
+                    placed.append(remaining.remove(at: index))
+                }
+            }
+            if !placed.isEmpty { result.append(placed) }
+        }
+        if !remaining.isEmpty { result.append(remaining) }
+        return result
+    }
+
     init() {
         restoreFolder()
         locationFinder.onPlace = { [weak self] place in
@@ -411,6 +492,15 @@ final class NotesModel {
         guard let folderURL else { return }
         let url = folderURL.appendingPathComponent("filing-folders.json")
         let aliasURL = folderURL.appendingPathComponent("filing-folder-aliases.json")
+        let orderURL = folderURL.appendingPathComponent("filing-folder-order.json")
+        let sections: [[String]]? = await Task.detached(priority: .utility) {
+            try? FileManager.default.startDownloadingUbiquitousItem(at: orderURL)
+            return (try? Data(contentsOf: orderURL)).flatMap {
+                (try? JSONSerialization.jsonObject(with: $0) as? [String: Any])?["sections"] as? [[String]]
+            }
+        }.value
+        // nil when unreadable — the last known order stands.
+        if let sections, sections != folderSections { folderSections = sections }
         let (folders, aliases): ([String], [String: String]?) = await Task.detached(priority: .utility) {
             // Request download if the manifests aren't local yet.
             try? FileManager.default.startDownloadingUbiquitousItem(at: url)
@@ -1168,21 +1258,17 @@ struct NewNoteView: View {
                     .background(theme.background)
                     .clipShape(RoundedRectangle(cornerRadius: 12))
                     .focused($writing)
-                // Filing destination — a single pop-up button that lists
-                // every option: the four standard kinds and all custom
-                // folders from the community folder.
-                filingMenu
-                // Important, a Scan button, and To Do share one line, at
-                // the small size the kind picker used so all three fit:
-                // Important at the left, Scan in the middle, To Do at the
-                // right with its word beside the switch.
+                // Important, the filing pop-up, and To Do share one line,
+                // at the small size the kind picker used: Important at the
+                // left, where the note files in the middle, To Do at the
+                // right with its word beside the switch. Scan lives in the
+                // toolbar, between Cancel and Done.
                 HStack {
                     Toggle("Important", isOn: $isImportant)
                         .fixedSize()
                         .tint(.orange)
                     Spacer()
-                    Button("Scan") { startScan() }
-                        .disabled(scanStage != nil)
+                    filingMenu
                     Spacer()
                     Text("To Do")
                     Toggle("To Do", isOn: $isToDo)
@@ -1210,6 +1296,16 @@ struct NewNoteView: View {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
                 }
+                // Scan stands between Cancel and Done: it makes the note
+                // an inspiration and opens the camera at once. Plain blue
+                // text, not a glass-capsule button.
+                ToolbarItem(placement: .principal) {
+                    Button("Scan") { startScan() }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(scanStage == nil ? Color.accentColor : .secondary)
+                        .disabled(scanStage != nil)
+                }
+                .sharedBackgroundVisibility(.hidden)
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Done") { save() }
                         // A found book is content in itself, so Done
@@ -1359,57 +1455,19 @@ struct NewNoteView: View {
                     in: RoundedRectangle(cornerRadius: 12))
     }
 
-    /// A prominently placed pop-up button that lists every filing
+    /// A compact pop-up button, between Important and To Do, that lists every filing
     /// destination — the four standard kinds and all custom folders
-    /// discovered from the community folder (synced from macOS via
-    /// filing-folders.json). The label always shows the current choice.
+    /// discovered from the community folder — in the Mac's left-column
+    /// order. The label always shows the current choice.
     private var filingMenu: some View {
-        let customFolders = model.filingFolders.filter {
-            !["thoughts", "inspirations", "journal", "archived"]
-                .contains($0.lowercased())
+        let label = model.displayName(for: model.filingChoice(kind: filingKind, folder: filingFolder))
+        return FilingPicker(kind: $filingKind, folder: $filingFolder) {
+            FilingMenuLabel(label: label)
         }
-        let label: String = {
-            if let f = filingFolder { return model.displayName(for: f) }
-            return filingKind == .note ? "Note" : filingKind.displayName
-        }()
-        return Menu {
-            ForEach([LiquidDoc.DocumentType.note, .thought, .journal, .inspiration],
-                    id: \.self) { k in
-                Button(k == .note ? "Note" : k.displayName) {
-                    filingKind = k
-                    filingFolder = nil
-                }
-            }
-            if !customFolders.isEmpty {
-                Divider()
-                ForEach(customFolders, id: \.self) { folder in
-                    // The alias shows; the canonical name files.
-                    Button(model.displayName(for: folder)) {
-                        filingFolder = folder
-                        filingKind = .note
-                    }
-                }
-            }
-        } label: {
-            HStack {
-                Text("File under:")
-                    .foregroundStyle(.secondary)
-                Text(label)
-                    .fontWeight(.medium)
-                Image(systemName: "chevron.up.chevron.down")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-            .font(.subheadline)
-            .padding(.horizontal, 14)
-            .padding(.vertical, 8)
-            .frame(maxWidth: .infinity)
-            .background(Color(.secondarySystemBackground),
-                        in: RoundedRectangle(cornerRadius: 10))
-        }
+        .accessibilityLabel("File under \(label)")
     }
 
-    /// The Scan button on the toggle line: makes this an inspiration and
+    /// The Scan button in the toolbar: makes this an inspiration and
     /// opens the camera at once, one tap to capture.
     private func startScan() {
         kind = .inspiration
@@ -1454,6 +1512,110 @@ struct NewNoteView: View {
 /// carries only the when and the where. A voice-created note — its title
 /// just the first four words of its body — shows no title at all, only
 /// the whole body, which carries its place and moment at the bottom.
+/// The filing pop-up's face, shared by the writing sheet and the editor:
+/// compact enough to sit between Important and To Do — the current choice
+/// and the pop-up chevron, no "File under" caption.
+private struct FilingMenuLabel: View {
+    let label: String
+
+    var body: some View {
+        HStack(spacing: 4) {
+            Text(label)
+                .fontWeight(.medium)
+                .lineLimit(1)
+            Image(systemName: "chevron.up.chevron.down")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+        }
+        .font(.footnote)
+        .foregroundStyle(.primary)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .background(Color(.secondarySystemBackground), in: Capsule())
+    }
+}
+
+/// The filing pop-up, shared by the writing sheet, the editor, and voice
+/// capture: the choices in the Mac's left-column order, a hairline
+/// between its sections, in small type so more lines fit before it
+/// scrolls. A popover of our own rather than a system menu, whose type
+/// size can't be set.
+struct FilingPicker<Label: View>: View {
+    @Environment(NotesModel.self) private var model
+    @Binding var kind: LiquidDoc.DocumentType
+    @Binding var folder: String?
+    @ViewBuilder var label: () -> Label
+
+    @State private var isOpen = false
+    /// The list's natural height, measured, so the popover fits it
+    /// until the screen runs out and then scrolls.
+    @State private var listHeight: CGFloat = 0
+
+    private var selected: NotesModel.FilingChoice {
+        model.filingChoice(kind: kind, folder: folder)
+    }
+
+    var body: some View {
+        Button { isOpen = true } label: { label() }
+            .buttonStyle(.plain)
+            .popover(isPresented: $isOpen) {
+                ScrollView {
+                    list
+                        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: {
+                            listHeight = $0
+                        }
+                }
+                .scrollBounceBehavior(.basedOnSize)
+                .frame(width: 230, height: min(max(listHeight, 44), 520))
+                .presentationCompactAdaptation(.popover)
+            }
+    }
+
+    private var list: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            ForEach(Array(model.filingSections.enumerated()), id: \.offset) { index, section in
+                if index > 0 {
+                    Divider().padding(.vertical, 3)
+                }
+                ForEach(section, id: \.self) { choice in
+                    row(choice)
+                }
+            }
+        }
+        .padding(.vertical, 6)
+    }
+
+    private func row(_ choice: NotesModel.FilingChoice) -> some View {
+        Button {
+            switch choice {
+            case .kind(let k):
+                kind = k
+                folder = nil
+            case .folder(let f):
+                // The alias shows; the canonical name files.
+                folder = f
+                kind = .note
+            }
+            isOpen = false
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: "checkmark")
+                    .font(.caption2.weight(.semibold))
+                    .opacity(choice == selected ? 1 : 0)
+                Text(model.displayName(for: choice))
+                    .lineLimit(1)
+                Spacer(minLength: 0)
+            }
+            .font(.footnote)
+            .foregroundStyle(.primary)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 6)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+}
+
 struct NoteEditorView: View {
     @Environment(NotesModel.self) private var model
     let docID: String
@@ -1514,16 +1676,17 @@ struct NoteEditorView: View {
                     // editing — matches the same menu used on the new-note
                     // sheet and on macOS.
                     if isEditing {
-                        editFilingMenu
                         // The same row as the writing sheet: Important at
-                        // the left in orange, To Do at the right with its
-                        // word beside the switch. On iOS the standing is a
-                        // plain To Do on/off — the other standings live on
-                        // the Mac.
+                        // the left in orange, the filing pop-up in the
+                        // middle, To Do at the right with its word beside
+                        // the switch. On iOS the standing is a plain To Do
+                        // on/off — the other standings live on the Mac.
                         HStack {
                             Toggle("Important", isOn: $isImportant)
                                 .fixedSize()
                                 .tint(.orange)
+                            Spacer()
+                            editFilingMenu
                             Spacer()
                             Text("To Do")
                             Toggle("To Do", isOn: Binding(
@@ -1574,49 +1737,11 @@ struct NoteEditorView: View {
 
     /// Same pop-up as the new-note sheet, bound to editFilingKind/editFilingFolder.
     private var editFilingMenu: some View {
-        let customFolders = model.filingFolders.filter {
-            !["thoughts", "inspirations", "journal", "archived"]
-                .contains($0.lowercased())
+        let label = model.displayName(for: model.filingChoice(kind: editFilingKind, folder: editFilingFolder))
+        return FilingPicker(kind: $editFilingKind, folder: $editFilingFolder) {
+            FilingMenuLabel(label: label)
         }
-        let label: String = {
-            if let f = editFilingFolder { return model.displayName(for: f) }
-            return editFilingKind == .note ? "Note" : editFilingKind.displayName
-        }()
-        return Menu {
-            ForEach([LiquidDoc.DocumentType.note, .thought, .journal, .inspiration],
-                    id: \.self) { k in
-                Button(k == .note ? "Note" : k.displayName) {
-                    editFilingKind = k
-                    editFilingFolder = nil
-                }
-            }
-            if !customFolders.isEmpty {
-                Divider()
-                ForEach(customFolders, id: \.self) { folder in
-                    // The alias shows; the canonical name files.
-                    Button(model.displayName(for: folder)) {
-                        editFilingFolder = folder
-                        editFilingKind = .note
-                    }
-                }
-            }
-        } label: {
-            HStack {
-                Text("File under:")
-                    .foregroundStyle(.secondary)
-                Text(label)
-                    .fontWeight(.medium)
-                Image(systemName: "chevron.up.chevron.down")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-            .font(.subheadline)
-            .padding(.horizontal, 14)
-            .padding(.vertical, 8)
-            .frame(maxWidth: .infinity)
-            .background(Color(.secondarySystemBackground),
-                        in: RoundedRectangle(cornerRadius: 10))
-        }
+        .accessibilityLabel("File under \(label)")
     }
 
     private func caption(for doc: LiquidDoc) -> String {
