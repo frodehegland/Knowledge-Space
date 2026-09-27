@@ -49,12 +49,6 @@ struct ContentView: View {
     /// navigation from the sidebar's and close the column only for
     /// the latter.
     @State private var tabDroveSelection = false
-    /// The Actions column's width — dragged at its left edge, kept
-    /// across launches like the split view's own columns.
-    @AppStorage("actionSubTabsWidth") private var actionSubTabsWidth = 150.0
-    /// The width the drag began from, so the divider tracks the
-    /// pointer rather than compounding each change.
-    @State private var actionSubTabsDragStartWidth: Double?
     #endif
 
     var body: some View {
@@ -246,22 +240,9 @@ struct ContentView: View {
         // The toolbar tabs are hidden for now — Notes, To Do, and
         // Journal lead the sidebar instead; windowTabs stands ready
         // should they return.
-        // In the To Do tab, the window's right edge grows a sub-tab
-        // column naming every Action standing, so the other lists are
-        // a click apart. The column belongs to the tab: reaching an
-        // action place through the sidebar leaves the edge alone. It
-        // stays through full screen — the action lists are the work
-        // there, not chrome around it.
-        .safeAreaInset(edge: .trailing, spacing: 0) {
-            // To Do always carries its column — a window restored
-            // straight onto it has seen no selection change to raise
-            // the flag; the other action lists show it only while the
-            // sub-tabs' own navigation holds it up.
-            if case .action(let current)? = state.sidebarSelection,
-               current == .toDo || showsActionSubTabs {
-                actionSubTabs(current: current)
-            }
-        }
+        // The Actions column that once stood at the window's right
+        // edge in the To Do tab is gone for good: the Actions live as
+        // icons in the Find bar at the list's foot.
         // The To Do place brings the Actions column whichever door
         // opens it — the sidebar row, a pill, a link. Its own
         // sub-tabs keep it while roaming the other action lists;
@@ -433,82 +414,6 @@ struct ContentView: View {
         .help("Show \(name)")
     }
 
-    /// The Actions sub-tabs: standing on one Action list, a column on
-    /// the window's right edge names them all — To Do, In Progress,
-    /// Done, Cancelled, Questions — the current one filled, the window
-    /// tabs' idiom turned vertical. Its left edge drags to resize,
-    /// like the split view's own dividers; the width keeps.
-    private func actionSubTabs(current: LiquidDoc.Action) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text("Actions")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.secondary)
-                .textCase(.uppercase)
-                .padding(.bottom, 6)
-            ForEach(LiquidDoc.Action.allCases, id: \.self) { action in
-                actionSubTab(action, isCurrent: action == current)
-            }
-            Spacer()
-        }
-        .padding(14)
-        .frame(width: actionSubTabsWidth, alignment: .leading)
-        .greyColumnAppearance()
-        .overlay(alignment: .leading) { actionSubTabsResizeHandle }
-    }
-
-    /// The column's divider: an invisible strip on the left edge that
-    /// drags the width, wearing the split view's resize cursor.
-    private var actionSubTabsResizeHandle: some View {
-        Rectangle()
-            .fill(.clear)
-            .frame(width: 6)
-            .contentShape(Rectangle())
-            .onHover { inside in
-                if inside {
-                    NSCursor.resizeLeftRight.set()
-                } else {
-                    NSCursor.arrow.set()
-                }
-            }
-            .gesture(
-                DragGesture(coordinateSpace: .global)
-                    .onChanged { value in
-                        let start = actionSubTabsDragStartWidth ?? actionSubTabsWidth
-                        actionSubTabsDragStartWidth = start
-                        // The column sits at the right edge: dragging
-                        // the divider left widens it.
-                        actionSubTabsWidth = min(max(start - value.translation.width, 110), 340)
-                    }
-                    .onEnded { _ in actionSubTabsDragStartWidth = nil }
-            )
-    }
-
-    private func actionSubTab(_ action: LiquidDoc.Action, isCurrent: Bool) -> some View {
-        Button {
-            if state.sidebarSelection != .action(action) { tabDroveSelection = true }
-            state.sidebarSelection = .action(action)
-            state.selectedDocID = nil
-        } label: {
-            HStack(spacing: 6) {
-                Image(systemName: SidebarCatalog.icon(for: action))
-                    .font(.system(size: 11))
-                    .frame(width: 14)
-                Text(action.placeName)
-                    .font(.system(size: 12, weight: .medium))
-                    .lineLimit(1)
-            }
-            .foregroundStyle(isCurrent ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary))
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, 8)
-            .padding(.vertical, 4)
-            .background(isCurrent ? AnyShapeStyle(.quaternary) : AnyShapeStyle(.clear),
-                        in: RoundedRectangle(cornerRadius: 6))
-            .contentShape(RoundedRectangle(cornerRadius: 6))
-        }
-        .buttonStyle(.plain)
-        .help("Show \(action.placeName)")
-    }
-
     /// The heading over the notes column: each of the library's places
     /// names its list the way Inbox does — Inbox alone carries the
     /// calendar's reveal triangle.
@@ -558,41 +463,64 @@ struct ContentView: View {
 
     /// Find, framed at the foot of the notes list — it narrows the list
     /// to matching title, author, or text — with New Note beside it, the
-    /// visible twin of ⌘N now that the toolbar is bare.
+    /// visible twin of ⌘N now that the toolbar is bare, and the Actions
+    /// as icons after it.
     private var findBar: some View {
-        @Bindable var state = state
-        return HStack(spacing: 8) {
-            HStack(spacing: 5) {
-                Image(systemName: "magnifyingglass")
-                    .foregroundStyle(.secondary)
-                TextField("Find", text: $state.searchText)
-                    .textFieldStyle(.plain)
+        // One line where the list is wide enough — Find, New Note, then
+        // the Actions — and two where it is not, the icons on their own
+        // line beneath, so no icon is ever clipped and Find never
+        // shrinks to a sliver.
+        // Centred in the strip either way, the group standing as one.
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 8) {
+                findField
+                    .frame(minWidth: 150, maxWidth: 240)
+                newNoteButton
+                ActionFilterBar()
+                    .padding(.leading, 4)
             }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 6)
-            // The entry box wears the page grey rather than standing
-            // as a white band; the border alone marks it.
-            .background(RoundedRectangle(cornerRadius: 7).fill(AppGreys.page))
-            .overlay(RoundedRectangle(cornerRadius: 7).strokeBorder(.quaternary))
-            // A modest measure — a find phrase, not a sentence — with
-            // the strip's rest left quiet.
-            .frame(maxWidth: 240)
-            Button {
-                state.newNote()
-            } label: {
-                Image(systemName: "square.and.pencil")
-                    .foregroundStyle(.secondary)
+            VStack(alignment: .center, spacing: 8) {
+                HStack(spacing: 8) {
+                    findField
+                        .frame(maxWidth: 240)
+                    newNoteButton
+                }
+                ActionFilterBar()
             }
-            .buttonStyle(.plain)
-            .disabled(state.index.folderURL == nil)
-            .help("New Note (⌘N)")
-            Spacer(minLength: 0)
         }
         .padding(10)
         .frame(maxWidth: .infinity)
         // The strip stands on the same page grey as the list above it,
         // not a system material band of its own.
         .background(AppGreys.page)
+    }
+
+    private var findField: some View {
+        @Bindable var state = state
+        return HStack(spacing: 5) {
+            Image(systemName: "magnifyingglass")
+                .foregroundStyle(.secondary)
+            TextField("Find", text: $state.searchText)
+                .textFieldStyle(.plain)
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 6)
+        // The entry box wears the page grey rather than standing
+        // as a white band; the border alone marks it.
+        .background(RoundedRectangle(cornerRadius: 7).fill(AppGreys.page))
+        .overlay(RoundedRectangle(cornerRadius: 7).strokeBorder(.quaternary))
+    }
+
+    private var newNoteButton: some View {
+        Button {
+            state.newNote()
+        } label: {
+            Image(systemName: "square.and.pencil")
+                .foregroundStyle(.secondary)
+        }
+        .buttonStyle(.plain)
+        .disabled(state.index.folderURL == nil)
+        .help("New Note (⌘N)")
     }
     #endif
 
@@ -788,22 +716,12 @@ struct ContentView: View {
         return state.selectedDoc
     }
 
-    /// Whether the full screen is showing the list itself — "in the
-    /// list", no document taken solo, no module canvas — so the right
-    /// edge summons the Actions column rather than a document's options.
-    private var fullScreenShowsList: Bool {
-        if let module = LibraryViewRegistry.module(for: state.sidebarSelection),
-           module.makeDetail?(state) != nil { return false }
-        return state.selectedDoc == nil && state.notesOpenInList
-    }
-
     /// The sidebar peek's mirror: a slim invisible strip along the
-    /// right edge summons the open document's options column — or, when
-    /// the full screen is the list alone, the Actions column that full
-    /// screen tucked away — as a floating panel, and it fades once the
-    /// pointer moves on.
+    /// right edge summons the open document's options column as a
+    /// floating panel, and it fades once the pointer moves on. The list
+    /// alone needs no peek: its Actions sit in the Find bar at its foot.
     @ViewBuilder private var peekOptionsColumn: some View {
-        if fullScreenDoc != nil || fullScreenShowsList {
+        if fullScreenDoc != nil {
             HStack(spacing: 0) {
                 HoverSensor { inside in
                     if inside {
@@ -818,8 +736,6 @@ struct ContentView: View {
                     Group {
                         if let doc = fullScreenDoc {
                             NoteOptionsColumn(doc: doc)
-                        } else {
-                            ActionFilterColumn()
                         }
                     }
                     .frame(maxHeight: .infinity)

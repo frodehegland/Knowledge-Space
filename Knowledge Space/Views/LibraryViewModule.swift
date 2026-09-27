@@ -93,12 +93,18 @@ enum SidebarCatalog {
     /// The head of the pared-down sidebar: the window's three main
     /// places — Notes, To Do, Journal — standing above the named
     /// sections now that the toolbar tabs are hidden.
+    /// Every note is "All Notes" here, so it never reads the same as
+    /// the Notes folder seated under Journal.
     static let head: [SidebarPlace] = [
-        SidebarPlace(name: "Notes", systemImage: "note.text", item: .notes),
+        SidebarPlace(name: "All Notes", systemImage: "note.text", item: .notes),
         SidebarPlace(name: "To Do", systemImage: "checklist", item: .action(.toDo)),
         SidebarPlace(name: "Journal", systemImage: "book.closed",
                      item: .filedFolder("Journal")),
     ]
+
+    /// The writing folders the Small layout seats under Journal at the
+    /// head, rather than under Files.
+    static let headWritingFolders = ["Thoughts", "Inspirations", "Notes"]
 
     static let top: [SidebarPlace] = [
         SidebarPlace(name: "Inbox", systemImage: "tray", item: .library),
@@ -252,9 +258,9 @@ enum SidebarCatalog {
         var result: [(title: String, places: [SidebarPlace])]
         switch layout {
         case .full:
-            // Actions left the sidebar for the persistent column at the
-            // list's right edge (ActionFilterColumn), where they filter
-            // instead of navigate.
+            // Actions left the sidebar for the Find bar at the list's
+            // foot (ActionFilterBar), where they filter instead of
+            // navigate.
             result = [("", top),
                       ("Transcripts", transcriptShelves),
                       ("Library", shelves(articlesLabel: articlesLabel)),
@@ -271,15 +277,19 @@ enum SidebarCatalog {
             #endif
         case .small:
             // The pared-down default: Notes, To Do, and Journal at the
-            // head, then every filing folder under Files — Thoughts,
-            // Inspirations, Notes, Letters, the user's own (Work,
-            // Personal…), Archived last — then Views, where People and
-            // the Map lead the modules. Journal lives at the head, so
-            // Files does not repeat it; Library and Digest set aside;
-            // New lives in ⌘N and the toolbar.
-            var small: [(title: String, places: [SidebarPlace])] = [("", head)]
-            let fileFolders = filedFolders.filter {
-                $0.caseInsensitiveCompare("Journal") != .orderedSame
+            // head, with Thoughts, Inspirations, and the Notes folder
+            // standing under Journal — the writing folders, always
+            // present. Every other filing folder goes under Files —
+            // Sessions, Letters, the user's own (Work, Personal…),
+            // Archived last — then Views, where People and the Map lead
+            // the modules. Files does not repeat the head's folders;
+            // Library and Digest set aside; New lives in ⌘N and the
+            // toolbar.
+            let headFolders = ["Journal"] + headWritingFolders
+            var small: [(title: String, places: [SidebarPlace])] =
+                [("", head + filed(headWritingFolders, displayName: folderDisplayName))]
+            let fileFolders = filedFolders.filter { folder in
+                !headFolders.contains { $0.caseInsensitiveCompare(folder) == .orderedSame }
             }
             if !fileFolders.isEmpty {
                 small.append(("Files", filed(fileFolders, displayName: folderDisplayName)))
@@ -432,52 +442,118 @@ enum LibraryViewRegistry {
     #endif
 }
 
-/// The persistent Actions column at the right edge of every document
-/// list — the lifecycle axis, orthogonal to filing, standing beside the
-/// notes it sorts. Choosing a standing narrows whatever list the sidebar
-/// has open to notes carrying it; choosing it again lets the list back
-/// out. Nothing is ever demanded: with no choice made, the column only
-/// stands and waits.
-struct ActionFilterColumn: View {
+/// The Actions, as icons at the foot of every document list, beside
+/// Find — the lifecycle axis, orthogonal to filing. Choosing a standing
+/// narrows whatever list the sidebar has open to notes carrying it;
+/// choosing it again lets the list back out. Nothing is ever demanded:
+/// with no choice made, the icons only stand and wait. Show Cal and the
+/// Keywords, which shared the old column, stand here with them.
+struct ActionFilterBar: View {
     @Environment(AppState.self) private var state
+    @State private var showingKeywords = false
     @State private var addingKeyword = false
     @State private var newKeywordText = ""
     @FocusState private var keywordFieldFocused: Bool
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text("Actions")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.tertiary)
-                .padding(.leading, 8)
-                .padding(.bottom, 4)
-            // All leads the column and is the resting state: no filter,
-            // the whole list. It wears the chosen look whenever no
-            // standing below has taken over.
-            allRow
+        HStack(spacing: 2) {
+            // All leads and is the resting state: no filter, the whole
+            // list. It wears the chosen look whenever no standing to
+            // its right has taken over.
+            iconButton("list.bullet",
+                       chosen: state.listActionFilter == nil,
+                       help: "All — everything in the current list, whatever its standing") {
+                state.listActionFilter = nil
+            }
             ForEach(LiquidDoc.Action.allCases, id: \.self) { action in
-                row(action)
+                actionButton(action)
             }
             // Show Cal: the Timeline and the Journal can weave Apple
-            // Calendar's events among their notes — ahead of today in
-            // the Timeline, behind it in the Journal. A toggle, not a
-            // filter: it adds a kind, it never narrows. Each list
-            // remembers its own choice.
+            // Calendar's events among their notes. A toggle, not a
+            // filter: it adds a kind, it never narrows.
             if showsCalToggle {
-                Divider()
-                    .padding(.vertical, 8)
-                    .padding(.horizontal, 8)
-                calRow
+                Divider().frame(height: 16).padding(.horizontal, 4)
+                calButton
             }
-            Divider()
-                .padding(.vertical, 8)
-                .padding(.horizontal, 8)
-            keywordsSection
-            Spacer(minLength: 0)
+            Divider().frame(height: 16).padding(.horizontal, 4)
+            keywordsButton
         }
-        .padding(.top, 12)
-        .padding(.horizontal, 6)
-        .frame(width: 126, alignment: .leading)
+    }
+
+    /// One icon of the bar. The chosen one reads in full ink on a faint
+    /// well; the rest in the sidebar's grey — the word lives in the
+    /// tooltip, since the bar carries icons alone.
+    private func iconButton(_ systemImage: String, chosen: Bool, help: String,
+                            action: @escaping () -> Void) -> some View {
+        Button {
+            withAnimation(.snappy) { action() }
+        } label: {
+            Image(systemName: systemImage)
+                .foregroundStyle(chosen ? Color.primary : SidebarCatalog.iconTint)
+                .frame(width: 26, height: 22)
+                .background(
+                    RoundedRectangle(cornerRadius: 6)
+                        .fill(chosen ? Color.primary.opacity(0.10) : .clear))
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help(help)
+        .accessibilityLabel(help)
+        .accessibilityAddTraits(chosen ? .isSelected : [])
+    }
+
+    private func actionButton(_ action: LiquidDoc.Action) -> some View {
+        let chosen = state.listActionFilter == action
+        return iconButton(SidebarCatalog.icon(for: action), chosen: chosen,
+                          help: chosen ? "\(action.placeName) — show everything again"
+                                       : "\(action.placeName) — only these in the current list") {
+            state.listActionFilter = chosen ? nil : action
+        }
+        #if os(macOS)
+        // A standing's icon starts a note with that standing — New To
+        // Do, New Question — as its row in the old column did.
+        .contextMenu {
+            Button("New \(action.displayName)") { state.newNote(action: action) }
+        }
+        #endif
+    }
+
+    /// The toggle stands only where it has events to offer: the
+    /// Timeline and the Journal.
+    private var showsCalToggle: Bool {
+        state.sidebarSelection == .timelineToday
+            || state.sidebarSelection == .timeline
+    }
+
+    private var calButton: some View {
+        let inTimeline = state.sidebarSelection == .timelineToday
+        let on = inTimeline ? state.showCalendarInTimeline
+                            : state.showCalendarInJournal
+        return iconButton("calendar", chosen: on,
+                          help: on ? "Hide Apple Calendar's events from this list"
+                                   : "Show Apple Calendar's events in this list") {
+            if inTimeline {
+                state.showCalendarInTimeline.toggle()
+            } else {
+                state.showCalendarInJournal.toggle()
+            }
+        }
+    }
+
+    /// Keywords open from one icon: the chosen keyword narrows the list,
+    /// and the popover adds and removes them as the column did.
+    private var keywordsButton: some View {
+        let filter = state.listKeywordFilter
+        return iconButton("number", chosen: filter != nil,
+                          help: filter.map { "Keyword: \($0) — choose another or show everything" }
+                                ?? "Keywords") {
+            showingKeywords.toggle()
+        }
+        .popover(isPresented: $showingKeywords, arrowEdge: .top) {
+            keywordsSection
+                .padding(10)
+                .frame(width: 200)
+        }
     }
 
     private var keywordsSection: some View {
@@ -485,7 +561,7 @@ struct ActionFilterColumn: View {
             HStack(spacing: 4) {
                 Text("Keywords")
                     .font(.caption.weight(.semibold))
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(.secondary)
                     .padding(.leading, 8)
                 Spacer(minLength: 0)
                 Button {
@@ -496,7 +572,7 @@ struct ActionFilterColumn: View {
                 } label: {
                     Image(systemName: addingKeyword ? "xmark" : "plus")
                         .font(.caption.weight(.semibold))
-                        .foregroundStyle(.tertiary)
+                        .foregroundStyle(.secondary)
                 }
                 .buttonStyle(.plain)
                 .padding(.trailing, 8)
@@ -516,6 +592,13 @@ struct ActionFilterColumn: View {
                     .onAppear { keywordFieldFocused = true }
                     .onSubmit { submitNewKeyword() }
                     .padding(.bottom, 2)
+            }
+            if state.savedKeywords.isEmpty && !addingKeyword {
+                Text("None yet — add one with +.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 5)
             }
             ForEach(state.savedKeywords, id: \.self) { keyword in
                 keywordRow(keyword)
@@ -559,92 +642,6 @@ struct ActionFilterColumn: View {
         }
         newKeywordText = ""
         addingKeyword = false
-    }
-
-    private var allRow: some View {
-        let chosen = state.listActionFilter == nil
-        return Button {
-            withAnimation(.snappy) { state.listActionFilter = nil }
-        } label: {
-            Label("All", systemImage: "list.bullet")
-                .font(.callout)
-                .foregroundStyle(chosen ? Color.primary : SidebarCatalog.iconTint)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.vertical, 5)
-                .padding(.horizontal, 8)
-                .background(
-                    RoundedRectangle(cornerRadius: 6)
-                        .fill(chosen ? Color.primary.opacity(0.08) : .clear))
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .help("Everything in the current list, whatever its standing")
-    }
-
-    private func row(_ action: LiquidDoc.Action) -> some View {
-        let chosen = state.listActionFilter == action
-        return Button {
-            withAnimation(.snappy) {
-                state.listActionFilter = chosen ? nil : action
-            }
-        } label: {
-            Label(action.placeName, systemImage: SidebarCatalog.icon(for: action))
-                .font(.callout)
-                .foregroundStyle(chosen ? Color.primary : SidebarCatalog.iconTint)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.vertical, 5)
-                .padding(.horizontal, 8)
-                .background(
-                    RoundedRectangle(cornerRadius: 6)
-                        .fill(chosen ? Color.primary.opacity(0.08) : .clear))
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .help(chosen ? "Show everything again"
-              : "Only \(action.placeName) in the current list")
-        #if os(macOS)
-        // A standing's row starts a note with that standing — New To Do,
-        // New Question — as its sidebar place did before the move here.
-        .contextMenu {
-            Button("New \(action.displayName)") { state.newNote(action: action) }
-        }
-        #endif
-    }
-
-    /// The toggle stands only where it has events to offer: the
-    /// Timeline and the Journal.
-    private var showsCalToggle: Bool {
-        state.sidebarSelection == .timelineToday
-            || state.sidebarSelection == .timeline
-    }
-
-    private var calRow: some View {
-        let inTimeline = state.sidebarSelection == .timelineToday
-        let on = inTimeline ? state.showCalendarInTimeline
-                            : state.showCalendarInJournal
-        return Button {
-            withAnimation(.snappy) {
-                if inTimeline {
-                    state.showCalendarInTimeline.toggle()
-                } else {
-                    state.showCalendarInJournal.toggle()
-                }
-            }
-        } label: {
-            Label("Show Cal", systemImage: "calendar")
-                .font(.callout)
-                .foregroundStyle(on ? Color.primary : SidebarCatalog.iconTint)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.vertical, 5)
-                .padding(.horizontal, 8)
-                .background(
-                    RoundedRectangle(cornerRadius: 6)
-                        .fill(on ? Color.primary.opacity(0.08) : .clear))
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .help(on ? "Hide Apple Calendar's events from this list"
-              : "Show Apple Calendar's events in this list")
     }
 }
 
@@ -910,18 +907,9 @@ struct DocumentListView: View {
     }
 
     var body: some View {
-        // The Actions column stands at the list's right edge, always:
-        // the sidebar says where you are looking, the column says what
-        // standing you want to see there. The two compose. Full screen
-        // hides it with the sidebar; the right edge peeks it back in
-        // (ContentView's peek), the same way the left edge answers.
-        HStack(spacing: 0) {
-            listColumn
-            if !inFullScreen {
-                Divider()
-                ActionFilterColumn()
-            }
-        }
+        // The Actions left the list's right edge for the Find bar at
+        // its foot (ActionFilterBar); the list takes the full width.
+        listColumn
     }
 
     private var listColumn: some View {
@@ -1507,7 +1495,8 @@ struct DocumentListView: View {
     /// it off. Nil when this is not an Action list, or the note is
     /// filed nowhere.
     private func actionListFiling(for doc: LiquidDoc) -> String? {
-        guard action != nil else { return nil }
+        // To Do reads as the tasks alone — no folder pill ahead of them.
+        guard let action, action != .toDo else { return nil }
         return state.folder(for: doc)
     }
 

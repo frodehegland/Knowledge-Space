@@ -261,20 +261,19 @@ final class AppState {
     // MARK: - View-module state (see LibraryViewModule.swift)
 
     /// The sidebar place being shown: the document library, or a view module.
-    var sidebarSelection: SidebarItem? = .library {
+    var sidebarSelection: SidebarItem? = .notes {
         // Navigating anywhere lifts the People list's one-person
         // narrowing; Show in People re-narrows after it navigates.
         didSet { peopleFilterName = nil }
     }
     @ObservationIgnored private var hasSetInitialSelection = false
 
-    /// Called once after the first library scan. Lands on Timeline —
-    /// the head of the column; To Do now waits in the Actions column
-    /// at the list's right edge, not at the top of the sidebar.
+    /// Called once after the first library scan. Lands on All Notes —
+    /// the head of the sidebar — every time the app opens.
     func setInitialSidebarSelection() {
         guard !hasSetInitialSelection else { return }
         hasSetInitialSelection = true
-        sidebarSelection = .timelineToday
+        sidebarSelection = .notes
     }
     /// The person picked in the People list — their mentions fill the
     /// reading column while no document is open.
@@ -621,8 +620,56 @@ final class AppState {
         append(filingFolders)
         append(filedFoldersInUse)
         folders.removeAll(where: Self.isHiddenFilingFolder)
+        // The person's own order leads: every folder they have placed
+        // stands where they put it, and a folder they have not yet
+        // placed keeps its natural spot after them.
+        let placed = sidebarFolderOrder.filter { name in
+            folders.contains { $0.caseInsensitiveCompare(name) == .orderedSame }
+        }
+        let unplaced = folders.filter { name in
+            !placed.contains { $0.caseInsensitiveCompare(name) == .orderedSame }
+        }
+        folders = placed + unplaced
         folders.append(Self.archivedFolderName)
         return folders
+    }
+
+    /// The sidebar folders' order as the person arranged it through
+    /// Move Up / Move Down — a way of seeing, kept on this Mac like
+    /// the sidebar layout, never written into the documents.
+    private(set) var sidebarFolderOrder: [String] =
+        UserDefaults.standard.stringArray(forKey: "sidebarFolderOrder") ?? []
+
+    enum FolderMove { case up, down, top, bottom }
+
+    /// Moves a folder among the rows the person can see — `visible`, the
+    /// section's folders in their shown order — so each step moves it
+    /// past a row on screen, never past a folder another section seats.
+    /// Folders not in `visible` keep their places in the whole order.
+    func moveSidebarFolder(_ folder: String, _ move: FolderMove, among visible: [String]) {
+        var shown = visible
+        guard let from = shown.firstIndex(of: folder) else { return }
+        let to: Int
+        switch move {
+        case .up: to = max(from - 1, 0)
+        case .down: to = min(from + 1, shown.count - 1)
+        case .top: to = 0
+        case .bottom: to = shown.count - 1
+        }
+        guard to != from else { return }
+        shown.remove(at: from)
+        shown.insert(folder, at: to)
+        // Pour the new visible order back into the slots the visible
+        // folders held in the whole order; the rest stay put.
+        var whole = sidebarFiledFolders.filter {
+            $0.caseInsensitiveCompare(Self.archivedFolderName) != .orderedSame
+        }
+        var next = shown.makeIterator()
+        for index in whole.indices where visible.contains(whole[index]) {
+            if let name = next.next() { whole[index] = name }
+        }
+        sidebarFolderOrder = whole
+        UserDefaults.standard.set(whole, forKey: "sidebarFolderOrder")
     }
 
     func isArchived(_ doc: LiquidDoc) -> Bool {

@@ -116,6 +116,30 @@ struct LibrarySidebarView: View {
                                             state.renameFilingFolder(folder)
                                         }
                                     }
+                                    // The Files rows take the order the
+                                    // person gives them; Archived stays
+                                    // last, beneath the rest.
+                                    let movable = movableFolders(in: section)
+                                    if let position = movable.firstIndex(of: folder),
+                                       movable.count > 1 {
+                                        Divider()
+                                        Button("Move Up") {
+                                            state.moveSidebarFolder(folder, .up, among: movable)
+                                        }
+                                        .disabled(position == 0)
+                                        Button("Move Down") {
+                                            state.moveSidebarFolder(folder, .down, among: movable)
+                                        }
+                                        .disabled(position == movable.count - 1)
+                                        Button("Move to Top") {
+                                            state.moveSidebarFolder(folder, .top, among: movable)
+                                        }
+                                        .disabled(position == 0)
+                                        Button("Move to Bottom") {
+                                            state.moveSidebarFolder(folder, .bottom, among: movable)
+                                        }
+                                        .disabled(position == movable.count - 1)
+                                    }
                                     // The Archive can be emptied whole:
                                     // every note filed there to the Trash.
                                     if folder.caseInsensitiveCompare(AppState.archivedFolderName) == .orderedSame,
@@ -296,6 +320,17 @@ struct LibrarySidebarView: View {
             return folder.caseInsensitiveCompare(AppState.archivedFolderName) == .orderedSame
         }
         return false
+    }
+
+    /// The folders a Files (or Full's Filed) section lets the person
+    /// reorder, in their shown order — every folder row but Archived.
+    private func movableFolders(in section: (title: String, places: [SidebarPlace])) -> [String] {
+        guard section.title == "Files" || section.title == "Filed" else { return [] }
+        return state.shownPlaces(of: section.places).compactMap { place in
+            guard case .filedFolder(let folder) = place.item,
+                  !isArchivedPlace(place.item) else { return nil }
+            return folder
+        }
     }
 }
 
